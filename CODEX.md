@@ -16,7 +16,7 @@ Before changing anything, read completely:
 4. Every Markdown file currently under `docs/`.
 5. Every role prompt currently under `prompts/`.
 6. `CLAUDE.md` when present, as required by `AGENTS.md`. If it is required but absent, report that fact rather than silently guessing its contents.
-7. `../Guildly-Reference/audit.md` for Guildly research, visual philosophy, MVP scope, and deferred features. If the file cannot be found at that exact path, inspect the reference directory for a filename mismatch and report it.
+7. `Guildly-Reference/audit.md` for Guildly research, visual philosophy, MVP scope, and deferred features. If the file cannot be found at that exact path, inspect the reference directory for a filename mismatch and report it.
 
 Treat `prompts/`, project documentation, and branding assets as read-only unless the task explicitly authorizes changes to them.
 
@@ -29,7 +29,7 @@ When instructions appear to conflict, apply them in this order:
 1. Platform and active session instructions.
 2. The user's explicit task and scope.
 3. `AGENTS.md` for Devcrew role, ownership, and branch rules.
-4. `../Guildly-Reference/audit.md` for Guildly-derived research, visual direction, MVP boundaries, and deferrals.
+4. `Guildly-Reference/audit.md` for Guildly-derived research, visual direction, MVP boundaries, and deferrals.
 5. Approved decisions and specifications in `docs/`, especially `docs/decisions.md`, `docs/architecture.md`, and `docs/spec.md` when populated.
 6. Role prompts in `prompts/` for the intended responsibilities of incoming work.
 7. The existing implementation, tests, configuration, and established local conventions.
