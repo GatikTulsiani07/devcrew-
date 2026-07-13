@@ -1,188 +1,265 @@
-# Devcrew Main-Branch Codex Manual
+# Devcrew Main Worktree Codex Manual
 
-## Purpose
+## 1. Purpose and Authority
 
-This file governs Codex sessions in the Devcrew main integration worktree. The main branch is the project source of truth, the final integration point for completed work, and the release-readiness branch. Use it for cross-feature coordination, compatibility checks, final polish, and release validation—not for large isolated feature development that belongs on a UI, backend, docs, or review branch.
+This manual governs Codex work in the main Devcrew integration worktree. It is permanent operating guidance, not a product specification. The user's current task defines the authorized change; the canonical shared documents define product scope, architecture, design, delivery sequence, and backlog.
 
-This is an operating manual, not product documentation. Product and implementation detail belongs in the referenced project documents.
+When sources conflict, follow platform instructions, the user's explicit request, `AGENTS.md`, this manual, and then the canonical documents according to their stated authority. Do not silently resolve a material conflict that changes scope, architecture, security, data, contracts, or release behavior.
 
-## Required Reading
+## 2. Worktree Role and Ownership Boundary
 
-Before changing anything, read completely:
+- Directory: `/Users/suniltulsiani/Desktop/devcrew`
+- Branch: `main`
+- Role: integration and release owner
 
-1. `AGENTS.md` for role, ownership, branch boundaries, and repository-specific rules.
-2. `README.md` for the current project entry point and supported commands.
-3. `CODEX.md` for this main-branch workflow.
-4. Every Markdown file currently under `docs/`.
-5. Every role prompt currently under `prompts/`.
-6. `CLAUDE.md` when present, as required by `AGENTS.md`. If it is required but absent, report that fact rather than silently guessing its contents.
-7. `Guildly-Reference/audit.md` for Guildly research, visual philosophy, MVP scope, and deferred features. If the file cannot be found at that exact path, inspect the reference directory for a filename mismatch and report it.
+Devcrew is one Git repository with multiple complete worktrees. This worktree owns integration, shared product composition, cross-layer compatibility, final validation, release-candidate assembly, and release readiness.
 
-Treat `prompts/`, project documentation, and branding assets as read-only unless the task explicitly authorizes changes to them.
+It does not replace the owning branches:
 
-For any Next.js code change, read the relevant guide in `node_modules/next/dist/docs/` first. This repository's installed Next.js version may differ from remembered APIs and conventions; follow its local documentation and deprecation notices.
+- `devcrew-ui` / `feat/ui-shell`: UI implementation and client interaction
+- `devcrew-backend` / `feat/orchestrator`: backend, orchestration, domain behavior, and server adapters
+- `devcrew-review` / `review/integration`: independent verification and merge-readiness decisions
+- `devcrew-docs` / `docs/context`: canonical product and engineering documentation
 
-## Instruction and Decision Hierarchy
+Do not use `main` as the primary location for an isolated UI or backend feature. Do not integrate work that lacks independent review evidence, bypass canonical requirements, or invent a cross-layer contract independently.
 
-When instructions appear to conflict, apply them in this order:
+## 3. Mandatory Reading Order
 
-1. Platform and active session instructions.
-2. The user's explicit task and scope.
-3. `AGENTS.md` for Devcrew role, ownership, and branch rules.
-4. `Guildly-Reference/audit.md` for Guildly-derived research, visual direction, MVP boundaries, and deferrals.
-5. Approved decisions and specifications in `docs/`, especially `docs/decisions.md`, `docs/architecture.md`, and `docs/spec.md` when populated.
-6. Role prompts in `prompts/` for the intended responsibilities of incoming work.
-7. The existing implementation, tests, configuration, and established local conventions.
+Before making changes, read completely and in this exact order:
 
-Do not resolve a material conflict by choosing whichever source is most convenient. Preserve higher-priority instructions, identify the conflict, and ask for direction when it would change product scope, architecture, data contracts, or release behavior.
+1. `AGENTS.md`
+2. `CODEX.md`
+3. `/Users/suniltulsiani/Desktop/Guildly-Reference/audit.md`
+4. `/Users/suniltulsiani/Desktop/devcrew-docs/spec.md`
+5. `/Users/suniltulsiani/Desktop/devcrew-docs/architecture.md`
+6. `/Users/suniltulsiani/Desktop/devcrew-docs/design-system.md`
+7. `/Users/suniltulsiani/Desktop/devcrew-docs/plan.md`
+8. `/Users/suniltulsiani/Desktop/devcrew-docs/tasks.md`
+9. Relevant implementation files, tests, configuration, dependency manifests, and installed framework guidance
+10. The current task, acceptance criteria, and affected review evidence
 
-## Inspect Before Editing
+The shared files are authoritative and must not be copied into this worktree. For Next.js changes, read the relevant installed documentation in `node_modules/next/dist/docs/` before coding and follow its version-specific conventions and deprecations.
 
-Start every task with a read-only inspection proportionate to the work:
+## 4. Repository and Worktree Inspection
 
-- Confirm the current branch and worktree status.
-- Inventory relevant files and locate repository instructions before opening implementation files.
-- Read the full files to be changed and their direct consumers, dependencies, tests, types, and configuration.
-- Review existing diffs so user work is not mistaken for baseline code or overwritten.
-- Check `package.json` and its lockfile before selecting commands or a package manager.
-- Search for existing components, utilities, schemas, styles, and patterns before creating new ones.
-- For integration work, inspect the incoming commits or diff, its base, affected surfaces, migration requirements, and overlap with current main.
+Start each task with read-only inspection:
 
-Use evidence from the repository. Never infer that an empty, missing, stale, or placeholder document contains requirements that it does not state.
+1. Run `pwd` and `git branch --show-current`; stop if they do not match this manual.
+2. Run `git status --short` and inspect relevant diffs, including staged changes if any.
+3. Identify pre-existing user changes and keep them separate from session work.
+4. Confirm the task belongs to main integration ownership.
+5. Inspect the incoming branch, commits, diff, base, review decision, and acceptance evidence when integrating work.
+6. Read every file to be changed plus direct consumers, producers, tests, schemas, types, configuration, and relevant local Next.js guidance.
+7. Inspect `package.json` and its lockfile before choosing package-manager commands.
+8. Search for existing contracts, components, utilities, and conventions before adding anything.
 
-## Main-Branch Integration Workflow
+Repeated files across worktrees are normal because every worktree is a checkout of the same repository. Never remove a file merely because another worktree contains it.
 
-Completed UI, backend, docs, and review work should arrive as bounded, reviewable changes. For each incoming unit:
+## 5. Task Planning
 
-1. Establish what was completed, which branch or commits contain it, and which acceptance criteria it claims to satisfy.
-2. Inspect the incoming diff before applying it. Confirm that it stays within its role boundary and does not include unrelated changes.
-3. Integrate using the Git operation requested or already established for the repository. Do not invent a merge, rebase, or cherry-pick policy.
-4. Resolve conflicts semantically. Preserve current main behavior, shared architecture, and intentional work from both sides; do not accept conflict markers mechanically.
-5. Reconcile cross-layer contracts such as types, API inputs and outputs, loading and error states, persistence, navigation, and documentation references.
-6. Apply review findings only when they are specific and verified. Re-test the affected behavior rather than treating review output as proof of correctness.
-7. Run focused checks after each integration unit, then the full release gates once the combined result is assembled.
-8. Report what was integrated, any deliberate deviations, validation performed, and remaining release risks.
+Before implementation:
 
-Do not use main to absorb unfinished experiments or to implement a large missing feature on behalf of another branch. Route substantial isolated work back to the appropriate owner unless the user explicitly changes the scope.
+1. Restate the requested outcome, permitted files, acceptance criteria, and prohibited actions.
+2. Map the task to the applicable canonical requirements and backlog item.
+3. Identify affected owners, contracts, trust boundaries, lifecycle states, and user journeys.
+4. Separate pre-existing changes from the proposed diff.
+5. Choose the smallest complete and reversible approach.
+6. Define focused checks, integration gates, and manual verification before editing.
+7. Stop for direction if completion requires new authority or a material undocumented decision.
 
-## Architecture Preservation
+For larger integration work, keep a short live plan and update it as evidence changes. Never treat a plan or backlog entry as proof that implementation exists.
 
-- Preserve the existing architecture, directory boundaries, shared contracts, and state flow.
-- Do not introduce a new framework, service, datastore, API shape, global state system, or cross-cutting abstraction without explicit approval and a documented need.
-- Prefer existing components and utilities over parallel implementations.
-- Keep shared types and contracts single-sourced where the repository already does so.
-- Treat schema, authentication, authorization, persistence, and deployment changes as architecture-sensitive.
-- Read the installed Next.js documentation before using or changing framework APIs.
-- If integration exposes an architectural mismatch, describe the smallest compatible options and request a decision before rewriting the design.
+## 6. Scope Control
 
-## Scope and Requirement Control
+- Implement only the user's authorized scope and behavior supported by canonical documentation.
+- Preserve current working behavior unless the task explicitly authorizes a change.
+- Avoid unrelated cleanup, broad refactors, speculative abstractions, dependency churn, and incidental renames.
+- Route substantial isolated UI or backend work to its owning worktree.
+- Treat the Guildly audit as research and design direction, not a screen specification, copy source, or authority to clone Guildly.
+- Keep deferred capabilities deferred unless the canonical documentation is updated and approved first.
+- Ask before making assumptions that alter architecture, security, data, public contracts, product behavior, or the MVP boundary.
 
-Implement only requirements supported by the user's task, approved project documentation, accepted incoming work, or the Guildly audit within its stated authority.
+The hackathon MVP is local-first, dark-mode-only, and one deterministic vertical slice: connect a prepared repository, submit one engineering task, obtain a Manager plan and human approval, produce a Full Stack Developer result, validate through DevOps, obtain a Reviewer verdict, and retain visible activity and final results.
 
-The audit is a research and direction source, not a feature specification or copy guide. Preserve its principles—calm premium presentation, warm dark visual direction, typography-led hierarchy, persistent context, workflow-first UX, and AI teammates rather than isolated chats—without cloning Guildly or inventing exact screens and interactions.
+Do not add production authentication, durable persistence, autonomous merge, production deployment, or other deferred infrastructure to the judged MVP without an approved canonical documentation change.
 
-For hackathon MVP planning, prioritize a coherent, demoable end-to-end workflow around the audit's retained areas: projects, persistent agents, activity, tickets, ideas, documents, PRDs, reviews, settings, skills, memory, and secrets. The audit explicitly defers hiring, embedded terminal, external connections, advanced automation, complex permissions, and multi-workspace collaboration. Do not add deferred work without explicit authorization.
+## 7. Approved MVP Stack
 
-When a requirement is unclear:
+The canonical documentation freezes this summary:
 
-- Search the repository and reference documents first.
-- Prefer the smallest reversible interpretation that preserves current behavior and stays inside the stated scope.
-- State minor assumptions in the work report.
-- Stop and ask before making an assumption that changes product behavior, architecture, security, data, public APIs, or the MVP boundary.
+- Next.js App Router, React, strict TypeScript, Node.js runtime, and npm
+- Tailwind CSS, shadcn/ui where useful, Lucide React, and restrained transitions
+- Next.js Route Handlers under `app/api`, Zod, structured JSON errors, and Server-Sent Events
+- Official OpenAI JavaScript/TypeScript SDK and OpenAI Responses API with structured outputs
+- Controlled server-side Codex CLI and Git adapters with allowlists, timeouts, redaction, and worktree-safe operations
+- Deterministic in-memory MVP persistence behind replaceable store interfaces
+- Local environment as the authoritative judged environment
+- Optional Vercel presentation build that does not claim local shell or Git execution
+- Dark-mode-only MVP
 
-## Coding Quality
+Do not introduce undocumented frameworks, databases, queues, authentication providers, microservices, deployment systems, Redis, Kafka, Kubernetes, browser-side shell execution, or other technology changes.
 
-- Make the smallest complete change that satisfies the task.
-- Keep diffs focused; avoid drive-by formatting, renames, dependency upgrades, and unrelated cleanup.
-- Follow existing TypeScript, React, styling, naming, and file-organization conventions.
-- Keep types explicit at boundaries and do not bypass failures with unsafe casts, disabled rules, or suppressed errors.
-- Handle relevant loading, empty, error, and success states without broadening the feature.
-- Preserve accessibility, keyboard behavior, semantic markup, and responsive behavior when touching UI.
-- Keep secrets out of source, logs, fixtures, screenshots, and reports.
-- Add dependencies only when necessary, approved by scope, and not reasonably replaceable by the existing stack.
-- Comment decisions and non-obvious constraints, not self-evident syntax.
+## 8. Role-Specific Engineering Rules
 
-## Preserve Working Functionality
+Main integration work must:
 
-Assume existing working behavior is intentional unless evidence says otherwise. Before changing it, identify callers and observable behavior. Maintain backward compatibility where the task does not explicitly authorize a breaking change. Add or update focused regression coverage when practical, and validate adjacent flows affected by shared code.
+- Assemble only bounded, reviewed UI and backend deliverables.
+- Reconcile request, response, error, lifecycle, state, navigation, and terminology differences across layers.
+- Preserve server authority and presentation/domain separation.
+- Resolve conflicts semantically, preserving intentional work from both sides.
+- Return integration failures to the responsible owner when the correction is an isolated feature change.
+- Reopen review for materially changed scope.
+- Run focused checks per integration unit and full release gates on the assembled candidate.
 
-Do not delete code, assets, routes, documentation, or configuration merely because they appear unused. Confirm usage and obtain authority for destructive or breaking changes. In a dirty worktree, preserve all pre-existing changes and separate them from session edits in the final report.
+Respect other owners:
 
-## Testing and Release Gates
+- UI owns the application shell, navigation, pages, components, design-system implementation, accessibility, responsive behavior, client workflow state, and loading, empty, error, and success states. It must not authorize server behavior, expose credentials, execute shell or Git in the browser, redefine backend contracts, or add a light theme.
+- Backend owns Route Handlers, validation, domain and lifecycle enforcement, in-memory stores, OpenAI Responses integration, Codex and Git adapters, server secrets, Server-Sent Events, and structured errors. It must not leak secrets, run arbitrary unvalidated commands, import presentation code, add unapproved infrastructure, or autonomously merge or deploy.
+- Review owns independent requirement, architecture, contract, security, accessibility, performance, regression, and merge-readiness assessment. It must not implement features, silently fix code, approve incomplete evidence, claim unsupported passes, or merge without explicit user direction.
 
-Use the scripts and package manager declared by the repository; do not invent commands. With the current npm lockfile and scripts, the baseline code gates are:
+## 9. Security and Secret Handling
 
-```bash
-npm run lint
-npm run build
-```
+- Treat the client as untrusted; authoritative validation, project boundaries, lifecycle enforcement, persistence, and protected operations remain server-side.
+- Validate all untrusted input with documented schemas and fail closed at security boundaries.
+- Keep OpenAI credentials and all secret values server-side and out of source, client bundles, URLs, responses, logs, activity, screenshots, fixtures, review evidence, and final reports.
+- Use secret references and least privilege; audit access without recording values.
+- Permit only controlled, validated, allowlisted Codex CLI and Git operations with bounded arguments, timeouts, cancellation, redaction, and safe working directories.
+- Never execute arbitrary user-provided shell commands or expose server execution to browser code.
+- Do not claim production authentication or durable isolation exists in the hackathon MVP when it is deferred.
 
-Also run the narrowest relevant checks while developing, plus any test, type-check, migration, or end-to-end scripts that exist for the affected area. If no automated test command exists, do not claim tests passed; perform appropriate manual verification and report the coverage gap.
+## 10. Contract and API Discipline
 
-For UI changes, verify the affected flow at representative viewport sizes and check interaction, focus, loading, empty, and error behavior as applicable. For backend changes, verify contract behavior, validation, failure paths, and persistence effects. For integrations, run the complete available gate set after all units are combined.
+- Define or verify backend contracts before dependent UI integration.
+- Contracts must cover inputs, outputs, Zod validation, structured errors, lifecycle effects, project context, ordering, retry behavior, cancellation, and security expectations.
+- Keep the server response authoritative; client state may present or optimistically stage intent but must reconcile with server truth.
+- Invalid lifecycle transitions must fail consistently and actionably.
+- Server-Sent Events are one-way activity updates; preserve ordering, correlation, recovery behavior, and server boundaries.
+- Long-running work must retain its project, work-item, initiating-user, and agent relationships across queued, active, stopped, completed, failed, and reviewed states.
+- Breaking contract changes require a documented migration plan, coordinated producer and consumer updates, renewed verification, and review.
+- Do not create a second source of truth for schemas, status vocabulary, or API behavior.
 
-Documentation-only changes do not require unrelated application builds unless requested or needed to verify generated references. They still require Markdown review, link/path checks, and a diff inspection.
+## 11. Testing and Validation
 
-Never hide a failing gate. Record the exact command and outcome, distinguish new failures from confirmed pre-existing failures, and do not declare release readiness while required checks fail.
+Use scripts declared by the repository and the package manager established by its lockfile. Select checks proportionate to the change and record exact commands and outcomes.
 
-## Git Discipline
+Applicable gates include:
 
-- Inspect `git status --short` before editing and again before reporting completion.
-- Do not overwrite, revert, stage, or include unrelated user changes.
-- Review the final scoped diff and run whitespace/error checks appropriate to the change.
-- Keep commits atomic and clearly described when the user requests commits.
-- Do not commit, push, merge, rebase, reset, amend, force-push, or open a pull request unless explicitly authorized.
-- Never use destructive Git commands to make the worktree look clean.
-- Do not rename or move files as incidental cleanup.
-- Before integrating branches, confirm the target, source, and intended operation; after integration, verify history and status.
+- ESLint and strict TypeScript checks
+- Focused unit, component, contract, integration, regression, and failure-path tests
+- Next.js production build
+- Manual verification of the critical local workflow
+- Security, accessibility, performance, reliability, and secret-exposure review
+- Final diff inspection, `git diff --check`, and `git status --short`
 
-## Documentation Discipline
+Test success, empty, loading, error, retry, cancellation, invalid transition, partial failure, and boundary behavior where relevant. Verify producer and consumer contracts independently and together. Missing automation is a disclosed gap, never a passing result. Never suppress failures or declare release readiness while a required gate fails.
 
-Keep documentation aligned with behavior, but edit it only when the task authorizes that scope. Reference `docs/` rather than duplicating specifications inside operating manuals or code comments. Record durable architecture decisions in the established decisions documentation when explicitly requested, and keep temporary implementation notes out of permanent product docs.
+Documentation-only changes normally require scoped Markdown structure, path, terminology, diff, and whitespace validation rather than unrelated application builds.
 
-Do not turn `CODEX.md` into a product spec, roadmap, or screen inventory. If code and approved documentation disagree, surface the discrepancy; do not silently rewrite either side to match an assumption.
+## 12. Accessibility
 
-## Communication and Reporting
+User-facing work targets WCAG 2.2 Level AA. When UI is integrated or changed, verify:
 
-Communicate like an integration engineer:
+- Semantic HTML, landmarks, logical headings, labels, descriptions, and accessible control names
+- Complete keyboard operation, predictable focus management, and visible focus indicators
+- Sufficient contrast in every approved dark-theme state and non-color state cues
+- Zoom, text resize, reflow, long content, and representative responsive widths
+- Accessible loading, validation, asynchronous status, and error announcements
+- Reduced-motion behavior and alternatives for meaningful visuals
+- Loading, empty, error, disabled, saving, unsaved, success, and partial-data states
 
-- Lead with the outcome or current blocker.
-- Give concise progress updates during longer work.
-- Identify assumptions, conflicts, pre-existing worktree changes, and release risks early.
-- Separate verified facts from inferences and recommendations.
-- Report files changed, behavior affected, commands run, and their results.
-- Say explicitly what was not tested or could not be verified.
-- Avoid claiming completion, correctness, or release readiness without evidence.
+Automated accessibility checks do not replace manual keyboard and assistive-technology-oriented review.
 
-Ask focused questions only after inspecting available evidence. When safe progress is possible, continue with a minimal, reversible approach rather than blocking on non-material preferences.
+## 13. Git and Worktree Safety
 
-## Prohibited Actions
+- Inspect status and diffs before editing and before reporting.
+- Preserve unrelated and pre-existing user work; never make the worktree appear clean by discarding changes.
+- Never delete repeated files simply because they exist in another worktree.
+- Never use destructive reset or checkout operations without explicit approval.
+- Never force-push or rewrite published history.
+- Never stage unrelated changes.
+- Do not stage, commit, amend, push, merge, rebase, cherry-pick, or open a pull request unless explicitly requested.
+- Before an authorized integration, confirm source, target, revision, operation, review evidence, and rollback implications.
+- Keep generated output, temporary files, secrets, and conflict markers out of the final diff.
+
+## 14. Review and Integration Procedure
+
+For each proposed integration unit:
+
+1. Identify its source branch or commits, base, task, acceptance criteria, changed scope, and review outcome.
+2. Inspect the complete incoming diff and verify worktree ownership and documentation conformance.
+3. Confirm backend producer evidence and UI consumer expectations agree.
+4. Reject unresolved blocking findings or incomplete evidence; review approval does not replace integration testing.
+5. Apply only the explicitly authorized Git operation.
+6. Resolve conflicts by intent and contract semantics, not mechanically.
+7. Verify navigation, state reconciliation, lifecycle behavior, errors, security, accessibility, and terminology across layers.
+8. Run focused tests, then the complete applicable integration and release gates.
+9. Return isolated defects to the owning worktree; materially changed fixes require renewed review.
+10. Assemble a release candidate only when no release-blocking findings or required-gate failures remain.
+
+Never merge unreviewed work or infer approval from silence.
+
+## 15. Documentation Rules
+
+- Treat the audit and five canonical documents listed by exact absolute path in the mandatory reading order as the shared authority for research, product, and engineering decisions.
+- Never create a local audit, local canonical-document copies, or competing specifications in an implementation worktree.
+- Update canonical documents only from the `devcrew-docs` worktree and only within authorized scope.
+- Record and approve material product, architecture, contract, design, stack, deployment, or persistence changes before implementation.
+- Keep AGENTS and Codex manuals operational; summarize constraints and link to authority instead of duplicating full specifications.
+- Preserve shared terminology and lifecycle labels across UI, backend, review, documentation, and integration.
+- If implementation and canonical documentation disagree, surface the discrepancy and correct the appropriate source through its owning workflow.
+
+## 16. Prohibited Actions
 
 Do not:
 
-- Rewrite architecture without approval.
-- Break branch separation or implement large branch-owned features on main.
-- Invent requirements, features, APIs, data models, workflows, acceptance criteria, or documentation content.
-- Treat Guildly as a copy target or promote its deferred features into the MVP.
-- Ignore repository documentation, local Next.js guidance, or deprecation notices.
-- Remove or replace shared assets, branding, or working functionality without explicit authority.
-- Modify read-only prompts, documentation, or branding assets unless specifically instructed.
-- Conceal failures with lint disables, type suppressions, skipped checks, or misleading reports.
-- Perform unrelated cleanup, broad refactors, speculative abstractions, or dependency churn.
-- Commit or publish work without authorization.
+- Rewrite architecture or change the frozen stack without prior documentation approval.
+- Implement large branch-owned features on `main` or bypass independent review.
+- Invent requirements, contracts, data models, lifecycle states, workflows, or release claims.
+- Add production authentication, durable databases, autonomous merge, or production deployment to the judged MVP without approval.
+- Add a light theme or theme switcher to the hackathon MVP.
+- Run arbitrary shell commands from user input or browser code.
+- Expose secrets or sensitive configuration in any artifact.
+- Import presentation code into backend modules or make client state authoritative.
+- Remove shared assets, repeated worktree files, or working functionality without explicit authority.
+- Modify canonical documentation from this worktree or create repository-specific copies.
+- Hide failures with skipped checks, unsafe casts, disabled rules, or misleading reports.
+- Perform unrelated cleanup, speculative refactors, destructive Git operations, or unauthorized publication.
 
-## Definition of Done
+## 17. Definition of Done
 
-A main-branch task is done only when:
+A main-worktree task is done only when:
 
-- The requested scope and acceptance criteria are satisfied without adding unsupported behavior.
-- Incoming work is compatible across UI, backend, docs, and review boundaries where applicable.
-- Existing functionality and shared architecture are preserved, or authorized changes are clearly documented.
-- The diff is minimal, cohesive, reviewable, and free of unrelated user work.
-- Relevant automated and manual checks pass, with any unavailable checks or pre-existing failures disclosed.
-- Documentation is consistent where documentation changes were authorized.
-- No unresolved conflict markers, debug artifacts, secrets, temporary files, or accidental generated output remain.
+- The authorized outcome and acceptance criteria are satisfied without unsupported scope.
+- Worktree ownership, canonical requirements, architecture, and frozen MVP constraints are preserved.
+- Incoming work has adequate independent review and all material post-review changes were re-reviewed.
+- UI/backend contracts and complete affected journeys are compatible.
+- Relevant automated and manual checks pass, with exact evidence recorded.
+- Security, secret handling, accessibility, error, and lifecycle behavior are verified where applicable.
+- The diff is minimal, cohesive, reviewable, and contains no unrelated user work, conflict markers, secrets, debug artifacts, or accidental generated files.
+- Documentation remains consistent and any required canonical change went through `devcrew-docs` before implementation.
 - `git diff` and `git status --short` have been reviewed.
-- The final report states what changed, what was verified, and any remaining risk or follow-up.
+- No blocking finding, required-gate failure, or undisclosed verification gap remains.
 
-For release readiness, also confirm the full available lint, test, build, and integration gates; the critical demo path; configuration and migration requirements; and the absence of known release-blocking defects.
+Release readiness additionally requires validation of the exact assembled candidate, the deterministic critical workflow in the authoritative local environment, applicable full gates, configuration, operational constraints, and residual risk.
+
+## 18. Required Final Report
+
+Use this structure:
+
+### Outcome
+
+State what was completed or the precise blocker. Do not overstate readiness.
+
+### Files Changed
+
+List every changed file and summarize its effect. Separate pre-existing worktree changes.
+
+### Checks Run
+
+List each exact command or manual check with `passed`, `failed`, or `not run`, plus relevant evidence.
+
+### Remaining Risks
+
+List unresolved risks, gaps, assumptions, deferred verification, or `None` when evidence supports that conclusion.
+
+Never claim that tests passed, review approved, integration completed, or a release is ready without direct evidence.
