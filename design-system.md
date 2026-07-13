@@ -4,6 +4,21 @@
 
 This document defines the official visual and interaction language for every Devcrew user-facing surface. It establishes design intent and decision rules without prescribing implementation CSS. `devcrew-ui` applies these rules, `devcrew-review` verifies them, and `devcrew` validates their consistency after integration.
 
+
+
+## Design Goals
+
+The Devcrew interface should:
+
+- reduce cognitive load
+- preserve engineering context
+- prioritize clarity over decoration
+- encourage confident execution
+- remain visually calm during long work sessions
+- communicate system state without unnecessary interruption
+
+Every design decision should improve comprehension before improving aesthetics.
+
 ## UI Philosophy
 
 Devcrew is an engineering workspace, not a collection of dashboards or chat windows. The interface must make project context, ownership, work state, and the next available action clear with minimal visual noise.
@@ -32,6 +47,19 @@ Hierarchy must come from a limited, named type scale with consistent size, weigh
 
 Text measure should support scanning and reading: prose uses a constrained line length, while operational tables and timelines use available width deliberately. Truncation must not hide information required to understand or act; provide an accessible way to reveal the full value.
 
+## Information Hierarchy
+
+Every screen should communicate information in the following order:
+
+1. Project Context
+2. Current Task
+3. Primary Action
+4. Supporting Information
+5. Historical Context
+
+Visual emphasis should follow this hierarchy consistently across every surface.
+
+
 ## Spacing
 
 Spacing uses a shared base increment and a small semantic scale rather than arbitrary values. Tokens cover inline separation, control padding, component padding, group separation, section separation, and page margins.
@@ -49,6 +77,21 @@ The application uses a persistent navigation region and a flexible content regio
 - Responsive behavior prioritizes task completion, then adapts navigation and secondary detail without removing essential actions.
 - Horizontal scrolling is limited to content whose structure genuinely requires it and must not become the default small-screen strategy.
 
+## Navigation Principles
+
+Navigation should always answer:
+
+- Where am I?
+- Which project is active?
+- What can I do next?
+- How do I return?
+
+Navigation should remain persistent and predictable throughout the workspace.
+
+Users should never lose project context while moving between pages.
+
+
+
 ## Radius
 
 Radius communicates component role, not decoration. The system uses a compact scale:
@@ -65,11 +108,11 @@ The dark theme establishes hierarchy primarily through surface tone, border, and
 
 Elevation levels must be few, named, and tied to stacking behavior. A higher visual layer must correspond to a higher interaction layer. Persistent content should not use shadow to imitate floating cards. Focus rings, borders, and overlays must remain visible against every permitted surface.
 
-## Dark Theme Philosophy
+## Dark Theme Scope
 
-Dark mode is the primary visual expression. It uses warm charcoal and brown-influenced neutrals instead of pure black. Text uses softened whites rather than maximum white. Surface differences are subtle but perceptible, and borders provide quiet structure.
+Devcrew is dark-mode-only for the hackathon MVP. It uses warm charcoal and brown-influenced surfaces instead of pure black, softened white text rather than maximum white, a restrained orange accent, and accessible contrast across all dark-mode states. Surface differences remain subtle but perceptible, and borders provide quiet structure.
 
-Dark-first does not mean dark-only. The semantic token model must support a coherent light theme without changing component meaning or interaction. User preference and system preference behavior must be predictable, and theme transitions must not flash or conceal content.
+The MVP has no theme switcher, system theme synchronization, light theme implementation, or light theme testing requirement. Semantic tokens must remain structured for possible future expansion without adding unapproved theme behavior. A light theme may be added only through an approved future specification and design-system update.
 
 ## Color System
 
@@ -94,6 +137,19 @@ No status or selection may depend on color alone. Saturated color is limited to 
 - Tables support scanning, clear headers, keyboard use, and responsive alternatives appropriate to their data.
 - Icons reinforce labels or represent universally understood actions; they do not carry essential meaning without an accessible name.
 
+
+## Empty State Philosophy
+
+Empty states should never feel like errors.
+
+Every empty state should explain:
+
+- why content is absent
+- whether this is expected
+- what the user can do next
+
+Empty states should encourage progress rather than merely reporting absence.
+
 ## Motion Principles
 
 Motion explains relationship, change, and causality. It must feel calm and unobtrusive.
@@ -104,6 +160,23 @@ Motion explains relationship, change, and causality. It must feel calm and unobt
 - Preserve spatial continuity when items move between work states.
 - Never use animation as the only indication that a state changed.
 - Honor reduced-motion preferences by removing non-essential movement and replacing essential motion with immediate, understandable state changes.
+
+
+## Notification Principles
+
+Notifications communicate important events without disrupting workflow.
+
+They should:
+
+- appear close to the triggering action
+- remain concise
+- avoid duplicate messages
+- clearly indicate severity
+- disappear only when appropriate
+
+Critical failures require explicit acknowledgement.
+
+Routine success messages should remain unobtrusive.
 
 ## Accessibility
 
@@ -146,4 +219,26 @@ Components consume semantic tokens rather than hard-coded visual values. Raw pal
 - Copy is concise, specific, and operational. Avoid promotional language and unexplained technical errors.
 - Responsive changes preserve action order and meaning.
 - Exceptions require a documented user need and design review; one-off preference is not sufficient.
-- Review new patterns across representative content, themes, viewport sizes, input methods, loading states, and failure states before adoption.
+- Review new patterns across representative content, the approved dark theme, viewport sizes, input methods, loading states, and failure states before adoption.
+
+
+
+## Design Review Checklist
+
+Every new interface should be evaluated against:
+
+- typography
+- spacing
+- hierarchy
+- accessibility
+- responsiveness
+- interaction consistency
+- semantic colors
+- loading states
+- empty states
+- error states
+- keyboard navigation
+- reduced motion
+- dark theme consistency
+
+Review should prioritize user comprehension before visual polish.

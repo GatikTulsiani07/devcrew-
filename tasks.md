@@ -6,18 +6,109 @@ This is the canonical living backlog for the Devcrew platform. All entries refle
 
 Priorities are `P0` for release-blocking foundation or risk, `P1` for required MVP capability, and `P2` for important hardening or post-foundation improvement. Dependencies use task identifiers; `None` means the task can begin from the current documented baseline.
 
+## Hackathon Execution Boundary
+
+The hackathon implementation scope is one local-first, deterministic vertical slice:
+
+1. Connect a prepared repository.
+2. Submit one engineering task.
+3. The Manager creates a plan.
+4. A human approves the plan.
+5. The Full Stack Developer produces the implementation result.
+6. The DevOps Engineer validates the result.
+7. The Reviewer issues a verdict.
+8. Activity and the final result remain visible.
+
+Only tasks explicitly tagged or identified as `Hackathon P0` may enter implementation during the event. Production hardening tasks remain in this canonical backlog but must not block the judged prototype. Projects, Ideas, Tickets, PRDs, Docs, Settings, and model configuration may use deterministic demo data where full persistence is outside the hackathon scope; the core workflow itself must be real, connected, and demonstrable.
+
+
+## Task Status Lifecycle
+
+Every task must move through the following lifecycle.
+
+Backlog
+↓
+Ready
+↓
+In Progress
+↓
+In Review
+↓
+Blocked (optional)
+↓
+Done
+
+Only the assigned owner may move a task into **In Progress**.
+
+Only the Reviewer working through the review worktree may approve movement into **Done**.
+
+A task is never considered complete merely because code exists.
+
+Completion requires every documented acceptance criterion and applicable review gate.
+
+
+## Milestones
+
+### Milestone 1
+
+Workspace Foundation
+
+- documentation
+- architecture
+- worktree setup
+
+---
+
+### Milestone 2
+
+Core Platform
+
+- projects
+- agents
+- activity
+
+---
+
+### Milestone 3
+
+Engineering Workflow
+
+- ideas
+- tickets
+- review
+
+---
+
+### Milestone 4
+
+Integration
+
+- backend
+- ui
+- review
+
+---
+
+### Milestone 5
+
+Release Candidate
+
+- testing
+- polish
+- deployment
+
 ## Main
 
-### MAIN-01 — Define the cross-repository integration strategy
+### MAIN-01 — Define the cross-worktree integration strategy
 
 - Priority: P0
-- Description: Define how reviewed UI and backend deliverables are reconciled and assembled in `devcrew`, including contract versioning and ownership of integration conflicts.
+- Description: Define how reviewed UI and backend deliverables are reconciled and assembled in the `devcrew` worktree, including contract versioning and ownership of integration conflicts.
 - Dependencies: DOC-01, BACK-01
 - Status: Not started
 - Acceptance criteria:
   - The strategy identifies the source, target, review evidence, and validation required for each integration unit.
   - Contract-breaking changes have an explicit coordination and migration process.
-  - The approach does not create canonical-document copies in code repositories.
+  - The approach does not create canonical-document copies in implementation worktrees.
 
 ### MAIN-02 — Integrate the project foundation slice
 
@@ -68,13 +159,13 @@ Priorities are `P0` for release-blocking foundation or risk, `P1` for required M
 ### BACK-01 — Approve backend foundation decisions
 
 - Priority: P0
-- Description: Select and document identity, project isolation, persistence, execution, live-update, and deployment boundaries before dependent implementation.
+- Description: Document the frozen hackathon identity boundary, project isolation, in-memory persistence, local execution, Server-Sent Events transport, and local deployment model, together with deferred post-MVP decisions.
 - Dependencies: DOC-01
 - Status: Not started
 - Acceptance criteria:
   - Each decision states requirements, alternatives, security and operational effects, migration, and rollback.
   - UI, main, and review owners approve the resulting contract implications.
-  - No unselected technology is represented as implemented architecture.
+  - Frozen hackathon choices are distinguished from unimplemented capabilities and deferred production technology.
 
 ### BACK-02 — Define platform contracts and lifecycle rules
 
@@ -140,9 +231,9 @@ Priorities are `P0` for release-blocking foundation or risk, `P1` for required M
 - Dependencies: DOC-01
 - Status: Not started
 - Acceptance criteria:
-  - Semantic tokens cover themes, typography, spacing, radius, elevation, motion, focus, and status.
+  - Semantic tokens cover the approved dark theme, typography, spacing, radius, elevation, motion, focus, and status.
   - Core components define keyboard and screen-reader behavior plus loading, empty, error, disabled, and validation states.
-  - Dark and light themes meet applicable contrast requirements without component-specific hard-coded semantics.
+  - The approved dark theme meets applicable contrast requirements without component-specific hard-coded semantics.
 
 ### UI-02 — Build the application shell and project flow
 
@@ -250,13 +341,13 @@ Priorities are `P0` for release-blocking foundation or risk, `P1` for required M
 ### DOC-01 — Ratify canonical platform documentation
 
 - Priority: P0
-- Description: Review the specification, architecture, design system, execution plan, and backlog with all repository owners before implementation relies on them.
+- Description: Review the specification, architecture, design system, execution plan, and backlog with all worktree owners before implementation relies on them.
 - Dependencies: None
 - Status: Not started
 - Acceptance criteria:
   - UI, backend, main, and review responsibilities contain no conflicts.
   - Product scope, lifecycle terminology, milestone gates, and backlog dependencies are consistent.
-  - Code repositories reference these files and contain no duplicate canonical documents.
+  - Implementation worktrees reference these files and contain no duplicate canonical documents.
 
 ### DOC-02 — Reconcile documentation with the release candidate
 
@@ -277,21 +368,21 @@ Priorities are `P0` for release-blocking foundation or risk, `P1` for required M
 - Status: Not started
 - Acceptance criteria:
   - Change review identifies whether canonical documentation is affected.
-  - Automated checks reject repository-specific copies of the five canonical files.
-  - Documentation changes remain reviewable independently of generated or repository-local guidance.
+  - Automated checks reject worktree-local copies of the five canonical files.
+  - Documentation changes remain reviewable independently of generated or worktree-local guidance.
 
 ## Infrastructure
 
 ### INFRA-01 — Establish workspace quality gates
 
 - Priority: P0
-- Description: Define consistent continuous-integration gates for each repository based on its actual scripts and responsibilities.
+- Description: Define consistent continuous-integration gates for each worktree and branch based on its actual scripts and responsibilities.
 - Dependencies: DOC-01
 - Status: Not started
 - Acceptance criteria:
-  - Every repository runs applicable lint, type, test, and production-build checks without suppressions.
+  - Every implementation branch runs applicable lint, type, test, and production-build checks without suppressions.
   - Missing test capabilities are tracked as blocking gaps rather than reported as passing.
-  - Gate output identifies the repository, revision, command, environment, and result.
+  - Gate output identifies the worktree, branch, revision, command, environment, and result.
 
 ### INFRA-02 — Provide an integration test environment
 
@@ -336,3 +427,17 @@ Priorities are `P0` for release-blocking foundation or risk, `P1` for required M
   - Budgets cover user-perceived response, long-running work feedback, collection scale, error rate, and recovery behavior.
   - Measurements record environment, dataset, method, result, and allowed threshold.
   - Release review treats missed required budgets as explicit findings.
+
+
+## Definition of Done
+
+A task reaches Done only when:
+
+- Acceptance Criteria pass.
+- Review approves.
+- Tests pass.
+- Lint passes.
+- Type checks pass.
+- Build succeeds.
+- Documentation updated.
+- No blocker remains.

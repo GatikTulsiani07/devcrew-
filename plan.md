@@ -2,20 +2,63 @@
 
 ## Purpose
 
-This plan sequences delivery of the Devcrew MVP across the workspace. It defines milestones and exit gates, not implementation details or proof of completion. Current code repositories are minimal scaffolds; no milestone in this plan is considered complete without the stated evidence and an updated backlog.
+This plan sequences delivery of the Devcrew MVP across the workspace. It defines milestones and exit gates, not implementation details or proof of completion. Current implementation worktrees are minimal scaffolds; no milestone in this plan is considered complete without the stated evidence and an updated backlog.
+
+## Hackathon Delivery Override
+
+The OpenAI Build Week implementation window compresses the larger plan into one local-first, deterministic vertical slice:
+
+1. Connect a prepared repository.
+2. Submit one engineering task.
+3. The Manager creates a plan.
+4. A human approves the plan.
+5. The Full Stack Developer produces the implementation result.
+6. The DevOps Engineer validates the result.
+7. The Reviewer issues a verdict.
+8. Activity and the final result remain visible.
+
+The hackathon MVP does not require production authentication, a durable database, GitHub OAuth, private repository support, an external connector ecosystem, autonomous merge, production deployment, or full enterprise hardening. The local environment is the authoritative judged environment, and deterministic local behavior takes priority over incomplete production infrastructure.
+
+This override proves the intended architecture through a real end-to-end workflow; it does not delete, weaken, or complete the production-grade milestones below. The full plan remains the long-term execution model after the judged prototype.
+
+## Execution Philosophy
+
+Devcrew is developed through incremental vertical slices rather than isolated technical layers.
+
+Every milestone should deliver a reviewable improvement that moves the product closer to a usable engineering workflow.
+
+No worktree is considered complete independently.
+
+Backend, UI, Review, and Integration evolve together through documented contracts and continuous review.
+
+Large rewrites are avoided.
+
+Stable iteration is preferred over rapid expansion.
 
 ## Delivery Principles
 
 - Establish requirements and contracts before dependent implementation.
 - Deliver vertical, reviewable workflow slices instead of isolated screen inventories.
-- Keep repository ownership explicit and integrate only reviewed work.
+- Keep worktree and branch ownership explicit and integrate only reviewed work.
 - Validate security, accessibility, failure behavior, and observability throughout delivery.
 - Use `tasks.md` as the operational backlog and this document as the milestone sequence.
 - Record architecture choices before introducing identity, persistence, execution, update transport, or deployment infrastructure.
 
-## Repository Completion Order
+## Engineering Rules
 
-The repository order expresses dependency and release progression rather than a prohibition on safe parallel work:
+Throughout implementation:
+
+- Documentation precedes implementation.
+- Architecture precedes optimization.
+- Contracts precede integration.
+- Review precedes merge.
+- Release follows verification.
+
+No implementation should bypass these stages.
+
+## Worktree Completion Order
+
+The worktree order expresses dependency and release progression rather than a prohibition on safe parallel work:
 
 1. `devcrew-docs` establishes product scope, architecture boundaries, design rules, milestones, and acceptance criteria.
 2. `devcrew-backend` defines contracts and builds authoritative domain behavior, state transitions, security boundaries, and operational foundations.
@@ -25,16 +68,32 @@ The repository order expresses dependency and release progression rather than a 
 
 `Guildly-Reference` remains research input and has no completion milestone in Devcrew delivery.
 
+
+## Parallel Development Strategy
+
+Worktrees may progress independently when:
+
+- contracts remain stable
+- ownership boundaries are respected
+- shared documentation remains authoritative
+- review occurs before integration
+
+The main worktree integrates only reviewed deliverables.
+
+The review worktree never owns implementation.
+
+The documentation worktree never owns runtime code.
+
 ## MVP Milestones
 
 ### Milestone 0: Baseline and Decisions
 
 Scope:
 
-- Ratify canonical documentation and repository ownership.
+- Ratify canonical documentation and worktree ownership.
 - Inventory scaffold code, existing scripts, and framework constraints.
 - Define lifecycle vocabularies for agents, tickets, execution, and reviews.
-- Approve architecture decisions for identity, project isolation, persistence, agent execution, live updates, and deployment.
+- Record the approved hackathon identity boundary, in-memory persistence, local agent execution, Server-Sent Events transport, and local deployment model, plus the decisions deferred until post-MVP.
 - Define versioned backend contracts and an integration strategy.
 
 Exit gate:
@@ -47,7 +106,7 @@ Exit gate:
 
 Scope:
 
-- Establish the accessible application shell, persistent navigation, project context, themes, and shared component foundations.
+- Establish the accessible application shell, persistent navigation, project context, approved dark theme, and shared component foundations.
 - Implement server-side identity, project isolation, configuration validation, error conventions, persistence boundaries, and observability foundations.
 - Deliver project creation, selection, viewing, and settings behavior as the first integrated slice.
 
@@ -120,7 +179,7 @@ Exit gate:
 - All required static checks, tests, builds, migrations, and environment checks pass in a production-representative environment.
 - Measured performance budgets are met.
 - No release-blocking review findings remain open.
-- Canonical documentation matches shipped behavior and no repository-specific copies exist.
+- Canonical documentation matches shipped behavior and no worktree-local copies exist.
 
 ## Integration Milestones
 
@@ -167,6 +226,26 @@ After knowledge and review are connected, the product is exercised from project 
 - Release review evaluates the full candidate, all evidence, unresolved risk, operations, and documentation.
 - Any material correction after approval reopens review for the affected scope.
 
+
+## Risk Management
+
+Every milestone should identify:
+
+- technical risk
+- integration risk
+- security risk
+- schedule risk
+
+Risks are reduced through:
+
+- small deliverables
+- worktree isolation
+- continuous review
+- contract validation
+- integration checkpoints
+
+No milestone advances while unresolved release-blocking risks remain.
+
 ## Release Milestones
 
 ### Internal Candidate
@@ -184,6 +263,18 @@ Promote the exact reviewed artifact, run post-deployment health and smoke checks
 ### Stabilization
 
 Prioritize verified defects, measure workflow completion and operational reliability, and avoid roadmap expansion until release risks are understood.
+
+
+
+## MVP Success Metrics
+
+The execution plan is considered successful when:
+
+- all MVP milestones reach their exit gates
+- critical workflow passes end-to-end verification
+- release contains no blocking review findings
+- worktree and branch ownership boundaries remain intact
+- documentation accurately reflects shipped behaviour
 
 ## Post-MVP Roadmap
 
