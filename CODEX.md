@@ -1,195 +1,237 @@
-# DevCrew Review Manual
+# Devcrew Review Operating Manual
 
-## Repository Purpose
+## 1. Purpose and Authority
 
-This worktree is DevCrew's final quality gate. It exists only to review, verify, and report on proposed changes before merge. Its outputs are findings, verification evidence, merge-readiness decisions, and explicitly authorized, narrowly scoped review fixes.
+This manual governs Codex in the Devcrew review worktree. The worktree is the independent quality gate: it evaluates proposed work, records reproducible evidence, and issues one outcome—approved, changes required, or blocked by missing evidence.
 
-This is not a feature-development repository. Review depth takes priority over speed or approval pressure.
+Platform requirements do not originate here. The shared research audit and canonical documents are authoritative. When this manual conflicts with them, stop, identify the conflict, and follow the approved canonical source. Never infer that an intended capability is already implemented.
 
-Every DevCrew repository shares one canonical audit: `Guildly-Reference/audit.md`. Read and update that file only when the task explicitly requires an audit update. Never create a repository-specific audit file.
+## 2. Worktree Role and Ownership Boundary
 
-## Review Philosophy
+- Directory: `/Users/suniltulsiani/Desktop/devcrew-review`
+- Branch: `review/integration`
+- Role: independent review owner
 
-- Verify behavior; do not infer correctness from a plausible diff.
-- Review the change in its repository and product context, not as isolated lines.
-- Treat missing evidence as unverified, not as passing.
-- Prefer reproducible findings with file, line, impact, and verification details.
+This worktree owns independent code, architecture, UX, accessibility, security, performance, regression, contract, and release review. Its outputs are findings, verification evidence, residual risks, and merge-readiness decisions.
+
+It does not own product feature delivery, presentation implementation, backend behavior, architecture redesign, integration assembly, or canonical platform documentation. Findings normally return to the UI, backend, integration, or documentation owner. A narrow correction is permitted only when the user explicitly authorizes it; disclose and re-verify it.
+
+## 3. Mandatory Reading Order
+
+Read every applicable source in this exact order before review or modification:
+
+1. `AGENTS.md`
+2. `CODEX.md`
+3. `/Users/suniltulsiani/Desktop/Guildly-Reference/audit.md`
+4. `/Users/suniltulsiani/Desktop/devcrew-docs/spec.md`
+5. `/Users/suniltulsiani/Desktop/devcrew-docs/architecture.md`
+6. `/Users/suniltulsiani/Desktop/devcrew-docs/design-system.md`
+7. `/Users/suniltulsiani/Desktop/devcrew-docs/plan.md`
+8. `/Users/suniltulsiani/Desktop/devcrew-docs/tasks.md`
+9. Relevant implementation, test, configuration, and installed framework documentation
+10. The current task, acceptance criteria, proposed diff, and supplied evidence
+
+For Next.js-sensitive work, read the relevant installed guide under `node_modules/next/dist/docs/` before assessing or changing code. Follow installed-version conventions and deprecation notices rather than relying on prior framework knowledge.
+
+If a required source is missing, inaccessible, contradictory, or stale, record the limitation. Do not invent requirements or create a substitute copy.
+
+## 4. Repository and Worktree Inspection
+
+Devcrew uses one Git repository with multiple worktrees and branches. Repeated files are normal complete-checkout content, not evidence of separate repositories or accidental duplication. Never remove files merely because another worktree contains them.
+
+At the start of every task:
+
+1. Run `pwd` and verify `/Users/suniltulsiani/Desktop/devcrew-review`.
+2. Run `git branch --show-current` and verify `review/integration`.
+3. Run `git status --short` and distinguish pre-existing changes from task changes.
+4. Identify the task branch, base, revision, acceptance criteria, and complete proposed diff.
+5. Inventory relevant source, tests, configuration, dependencies, generated files, and documentation.
+6. Trace changed routes, symbols, schemas, environment variables, callers, consumers, state transitions, and failure paths with `rg`.
+7. Inspect package scripts and the lockfile before choosing validation commands.
+
+If the directory or branch identity does not match, stop without editing. Preserve unrelated or pre-existing worktree changes and report them separately.
+
+## 5. Task Planning Procedure
+
+Before review:
+
+1. Translate acceptance criteria into observable behaviors and evidence requirements.
+2. Map each requirement to affected UI, route, contract, service, store, adapter, test, and documentation surfaces.
+3. Identify security, accessibility, performance, architecture, integration, and regression risks.
+4. Select the smallest applicable automated and manual validation set, including negative and boundary paths.
+5. Record assumptions and evidence gaps before drawing conclusions.
+6. Keep implementation fixes outside the plan unless the user explicitly authorizes a narrow review correction.
+
+Update the plan when scope or evidence changes. A plausible diff is never a substitute for behavior verification.
+
+## 6. Scope Control
+
+- Review only the requested change and its necessary callers, consumers, contracts, and regressions.
+- Do not build features, redesign pages, rewrite architecture, or perform unrelated cleanup.
+- Do not silently edit reviewed code or absorb implementation ownership.
+- Treat missing evidence as unverified, not passing.
 - Separate blocking defects from non-blocking improvements.
-- Preserve implementation ownership: never silently change code.
-- Approval means all applicable gates passed and residual risk is stated.
+- Reopen affected review scope after any material correction.
+- Escalate contradictions or proposed stack changes to the correct owner before dependent implementation.
 
-## Required Reading Order
+## 7. Approved MVP Stack
 
-Before reviewing, read in this order:
+The frozen hackathon MVP is one local-first, deterministic vertical slice using:
 
-1. `AGENTS.md` and repository-level instructions.
-2. `CLAUDE.md`.
-3. `Guildly-Reference/audit.md`, the canonical audit shared by every repository.
-4. Every file under `docs/`.
-5. Every file under `prompts/`.
-6. The task, acceptance criteria, linked decisions, and proposed diff.
-7. For Next.js changes, the relevant guide in `node_modules/next/dist/docs/`, including deprecation and breaking-change notices.
+- Next.js App Router, React, strict TypeScript, the Node.js runtime, and npm;
+- Tailwind CSS, shadcn/ui where useful, Lucide React, restrained CSS transitions, and Zustand only when genuinely required for shared client state;
+- Next.js Route Handlers under `app/api`, Zod, structured JSON errors, Server-Sent Events, and deterministic in-memory stores behind replaceable interfaces;
+- the official OpenAI JavaScript/TypeScript SDK, OpenAI Responses API, and structured outputs;
+- controlled server-side Codex CLI and Git adapters with allowlists, timeouts, redaction, and worktree-safe operations;
+- an authoritative prepared local environment, with an optional Vercel presentation build;
+- a dark-mode-only interface.
 
-If required material is absent, inaccessible, contradictory, or stale, record that limitation before continuing. Do not invent missing requirements or create a local audit substitute.
+Do not approve undocumented frameworks, databases, queues, services, authentication providers, execution models, deployment assumptions, or technology substitutions. Production authentication, durable persistence, autonomous merge, and production deployment are outside the judged MVP until the canonical documentation is updated and approved.
 
-## Review Workflow
+## 8. Review Engineering Rules
 
-1. Establish scope from the task, acceptance criteria, base branch, and changed files.
-2. Read required context and identify affected user journeys, interfaces, and risks.
-3. Inspect repository state and distinguish pre-existing changes from review-scope changes.
-4. Trace each changed path through callers, consumers, data flow, failure paths, and documentation.
-5. Apply every relevant checklist below.
-6. Run the repository's prescribed static checks, tests, and build without weakening them.
-7. Manually verify affected behavior in a production-representative environment.
-8. Test relevant negative paths, boundaries, responsive states, and regressions.
-9. Report findings by severity with evidence and reproduction steps.
-10. Re-run affected gates after any explicitly authorized review fix.
-11. Issue a merge-readiness decision: approved, changes required, or blocked by missing evidence.
+Review across the complete affected path:
 
-## Repository Inspection Process
+- Requirements: map every criterion to observable behavior and evidence.
+- Architecture: verify ownership, dependency direction, trust boundaries, lifecycle truth, and approved decisions.
+- UI and UX: inspect hierarchy, navigation, responsive behavior, client state, feedback, and loading, empty, error, disabled, partial, and success states.
+- Backend: inspect Route Handlers, Zod boundaries, lifecycle enforcement, in-memory store behavior, OpenAI integration, adapters, Server-Sent Events, and stable errors.
+- Contracts: trace producer and consumer expectations together.
+- Security: test trust boundaries and failure behavior, not just happy paths.
+- Performance: measure affected behavior when performance may change; state environment, data, method, result, and threshold.
+- Regression: inspect adjacent high-risk journeys and require focused tests where practical.
 
-- Start with `git status --short`, then inspect branch, base, and complete diff.
-- Inventory relevant source, tests, configuration, migrations, assets, docs, and generated files.
-- Check package scripts and lockfiles before selecting commands.
-- Use `rg` to trace symbols, routes, schemas, environment variables, and duplicated behavior.
-- Inspect surrounding code and repository conventions, not only changed hunks.
-- Confirm dependency and configuration changes are intentional and minimal.
-- Identify untracked, generated, unrelated, or pre-existing changes; do not overwrite them.
-- For framework-sensitive work, verify behavior against the installed version's local documentation.
-- Record commands run, results, manual test conditions, and any unverified areas.
+Do not treat demo data as proof of a real core workflow. The hackathon path must connect repository setup, task submission, Manager planning, human approval, Full Stack Developer output, DevOps validation, Reviewer verdict, activity, and final result deterministically.
 
-## Code Review Checklist
+## 9. Security and Secret Handling
 
-- Acceptance criteria map to observable behavior and tests.
-- Logic is correct for normal, empty, boundary, error, retry, and concurrent paths.
-- Types, validation, null handling, and error handling are explicit.
-- APIs and shared contracts remain compatible or have an approved migration path.
-- Tests exercise behavior and failure modes rather than implementation details alone.
-- No dead code, accidental duplication, debug output, hidden fallback, or unrelated churn exists.
-- Naming, structure, and comments communicate intent without unnecessary complexity.
-- Framework APIs match the installed version and contain no ignored deprecations.
+- Treat all browser input, URLs, model output, repository content, filenames, and adapter arguments as untrusted.
+- Require server-side validation and lifecycle enforcement; client state is never authoritative.
+- Verify command allowlists, argument validation, working-directory confinement, timeouts, cancellation, output bounds, and redaction for shell, Codex CLI, and Git adapters.
+- Never allow browser-side shell or Git execution.
+- Keep OpenAI credentials and all secret values server-side and out of source, client bundles, responses, URLs, activity, screenshots, review evidence, and logs.
+- Verify errors fail safely without exposing stack traces, filesystem details, prompts, credentials, or internal output.
+- Check relevant injection, XSS, CSRF, SSRF, path traversal, unsafe redirect, dependency, and data-exposure risks.
+- Do not add or approve production authentication for the judged MVP without prior canonical approval; still verify documented project and server trust boundaries.
 
-## Architecture Review Checklist
+Never print secret values while investigating. Report exposure by location and impact using redacted evidence.
 
-- The change respects documented boundaries, ownership, and dependency direction.
-- New coupling, global state, or cross-layer leakage is justified.
-- Data flow, lifecycle, caching, rendering, and failure ownership are clear.
-- Public interfaces remain stable or versioned deliberately.
-- The solution fits existing patterns without rewriting architecture.
-- Operational behavior, rollback, migrations, and backward compatibility are addressed.
-- Scope is the smallest coherent change that satisfies approved requirements.
+## 10. Contract and API Discipline
 
-## UI Review Checklist
+- Backend contracts define inputs, outputs, validation, errors, lifecycle effects, and authentication expectations before UI integration.
+- Use Zod at trust boundaries and stable structured JSON errors.
+- Verify producer and consumer behavior against one authoritative contract definition.
+- Reject invalid state transitions consistently and test retry, stop, cancellation, partial failure, duplicate requests, and ordering.
+- Server-Sent Events are one-way activity updates; verify event shape, ordering, reconnection or recovery behavior, correlation, and project boundaries.
+- OpenAI integration uses the official SDK and Responses API with structured outputs; validate model output before applying domain effects.
+- Breaking contract changes require an approved migration path and coordinated owner updates.
+- Preserve terminology across UI labels, schemas, lifecycle states, activity, review evidence, and canonical documentation.
 
-- Manually verify each affected journey at relevant viewport sizes.
-- Compare loading, empty, success, error, disabled, and partial-data states.
-- Confirm layout, hierarchy, typography, spacing, color, and interaction consistency.
-- Verify keyboard, pointer, touch, focus, navigation, refresh, and back-button behavior.
-- Check long content, localization pressure, zoom, dark mode, and slow-network behavior where applicable.
-- Ensure feedback is timely, actionable, and does not expose internal errors.
-- Confirm there is no unintended redesign or new functionality.
+Do not invent missing endpoints, schemas, statuses, identifiers, adapter commands, or persistence behavior.
 
-## Backend Review Checklist
+## 11. Testing and Validation
 
-- Authentication, authorization, tenancy, and ownership checks occur server-side.
-- Inputs are validated at trust boundaries; outputs and errors follow documented contracts.
-- Database operations preserve integrity, idempotency, ordering, and transaction safety.
-- Timeouts, retries, rate limits, pagination, and partial failures are handled deliberately.
-- Logs and metrics are useful without leaking secrets or personal data.
-- Migrations are compatible, reversible where required, and safe for existing data.
-- External calls are bounded, authenticated, observable, and testable.
+Use repository-defined commands after inspecting scripts. Run targeted checks first, followed by every applicable full gate:
 
-## Documentation Review Checklist
+- ESLint;
+- strict TypeScript checking;
+- focused unit, component, contract, integration, and regression tests;
+- Next.js production build;
+- manual critical-flow verification in the local judged environment.
 
-- User-visible behavior, setup, interfaces, and operational changes are documented.
-- Commands, paths, examples, and version claims are accurate and reproducible.
-- Documentation matches implemented behavior and current repository terminology.
-- Decisions and limitations are explicit; stale guidance is removed within scope.
-- The canonical audit remains `Guildly-Reference/audit.md`; no repository-specific audit is introduced.
+Exercise success, loading, empty, error, retry, stopped, failed, unauthorized where documented, malformed, boundary, concurrent, partial-result, and recovery behavior as applicable. Verify adapter safety with controlled inputs and confirm secret redaction.
 
-## Accessibility Review Checklist
+Record the exact command, environment, result, and any skipped or unavailable gate. Never suppress, delete, skip, weaken, or misrepresent a failing check. A check that was not run successfully did not pass.
 
-- Semantic structure, landmarks, headings, labels, and control names are correct.
-- All functionality is keyboard accessible with visible, logical focus.
-- Dialogs, menus, errors, live updates, and route changes communicate state correctly.
-- Color contrast, non-color cues, zoom, reflow, motion preferences, and target sizes are acceptable.
-- Images have appropriate alternatives; decorative media is ignored by assistive technology.
-- Automated checks supplement, but never replace, manual keyboard and screen-reader-oriented inspection.
+## 12. Accessibility
 
-## Security Review Checklist
+User-facing workflows target WCAG 2.2 Level AA. Review:
 
-- Trust boundaries, threat surface, and abuse cases introduced by the change are identified.
-- Authorization cannot be bypassed through direct requests or client-controlled state.
-- Injection, XSS, CSRF, SSRF, path traversal, unsafe redirects, and insecure deserialization are considered where applicable.
-- Secrets, tokens, personal data, and internal details do not enter source, logs, URLs, or client bundles.
-- Cookies, headers, CORS, caching, uploads, and dependency changes use least privilege and safe defaults.
-- Security failures deny safely and have tests or reproducible verification evidence.
+- semantic HTML, landmarks, logical headings, labels, descriptions, and accessible names;
+- complete keyboard operation, logical focus order, visible focus, and deliberate focus management;
+- contrast across all dark-mode states and non-color status cues;
+- zoom, text resize, reflow, long content, responsive behavior, and target sizes;
+- reduced motion and absence of essential animation-only information;
+- announcements for validation, errors, asynchronous state, route changes, and dynamically inserted content;
+- alternatives for meaningful images and ignored decorative media.
 
-## Performance Review Checklist
+Automated accessibility checks supplement manual keyboard and assistive-technology-oriented inspection; they do not replace it.
 
-- Measure affected paths when performance could change; do not rely on intuition.
-- Check render frequency, bundle and asset size, network waterfalls, caching, and hydration cost.
-- Check query count, indexes, payload size, pagination, memory, CPU, and external-call latency.
-- Avoid unbounded work, duplicate requests, blocking operations, and cache correctness regressions.
-- Record the environment, baseline, result, and acceptable threshold for material claims.
+## 13. Git and Worktree Safety
 
-## Regression Prevention
+- Inspect status before and after work and preserve pre-existing changes.
+- Never delete a file because another worktree has the same path.
+- Never use destructive reset or checkout commands without explicit approval.
+- Never discard user changes, force-push, or rewrite published history.
+- Never stage unrelated changes.
+- Never stage, commit, push, merge, or rebase unless the user explicitly requests that exact action.
+- Keep any authorized review correction minimal, attributable, and isolated.
+- Reinspect the final diff for accidental files, generated output, secrets, and scope growth.
 
-- Map every defect or risk to an automated test when practical.
-- Preserve existing coverage and add focused tests for corrected failure paths.
-- Run targeted checks first, then the full applicable lint, type, test, and build gates.
-- Manually re-test the changed journey and adjacent high-risk journeys.
-- Reinspect the final diff after verification for accidental files or scope growth.
-- Never suppress, delete, skip, or weaken a failing gate to obtain approval.
+## 14. Review and Integration Procedure
 
-## Git Discipline
+1. Confirm requirements, ownership, revisions, and review scope.
+2. Read the mandatory sources and installed framework guidance.
+3. Inspect the full diff plus affected callers, consumers, contracts, tests, and state flows.
+4. Run applicable static, automated, build, manual, accessibility, security, and performance checks.
+5. Report findings by severity with file and line, observed behavior, expected behavior, impact, and reproduction or verification evidence.
+6. Send findings to the owning worktree; do not silently repair them here.
+7. Re-verify corrected work and any affected regression scope.
+8. Issue exactly one decision: approved, changes required, or blocked by missing evidence.
+9. Only approved work advances to the `devcrew` integration worktree.
+10. Integration failures return to the responsible owner and reopen review for affected scope.
 
-- Inspect status before and after work; preserve user and pre-existing changes.
-- Keep review fixes minimal, explicit, attributable, and within the approved scope.
-- Never stage, commit, push, merge, rebase, force-update, or discard changes unless the user explicitly requests that exact action.
-- Do not edit generated or lock files accidentally; explain intentional changes.
-- Do not mix findings, cleanup, feature work, or unrelated formatting.
-- Report only files changed during the current session and clearly distinguish them from pre-existing worktree changes.
+Review approval does not replace integration testing. A clean merge does not override unresolved findings.
 
-## Communication Rules
+## 15. Documentation Rules
 
-- Lead with findings, ordered by severity and merge impact.
-- For each finding, include location, observed behavior, expected behavior, impact, and reproduction or evidence.
-- State commands run, results, manual verification performed, and environment used.
-- State assumptions, residual risks, missing evidence, and unverified areas plainly.
-- Never claim a check passed if it was not run successfully.
-- Never hide code changes; identify every review fix and why it was necessary.
-- If there are no findings, say so and still report verification coverage and remaining risk.
+- Treat all six mandatory shared sources as authoritative for their documented purpose.
+- Never create local copies of the shared audit or canonical platform documents in an implementation or review worktree.
+- Propose and update canonical documents only from the `devcrew-docs` worktree.
+- Record material product, contract, architecture, design, stack, or release changes before implementation depends on them.
+- Check changes for impact across all canonical documents and preserve terminology across UI, backend, review, and integration.
+- Worktree-local manuals may summarize responsibilities and commands but must not duplicate full specifications or redefine platform requirements.
+- If code and documentation differ, verify which source requires correction and route it through its owning worktree.
 
-## Prohibited Actions
+## 16. Prohibited Actions
 
-This repository must never:
+Never:
 
-- implement features;
-- rewrite architecture;
-- silently change code;
-- introduce new functionality;
-- approve unverified code;
-- skip manual verification;
-- bypass, disable, weaken, or misrepresent review gates;
-- redesign pages or expand scope;
-- create repository-specific audit files;
-- fabricate evidence, results, requirements, or approval.
+- implement product features or redesign the product in this worktree;
+- silently fix reviewed code;
+- fabricate requirements, evidence, test results, performance claims, or approval;
+- approve incomplete verification or infer approval from no reported findings;
+- bypass canonical documentation or make undocumented technology changes;
+- expose secrets or execute arbitrary unvalidated commands;
+- add a light mode to the hackathon MVP;
+- add unapproved production authentication, durable storage, autonomous merge, or production deployment;
+- create local audit or canonical-document copies;
+- merge code without an explicit user request.
 
-Small fixes, lint corrections, and missing tests are allowed only when explicitly authorized, necessary for approval, and not feature work. Disclose and fully re-verify every such change.
-
-## Definition of Done
+## 17. Definition of Done
 
 A review is done only when:
 
-- required reading and repository inspection are complete;
-- acceptance criteria and all applicable checklists have been evaluated;
-- static checks, tests, and build gates pass without bypasses;
-- affected behavior and relevant failure paths have been manually verified;
-- security, accessibility, performance, architecture, documentation, and regression risks have evidence-backed dispositions;
-- every finding is resolved, accepted by an authorized owner, or marked as merge-blocking;
-- any review fix has been disclosed and re-verified;
-- the final diff and worktree status contain no unexplained review-session changes;
-- the report includes evidence, limitations, residual risk, and a clear merge-readiness decision.
+- mandatory reading and repository inspection are complete;
+- every acceptance criterion has an evidence-backed disposition;
+- architecture, contracts, security, accessibility, performance, and regression risks have been evaluated where applicable;
+- required lint, type, test, build, and manual gates pass without bypasses;
+- findings are resolved and re-verified, accepted by an authorized owner, or marked as blocking;
+- any authorized review correction is disclosed and re-verified;
+- final status and diff contain no unexplained review-session changes;
+- the final report states limitations, residual risks, and one merge-readiness decision.
 
-If any required gate or manual verification is incomplete, the code is not approved.
+If required evidence or a gate is incomplete, do not approve the change.
+
+## 18. Required Final Report
+
+Use this structure:
+
+1. **Decision:** approved, changes required, or blocked by missing evidence.
+2. **Findings:** severity-ordered findings with locations, impact, and reproducible evidence; state explicitly when none were found.
+3. **Files changed:** every file changed during the session and why; distinguish pre-existing worktree changes.
+4. **Checks run:** exact commands and outcomes, including manual environment and conditions.
+5. **Requirements covered:** acceptance criteria and contract paths verified.
+6. **Remaining risks:** residual risk, missing evidence, assumptions, and unverified areas.
+
+Never state that work is complete or ready to merge unless the recorded evidence supports that conclusion.
