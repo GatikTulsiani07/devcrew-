@@ -1,26 +1,146 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+
+  /* Semantic color tokens */
+  --page-background: #100e0c;
+  --surface-elevated: #171411;
+  --surface-panel: #141210;
+  --surface-panel-strong: #1a1714;
+  --surface-hover: #211d19;
+  --border-subtle: #27231f;
+  --border-strong: #37312a;
+  --text-primary: #eee9e1;
+  --text-secondary: #aca398;
+  --text-muted: #8b8277;
+  --accent: #cc733b;
+  --accent-hover: #d88147;
+  --accent-soft: #2c2018;
+  --success: #79ad88;
+  --success-soft: #19271d;
+  --warning: #d9aa62;
+  --warning-soft: #2c2418;
+  --error: #dc7b73;
+  --error-soft: #2d1c1a;
+  --focus-ring: #e99860;
+
+  /* Semantic spacing tokens */
+  --space-inline: 0.5rem;
+  --space-control: 0.75rem;
+  --space-component: 0.875rem;
+  --space-group: 1.25rem;
+  --space-section: 1.5rem;
+  --space-page: clamp(0.875rem, 1.7vw, 1.5rem);
+
+  /* Shape and elevation tokens */
+  --radius-small: 0.25rem;
+  --radius-standard: 0.375rem;
+  --radius-full: 999px;
+  --shadow-raised: 0 10px 28px rgb(0 0 0 / 0.2);
+  --shadow-overlay: 0 18px 48px rgb(0 0 0 / 0.34);
+
+  /* Motion tokens */
+  --motion-fast: 120ms;
+  --motion-standard: 180ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Local-first typography tokens */
+  --font-ui: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-code: "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-canvas: var(--page-background);
+  --color-elevated: var(--surface-elevated);
+  --color-panel: var(--surface-panel);
+  --color-panel-strong: var(--surface-panel-strong);
+  --color-surface-hover: var(--surface-hover);
+  --color-border: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-ink: var(--text-primary);
+  --color-ink-secondary: var(--text-secondary);
+  --color-ink-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-error: var(--error);
+  --color-error-soft: var(--error-soft);
+  --color-focus: var(--focus-ring);
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-code);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+html {
+  background: var(--page-background);
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  background: var(--page-background);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+a,
+input,
+textarea,
+summary {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  color: var(--text-primary);
+}
+
+.font-display {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Baskerville, Georgia, serif;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+}
+
+.scrollbar-subtle {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
