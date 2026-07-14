@@ -10,13 +10,21 @@ If the directory or branch does not match this identity, stop before editing.
 
 ## Repository Model
 
-Devcrew uses one Git repository with multiple worktrees and branches. Each worktree is a complete checkout, so repeated project files are expected. Never delete a file merely because it also appears in another worktree.
+Devcrew uses one Git repository with multiple worktrees and branches. Each
+worktree is a complete checkout, so repeated project files are expected. Never
+delete a file merely because it also appears in another worktree.
 
-The canonical product documentation lives in the documentation worktree, and the research audit lives in the shared reference folder. Do not create local copies of either.
+This worktree is a standalone Hono backend. It contains no browser application
+and owns no presentation behavior. The UI communicates with this service only
+through coordinated, versioned HTTP JSON contracts.
+
+Canonical product documentation lives under
+`/Users/suniltulsiani/Desktop/devcrew-docs/`, and the research audit lives in
+the shared reference folder. Do not create local copies of either.
 
 ## Mandatory Reading Order
 
-Before planning or editing, read in this order:
+Before planning or editing, read completely in this order:
 
 1. `AGENTS.md`
 2. `CODEX.md`
@@ -26,47 +34,95 @@ Before planning or editing, read in this order:
 6. `/Users/suniltulsiani/Desktop/devcrew-docs/design-system.md`
 7. `/Users/suniltulsiani/Desktop/devcrew-docs/plan.md`
 8. `/Users/suniltulsiani/Desktop/devcrew-docs/tasks.md`
-9. Relevant implementation files, tests, configuration, and installed framework guidance
+9. Relevant source, tests, package configuration, Drizzle configuration, and
+   installed framework guidance
 10. The current task again
 
-The shared documents are authoritative. Summarize them only as needed; do not reproduce their full specifications here or elsewhere in this worktree.
+The shared documents are authoritative. Summarize them only as needed; do not
+reproduce their specifications in this worktree.
 
-## Shared MVP Constraints
+## Verified Sprint 1 Baseline
 
-- Build a local-first hackathon MVP around one deterministic vertical slice.
-- The judged interface is dark-mode-only.
-- The approved stack is frozen in the canonical documentation; do not make undocumented technology changes.
-- The local environment is the authoritative judged environment. A Vercel presentation build is optional and must not claim local shell or Git capability.
-- Do not add production authentication, a durable database, autonomous merge, or production deployment for the judged MVP unless the canonical documentation is approved first.
-- Preserve shared terminology across backend, UI, review, integration, and documentation work.
+The verified implementation currently includes only:
+
+- A standalone Hono HTTP service using strict TypeScript.
+- Zod validation for runtime and Drizzle configuration.
+- `GET /health`.
+- `GET /health/database` using a lightweight database query.
+- Centralized, stable, sanitized JSON errors.
+- An injectable database-health boundary.
+- Separate application creation and network-server startup.
+- Drizzle ORM and Postgres.js connectivity to Supabase PostgreSQL.
+- Focused automated tests.
+
+The local server uses configurable `PORT` with a default of `3001`.
+`DATABASE_URL` is the runtime transaction-pooler connection, and Postgres.js
+must use `prepare: false`. `DIRECT_URL` is reserved for Drizzle inspection and
+migrations through the session pooler.
+
+No product schema, authentication, projects, agents, tickets, activity,
+reviews, execution routes, or product persistence are implemented. Do not
+claim planned capabilities exist.
 
 ## Backend Ownership
 
-This worktree owns:
+This worktree owns backend behavior only:
 
-- Next.js Route Handlers
-- Validation
-- Domain behavior
-- Lifecycle enforcement
-- Deterministic in-memory stores
-- OpenAI Responses API integration
-- Controlled Codex CLI adapter
-- Controlled Git adapter
-- Server-side secrets
-- Server-Sent Events
-- Structured errors
+- Hono HTTP routes and versioned JSON contracts.
+- Environment and request validation with Zod.
+- Application and domain services.
+- Backend-owned lifecycle and authorization rules when approved and
+  implemented.
+- Drizzle models and migrations when an approved product schema exists.
+- Supabase PostgreSQL access through Drizzle ORM and Postgres.js.
+- Stable JSON errors, secret handling, redaction, and operational evidence.
+- Injectable ports around database, AI, local execution, Git, and other
+  external boundaries.
+- Focused backend tests and verification.
 
 This worktree must not:
 
-- Place secrets in client code or logs
-- Execute arbitrary or unvalidated shell commands
-- Import presentation code into backend modules
-- Introduce unapproved databases, queues, services, or authentication systems
-- Perform autonomous merges or deployments
-- Build pages, components, visual layouts, or branding
-- Redefine contracts without coordinating their consumers and canonical documentation impact
+- Build pages, components, navigation, styling, layouts, or branding.
+- Add a Next.js or React application.
+- Import UI modules or make the UI authoritative for backend behavior.
+- Let the UI access Supabase or backend secrets directly.
+- Use process-local memory as authoritative product persistence.
+- Add authentication, product tables, Redis, queues, WebSockets, realtime
+  transport, new services, or deployment systems without approved canonical
+  scope.
+- Perform autonomous merges or deployments.
+- Execute arbitrary or unvalidated shell commands.
 
-Route Handlers under `app/api` are the backend-owned exception inside the App Router. Treat other presentation files under `app/`, plus `components/`, `public/`, styling, prompts, and canonical documentation, as read-only unless a higher-authority task explicitly changes ownership.
+## Backend Engineering Rules
+
+- Preserve the direction `Hono handler -> application service -> domain/port ->
+  controlled adapter`.
+- Keep handlers thin and reusable behavior independent of Hono request objects.
+- Keep application creation importable without binding a port or opening an
+  unexpected connection.
+- Keep network startup separate from application creation.
+- Keep external systems behind narrow injectable interfaces so tests can use
+  deterministic fakes.
+- Validate untrusted values with Zod and strict TypeScript.
+- Return stable, presentation-neutral JSON and never expose raw driver, SDK,
+  subprocess, SQL, filesystem, or stack-trace details.
+- Coordinate contract changes with UI, integration, review, and documentation
+  owners before consumers depend on them.
+- Do not create or apply a product migration without approved schema scope.
+
+## Security and Secret Handling
+
+- Treat requests, environment values, paths, model output, database failures,
+  subprocess results, and external responses as untrusted.
+- Never expose connection URLs, credentials, hosts, passwords, authorization
+  headers, cookies, tokens, private keys, or raw environment objects in source,
+  logs, responses, errors, tests, fixtures, screenshots, or documentation.
+- Report missing or invalid environment variable names without printing their
+  values.
+- Redact before logging, persistence, or response mapping.
+- Use fixed executables, argument arrays, allowlists, bounded output, and
+  timeouts for any approved local execution.
+- Fail closed at server trust boundaries.
 
 ## Git Safety
 
@@ -75,24 +131,47 @@ Route Handlers under `app/api` are the backend-owned exception inside the App Ro
 - Never use destructive reset or checkout commands without explicit approval.
 - Never force-push or rewrite published history.
 - Never stage unrelated changes.
-- Never stage or commit unless explicitly requested.
+- Never stage, commit, merge, rebase, push, or switch branches unless the user
+  explicitly requests the specific operation.
 - Keep changes within the current task and worktree ownership.
+
+## Validation Requirements
+
+Run the strongest relevant repository commands and report exact results:
+
+- Focused tests and affected regression tests.
+- `npm run lint`.
+- `npm run typecheck`.
+- `npm run build`.
+- `npm run db:check` for Drizzle configuration changes.
+- Manual endpoint verification when server behavior changes and it is safe.
+- Secret-exposure review.
+- `git diff --check`.
+
+Keep tests deterministic and inject fakes instead of requiring production
+services. Never weaken tests, types, lint, or security controls to obtain a
+pass. Missing or skipped checks are unverified, not passing.
 
 ## Documentation Discipline
 
-- Treat the shared audit and canonical documents as authoritative.
-- Never create worktree-local copies of the shared audit or canonical documents.
-- Update canonical documents only from `/Users/suniltulsiani/Desktop/devcrew-docs` on its documentation branch.
-- Record and approve material architecture changes before implementing them.
-- When implementation and documentation differ, report the discrepancy and resolve it through the owning worktree rather than inventing a local rule.
+- Treat the audit as research input and the files under
+  `/Users/suniltulsiani/Desktop/devcrew-docs/` as canonical platform authority.
+- Never create worktree-local copies of canonical documents.
+- Update canonical documents only in the documentation worktree on its owning
+  branch.
+- Record material architecture, contract, persistence, security, or deployment
+  changes before implementing dependent behavior.
+- When implementation and documentation differ, report the discrepancy and
+  resolve it through the owning worktree.
 
 ## Completion Report
 
 Every handoff must state:
 
-- Files changed
-- Checks run
-- Results
-- Remaining risks or follow-up ownership
+- Files changed and their purpose.
+- Checks run, including pass, fail, or not run.
+- Contract, persistence, security, and consumer impact.
+- Remaining risks and follow-up ownership.
 
-Never claim completion, approval, or a passing check without evidence.
+Never claim implementation, approval, review, deployment, or a passing check
+without direct evidence.
