@@ -46,7 +46,7 @@ Every decision should document:
 
 Architecture decisions become part of the canonical documentation and are reviewed before dependent implementation.
 
-The architecture distinguishes verified current state from the intended platform structure. At present, the implementation worktrees contain minimal Next.js scaffolds; the approved MVP choices below are not evidence that the API, in-memory persistence, agent runtime, contracts, or local execution adapter are implemented. Post-MVP replacements require documented architecture decisions before dependent implementation proceeds.
+The architecture distinguishes verified current state from approved near-term structure and future product behavior. The verified Sprint 1 implementation is limited to a browser-only Next.js UI and a separate Hono backend exposing `GET /health` and `GET /health/database`. Database connectivity is verified, but no product schema, authentication, agent runtime, project, ticket, activity, review, or execution persistence exists. Approved technology choices below are constraints for subsequent MVP work, not evidence that those features have been delivered.
 
 ## Architectural Principles
 
@@ -77,22 +77,22 @@ Its `main` branch must not become a substitute implementation branch for large U
 - Loading, empty, success, error, disabled, and partial-data states.
 - Keyboard, focus, semantic, and assistive-technology behavior.
 
-It consumes documented backend contracts. It does not define authorization, persistence, workflow truth, or server business rules.
+It is a browser-only Next.js application. It consumes versioned HTTP JSON contracts exposed by `devcrew-backend`; it never connects directly to Supabase and must never import backend or database modules. It does not define authorization, persistence, workflow truth, lifecycle transitions, validation truth, secrets handling, or API error semantics.
 
 ### `devcrew-backend`
 
-`devcrew-backend` owns the server-side platform:
+`devcrew-backend` is a separate Hono HTTP service and owns the server-side platform:
 
 - Transport contracts and backend routes.
 - Application services and workflow orchestration.
 - Authentication and authorization enforcement.
 - Input validation and stable error behavior.
-- Domain state, persistence boundaries, and migrations when a datastore is selected.
+- Domain state, Drizzle models and migrations, and Supabase PostgreSQL persistence.
 - Work lifecycle, agent lifecycle, activity generation, and review-state integrity.
 - External adapters, background processing, caching, and operational controls when requirements justify them.
 - Structured observability and backend verification.
 
-It provides presentation-neutral capabilities. It does not own pages, layout, visual tokens, or client-only interaction.
+It is the only authority for persistence, lifecycle transitions, authorization, validation, secrets, and API errors. It provides presentation-neutral capabilities and does not own pages, layout, visual tokens, or client-only interaction.
 
 ### `devcrew-review`
 
@@ -120,12 +120,11 @@ Implementation worktrees consume these documents from the `docs/context` branch 
 
 The following choices are frozen for the local-first hackathon vertical slice. They define implementation constraints, not evidence of current implementation.
 
-### Application
+### UI Application
 
 - Next.js App Router.
 - React.
 - TypeScript with strict checking.
-- Node.js runtime.
 - npm.
 
 ### UI
@@ -136,13 +135,15 @@ The following choices are frozen for the local-first hackathon vertical slice. T
 - Restrained CSS transitions.
 - Zustand only when shared client state is genuinely required.
 
-### Server
+### Backend Service
 
-- Next.js Route Handlers under `app/api`.
+- Hono in `devcrew-backend` as a separate HTTP service.
+- TypeScript with strict checking.
 - Zod for validation.
-- Server-Sent Events for one-way activity updates.
-- Structured JSON errors.
-- In-memory stores for the MVP.
+- Versioned HTTP JSON contracts and structured JSON errors.
+- Local port `3001`.
+
+The verified routes are currently limited to `GET /health` and `GET /health/database`. Product routes and product persistence are not implemented. Server-Sent Events are only a possible future one-way update transport; they are not implemented and are not required for this foundation.
 
 ### AI
 
@@ -167,13 +168,18 @@ The following choices are frozen for the local-first hackathon vertical slice. T
 
 ### Persistence
 
-- Deterministic in-memory persistence for the judged MVP.
-- Store interfaces that allow later replacement.
-- Durable storage is deferred.
+- Supabase PostgreSQL, accessible only from `devcrew-backend`.
+- Drizzle ORM for schema definition, inspection, and migrations.
+- Postgres.js as the database driver.
+- Runtime access through `DATABASE_URL` and the Supabase transaction pooler, with Postgres.js configured as `prepare: false`.
+- Drizzle inspection and migrations through `DIRECT_URL` and the Supabase session pooler.
+- Product tables are approved near-term work and do not exist in the verified Sprint 1 foundation.
 
 ### Authentication
 
-- No production authentication system for the hackathon MVP.
+- No authentication system exists in the verified Sprint 1 foundation.
+- Authentication is not required for the current health-and-database foundation.
+- Any authorization added for an approved MVP flow is enforced by `devcrew-backend`, never by the UI alone.
 - OpenAI access remains server-side.
 - Credentials never reach the browser or logs.
 
@@ -191,7 +197,7 @@ The following choices are frozen for the local-first hackathon vertical slice. T
 - Next.js production build.
 - Manual critical-flow verification.
 
-The MVP introduces no additional frameworks, databases, queues, authentication providers, deployment systems, microservices, Redis, Kafka, or Kubernetes. These and other post-MVP choices remain deferred unless the canonical documentation is explicitly updated and approved.
+The UI and backend remain two separately run application services with one backend boundary. The MVP introduces no additional frameworks, databases, queues, authentication providers, deployment systems, microservices, Redis, WebSockets, Kafka, or Kubernetes. These and other post-MVP choices remain deferred unless the canonical documentation is explicitly updated and approved.
 
 ## Logical Platform Boundaries
 
@@ -204,25 +210,19 @@ The intended platform has four logical layers regardless of the eventual packagi
 | Integration and release | `devcrew` | Assembles accepted work, reconciles contract versions, and validates the complete product. |
 | Governance and assurance | `devcrew-docs` and `devcrew-review` | Defines expected behavior and independently verifies conformance. |
 
-The logical boundaries are intended even though the approved in-memory store, local execution adapter, Server-Sent Events transport, and local runtime flow are not yet implemented. Durable persistence, production identity, queueing, and production deployment remain deferred post-MVP choices and require approved documentation before implementation.
+These logical boundaries apply now even though product tables, authentication, agents, projects, tickets, activity, review, execution, the local execution adapter, and any streaming update transport are not implemented. Supabase PostgreSQL is the approved durable datastore. Queueing, production identity, realtime transport, and production deployment remain deferred choices unless separately approved for the MVP.
 
 ## Dependency Direction
 
-Dependencies always flow downward.
+Runtime and governance dependencies are directional:
 
+1. `devcrew-ui` depends only on versioned HTTP contracts from `devcrew-backend`.
+2. `devcrew-backend` depends on Drizzle, Postgres.js, and Supabase PostgreSQL; it does not depend on UI modules.
+3. `devcrew` integrates reviewed UI and backend deliverables without collapsing their HTTP boundary.
+4. Implementation worktrees depend on the canonical requirements in `devcrew-docs`.
+5. `devcrew-review` remains independent and depends only on approved documentation and implementation evidence.
 
-devcrew
-↓
-devcrew-ui
-↓
-devcrew-backend
-↓
-devcrew-docs
-
-
-Review remains independent and depends only on approved documentation and implementation evidence.
-
-Worktrees must never introduce circular ownership or undocumented cross-dependencies.
+Worktrees must never introduce circular ownership, UI-to-database access, shared runtime module imports across the UI/backend boundary, or undocumented cross-dependencies.
 
 ## Information Flow
 
@@ -232,11 +232,11 @@ Worktrees must never introduce circular ownership or undocumented cross-dependen
 2. A user action produces a request against a documented backend contract.
 3. The backend validates the request and applies server-side project and execution boundaries. Production authentication is deferred for the hackathon MVP.
 4. The relevant application service applies domain and lifecycle rules.
-5. The backend records the state change and an attributable activity event in the deterministic in-memory store.
+5. Once the relevant product schema exists, the backend records state changes and attributable activity in Supabase PostgreSQL through Drizzle and Postgres.js.
 6. The backend returns a stable result or actionable error without exposing internal or secret data.
 7. The UI updates the visible state from authoritative contract data and communicates progress or failure accessibly.
 
-Long-running execution must preserve the initiating project, user, work item, and agent identifiers across queued, active, stopped, completed, failed, and reviewed states. Server-Sent Events provide one-way activity updates for the MVP and must preserve ordering, recovery behavior, and server-side boundaries.
+Long-running execution, when implemented, must preserve the initiating project, user, work item, and agent identifiers across queued, active, stopped, completed, failed, and reviewed states. Ordinary versioned HTTP JSON is sufficient for the current foundation. Server-Sent Events may be evaluated later for one-way activity updates, but are not implemented or required now; adopting them requires explicit ordering, recovery, and authorization behavior.
 
 
 ## Trust Boundaries
@@ -249,7 +249,9 @@ Only the backend may:
 - validate requests
 - enforce lifecycle rules
 - persist state
-- expose protected information
+- access Supabase and other protected services
+- manage secrets and expose only permitted metadata
+- define and return API errors
 
 The review worktree never modifies production behaviour.
 
@@ -305,7 +307,8 @@ Centralization does not move implementation-specific operating instructions into
 - Breaking changes require an explicit migration path and coordinated updates across owners.
 - Contract verification must exist on both producer and consumer sides before release.
 - Architecture changes must state the requirement, alternatives considered, operational effect, security effect, migration, and rollback.
-- Replacing the approved in-memory store, local execution adapter, Server-Sent Events transport, or local judged environment requires an approved documentation update and architecture decision.
+- Changing the approved Hono service boundary, Supabase PostgreSQL datastore, Drizzle/Postgres.js access pattern, local execution adapter, or local judged environment requires an approved documentation update and architecture decision.
+- Adopting Server-Sent Events or another realtime transport requires an approved contract update; no realtime transport is required for the current foundation.
 - `tasks.md` tracks delivery work; durable decisions belong in the canonical documentation rather than issue comments or worktree-local copies.
 
 ## Quality Boundaries

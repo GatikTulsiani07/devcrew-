@@ -2,7 +2,18 @@
 
 ## Purpose
 
-This plan sequences delivery of the Devcrew MVP across the workspace. It defines milestones and exit gates, not implementation details or proof of completion. Current implementation worktrees are minimal scaffolds; no milestone in this plan is considered complete without the stated evidence and an updated backlog.
+This plan sequences delivery of the Devcrew MVP across the workspace. It defines milestones and exit gates, not proof of completion. No milestone is considered complete without the stated evidence and an updated backlog.
+
+## Verified Sprint 1 Baseline
+
+The verified implementation currently includes:
+
+- `devcrew-ui`: a browser-only Next.js App Router application using React, TypeScript, and Tailwind CSS.
+- `devcrew-backend`: a separate Hono and TypeScript HTTP service using Zod, Drizzle ORM, and Postgres.js, running on port `3001` locally.
+- Backend health contracts: `GET /health` and `GET /health/database`.
+- Backend-only Supabase PostgreSQL connectivity: runtime `DATABASE_URL` uses the transaction pooler with `prepare: false`; Drizzle inspection and migrations use `DIRECT_URL` with the session pooler.
+
+There is no product schema, authentication, or persistence for projects, agents, tickets, activity, reviews, or execution. Those capabilities remain planned work and must not be inferred from database health connectivity.
 
 ## Hackathon Delivery Override
 
@@ -17,7 +28,7 @@ The OpenAI Build Week implementation window compresses the larger plan into one 
 7. The Reviewer issues a verdict.
 8. Activity and the final result remain visible.
 
-The hackathon MVP does not require production authentication, a durable database, GitHub OAuth, private repository support, an external connector ecosystem, autonomous merge, production deployment, or full enterprise hardening. The local environment is the authoritative judged environment, and deterministic local behavior takes priority over incomplete production infrastructure.
+The hackathon MVP does not require production authentication, GitHub OAuth, private repository support, an external connector ecosystem, autonomous merge, production deployment, or full enterprise hardening. Supabase PostgreSQL is the approved datastore, but only the database connection is currently verified; product tables and workflows remain to be implemented. The local environment is the authoritative judged environment, and a reliable vertical slice takes priority over additional infrastructure.
 
 This override proves the intended architecture through a real end-to-end workflow; it does not delete, weaken, or complete the production-grade milestones below. The full plan remains the long-term execution model after the judged prototype.
 
@@ -42,7 +53,7 @@ Stable iteration is preferred over rapid expansion.
 - Keep worktree and branch ownership explicit and integrate only reviewed work.
 - Validate security, accessibility, failure behavior, and observability throughout delivery.
 - Use `tasks.md` as the operational backlog and this document as the milestone sequence.
-- Record architecture choices before introducing identity, persistence, execution, update transport, or deployment infrastructure.
+- Record architecture choices before introducing identity, product schemas, execution, update transport, or deployment infrastructure beyond the approved Hono, Drizzle, Postgres.js, and Supabase foundation.
 
 ## Engineering Rules
 
@@ -93,7 +104,7 @@ Scope:
 - Ratify canonical documentation and worktree ownership.
 - Inventory scaffold code, existing scripts, and framework constraints.
 - Define lifecycle vocabularies for agents, tickets, execution, and reviews.
-- Record the approved hackathon identity boundary, in-memory persistence, local agent execution, Server-Sent Events transport, and local deployment model, plus the decisions deferred until post-MVP.
+- Record the approved browser-only UI, separate Hono service, backend authority, Supabase PostgreSQL, Drizzle/Postgres.js connection model, local agent execution, and local deployment model, plus the decisions deferred until post-MVP.
 - Define versioned backend contracts and an integration strategy.
 
 Exit gate:
@@ -107,7 +118,9 @@ Exit gate:
 Scope:
 
 - Establish the accessible application shell, persistent navigation, project context, approved dark theme, and shared component foundations.
-- Implement server-side identity, project isolation, configuration validation, error conventions, persistence boundaries, and observability foundations.
+- Extend the verified Hono health foundation with versioned HTTP JSON contracts, configuration validation, structured error conventions, Drizzle migration discipline, and observability foundations.
+- Define and implement the minimum approved product schema before any project-owned workflow persists data.
+- Implement server-side project isolation and any authentication or authorization behavior approved for the hackathon flow; none exists in the verified baseline.
 - Deliver project creation, selection, viewing, and settings behavior as the first integrated slice.
 
 Exit gate:
@@ -202,6 +215,7 @@ After knowledge and review are connected, the product is exercised from project 
 - Static analysis, type safety, configuration validation, and production builds.
 - Unit tests for lifecycle rules, authorization, validation, and error mapping.
 - Component checks for semantic behavior, keyboard use, and state variants.
+- Backend checks for both health endpoints, the `DATABASE_URL` runtime path, and the `DIRECT_URL` Drizzle inspection and migration path.
 
 ### Contract and Integration Testing
 

@@ -2,9 +2,17 @@
 
 ## Backlog Policy
 
-This is the canonical living backlog for the Devcrew platform. All entries reflect work for which completion evidence was not present when this backlog was established. A task may move to `In progress`, `Blocked`, or `Done` only with an accountable owner and verifiable evidence. `Done` requires every acceptance criterion and applicable quality gate to pass.
+This is the canonical living backlog for the Devcrew platform. Entries describe incomplete deliverables even where the verified baseline already satisfies part of a task. A task may move to `In progress`, `Blocked`, or `Done` only with an accountable owner and verifiable evidence. `Done` requires every acceptance criterion and applicable quality gate to pass.
 
 Priorities are `P0` for release-blocking foundation or risk, `P1` for required MVP capability, and `P2` for important hardening or post-foundation improvement. Dependencies use task identifiers; `None` means the task can begin from the current documented baseline.
+
+## Verified Current Implementation
+
+- `devcrew-ui` is a browser-only Next.js App Router, React, TypeScript, and Tailwind CSS application.
+- `devcrew-backend` is a separate Hono, TypeScript, and Zod HTTP service on local port `3001`.
+- The backend uses Drizzle ORM and Postgres.js with Supabase PostgreSQL. Runtime `DATABASE_URL` uses the transaction pooler with `prepare: false`; Drizzle inspection and migrations use `DIRECT_URL` with the session pooler.
+- Only `GET /health` and `GET /health/database` are implemented backend contracts.
+- No product schema, authentication, projects, agents, tickets, activity, reviews, execution, or associated persistence is implemented.
 
 ## Hackathon Execution Boundary
 
@@ -19,7 +27,7 @@ The hackathon implementation scope is one local-first, deterministic vertical sl
 7. The Reviewer issues a verdict.
 8. Activity and the final result remain visible.
 
-Only tasks explicitly tagged or identified as `Hackathon P0` may enter implementation during the event. Production hardening tasks remain in this canonical backlog but must not block the judged prototype. Projects, Ideas, Tickets, PRDs, Docs, Settings, and model configuration may use deterministic demo data where full persistence is outside the hackathon scope; the core workflow itself must be real, connected, and demonstrable.
+Only tasks explicitly tagged or identified as `Hackathon P0` may enter implementation during the event. Production hardening tasks remain in this canonical backlog but must not block the judged prototype. Local UI fixture data may support unfinished presentation surfaces, but it must be labeled as fixture data and must never become authoritative product state. Any real project, agent, ticket, activity, review, or execution state is owned by the backend and persisted through the approved Supabase PostgreSQL boundary once its product schema exists. The core workflow itself must be real, connected, and demonstrable.
 
 
 ## Task Status Lifecycle
@@ -156,36 +164,39 @@ Release Candidate
 
 ## Backend
 
-### BACK-01 — Approve backend foundation decisions
+### BACK-01 — Verify and document the backend foundation
 
 - Priority: P0
-- Description: Document the frozen hackathon identity boundary, project isolation, in-memory persistence, local execution, Server-Sent Events transport, and local deployment model, together with deferred post-MVP decisions.
+- Description: Verify and document the approved separate Hono service, backend authority, Supabase PostgreSQL persistence boundary, Drizzle/Postgres.js connection model, local execution boundary, and deferred decisions without treating health connectivity as completed product persistence.
 - Dependencies: DOC-01
 - Status: Not started
 - Acceptance criteria:
-  - Each decision states requirements, alternatives, security and operational effects, migration, and rollback.
-  - UI, main, and review owners approve the resulting contract implications.
-  - Frozen hackathon choices are distinguished from unimplemented capabilities and deferred production technology.
+  - The local Hono service runs on port `3001`, and `GET /health` and `GET /health/database` have focused verification.
+  - Runtime access uses `DATABASE_URL` through the Supabase transaction pooler with Postgres.js `prepare: false`; Drizzle inspection and migrations use `DIRECT_URL` through the session pooler.
+  - The UI, main, and review owners approve the HTTP contract and authority implications.
+  - Verified connection behavior, unimplemented product schemas and authentication, and deferred transport or infrastructure choices are explicitly distinguished.
 
 ### BACK-02 — Define platform contracts and lifecycle rules
 
 - Priority: P0
-- Description: Define versioned transport behavior, stable errors, and valid states and transitions for projects, agents, work, tickets, activity, knowledge, and reviews.
+- Description: Define versioned HTTP JSON behavior, stable backend-owned errors, and valid states and transitions for projects, agents, work, tickets, activity, knowledge, and reviews.
 - Dependencies: BACK-01
 - Status: Not started
 - Acceptance criteria:
   - Inputs, outputs, authorization expectations, errors, pagination, and lifecycle effects are documented.
   - Invalid transitions and retry behavior are explicit and testable.
   - Producer verification and UI-consumable contract artifacts use one authoritative definition.
+  - Contracts do not require the UI to import backend or database modules or connect directly to Supabase.
 
 ### BACK-03 — Implement identity and project isolation
 
 - Priority: P0
-- Description: Establish server configuration, authentication, authorization, project boundaries, validation, persistence access, error handling, and baseline observability.
+- Description: Extend the verified Hono and database-health foundation with the minimum approved Drizzle product schema, server configuration, project boundaries, validation, persistence access, error handling, and baseline observability. Add authentication and authorization only to the extent approved for the MVP flow; neither exists in the current implementation.
 - Dependencies: BACK-02, INFRA-01
 - Status: Not started
 - Acceptance criteria:
-  - Project operations enforce server-side identity and ownership.
+  - Product migrations run through `DIRECT_URL`, while runtime product access uses `DATABASE_URL` with `prepare: false`.
+  - Project operations, once implemented, enforce backend-owned identity and ownership rules defined by the approved contract.
   - Cross-project access, malformed input, and missing configuration fail safely with stable errors.
   - Tests cover authorized, unauthorized, absent, and conflicting project operations.
 
@@ -245,6 +256,7 @@ Release Candidate
   - Navigation preserves project and section context across supported viewport sizes.
   - The project flow handles loading, empty, error, unsaved, unauthorized, and success states.
   - Keyboard navigation, focus management, landmarks, headings, and announcements pass manual review.
+  - All product data comes through versioned backend HTTP JSON contracts; the UI imports no backend or database modules and never connects directly to Supabase.
 
 ### UI-03 — Build agents and activity experiences
 
@@ -387,11 +399,12 @@ Release Candidate
 ### INFRA-02 — Provide an integration test environment
 
 - Priority: P0
-- Description: Provision a controlled environment for UI and backend contract integration using the approved architecture and safe configuration handling.
+- Description: Provision a controlled environment for the browser UI and separate Hono backend contract integration using the approved Supabase connection model and safe configuration handling.
 - Dependencies: BACK-01, INFRA-01
 - Status: Not started
 - Acceptance criteria:
   - The environment uses documented, validated configuration and contains no committed secrets.
+  - UI and backend remain separated by HTTP, and only the backend receives `DATABASE_URL` or `DIRECT_URL`.
   - Health, logs, test-data isolation, and repeatable deployment are available to review and integration work.
   - The environment represents production boundaries closely enough for milestone verification.
 

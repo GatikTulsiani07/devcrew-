@@ -4,7 +4,7 @@
 
 This specification defines the Devcrew platform across the `devcrew`, `devcrew-ui`, `devcrew-backend`, `devcrew-review`, and `devcrew-docs` worktrees in one shared Git repository. It is maintained only in the `devcrew-docs` documentation worktree. Worktree operating manuals may link to it but must not copy or redefine it.
 
-The implementation worktrees are currently minimal Next.js application scaffolds. The capabilities below define the intended product and its required behavior; they do not imply that those capabilities are already implemented.
+The implementation is intentionally smaller than the product described below. The verified Sprint 1 foundation consists of a browser-only Next.js UI and a separate Hono backend with `GET /health` and `GET /health/database`. No product schema, authentication, or persistence for projects, agents, tickets, activity, reviews, or execution exists yet. Unless a capability is named in that verified foundation, this specification describes approved MVP intent rather than completed behavior.
 
 ## Product Vision
 
@@ -43,18 +43,19 @@ The MVP intentionally excludes generalized collaboration software, source contro
 
 ## MVP Technical Constraints
 
-The hackathon MVP is a local-first, deterministic vertical slice executed from a prepared local checkout. Its implementation choices are frozen as follows:
+The hackathon MVP is a focused vertical slice executed from a prepared local checkout. Its implementation choices are frozen as follows:
 
-- Application: Next.js App Router, React, strict TypeScript, the Node.js runtime, and npm.
-- UI: Tailwind CSS, shadcn/ui where useful, Lucide React, restrained CSS transitions, and Zustand only when shared client state is genuinely required.
-- Server: Next.js Route Handlers under `app/api`, Zod validation, Server-Sent Events for one-way activity updates, structured JSON errors, and in-memory stores.
+- UI application: `devcrew-ui` uses Next.js App Router, React, strict TypeScript, Tailwind CSS, and npm. It is a browser UI and consumes only versioned HTTP JSON contracts. It must never connect directly to Supabase or import backend or database modules.
+- Backend service: `devcrew-backend` is a separate Hono HTTP service using TypeScript and Zod. It runs on port `3001` locally and is the only authority for persistence, lifecycle transitions, authorization, validation, secrets, and API errors.
+- Persistence: the backend uses Drizzle ORM and Postgres.js with Supabase PostgreSQL. Runtime access uses `DATABASE_URL` through the Supabase transaction pooler and configures Postgres.js with `prepare: false`. Drizzle inspection and migrations use `DIRECT_URL` through the Supabase session pooler.
+- Contracts: the UI and backend communicate through versioned HTTP JSON requests, responses, and structured errors. Contract changes are coordinated across producer and consumer; the UI must not recreate backend rules as authoritative client logic.
 - AI: the official OpenAI JavaScript/TypeScript SDK, the OpenAI Responses API, structured outputs, and the fixed Manager, Full Stack Developer, DevOps Engineer, and Reviewer roles.
 - Local execution: Codex CLI behind a controlled server-side adapter, server-only Node `child_process`, Git CLI operations that remain worktree-safe, command allowlists, timeouts, and redaction. Browser-side shell execution is prohibited.
 - GitHub: connect a public repository URL first and use a prepared local repository for judged execution. GitHub OAuth, private repositories, GitHub App installation, pull-request creation, and webhooks are deferred.
-- Persistence and access: use deterministic in-memory persistence behind replaceable store interfaces. Durable storage and production authentication are deferred; OpenAI access remains server-side and credentials must never reach the browser or logs.
+- Access: authentication is not implemented and is not required for the current foundation. When authorization is introduced for an approved MVP flow, it is enforced only by the backend. OpenAI and database access remain server-side, and credentials must never reach the browser or logs.
 - Presentation and validation: deliver the approved dark-mode-only interface and validate with ESLint, TypeScript, focused tests, a Next.js production build, and manual critical-flow verification.
 
-The local environment is the authoritative judged environment. A Vercel presentation deployment is optional and must not claim local shell or Git execution. The MVP uses no microservices, Redis, Kafka, Kubernetes, complex infrastructure, autonomous merge, or production deployment. Any change to these constraints requires an approved update to the canonical documentation before implementation.
+The local environment is the authoritative judged environment. A presentation deployment is optional and must not claim local shell or Git execution. The separate UI and backend are the only approved application services; the MVP adds no Redis, queues, WebSockets, Kafka, Kubernetes, additional microservices, complex infrastructure, autonomous merge, or production deployment. Server-Sent Events may be evaluated later as a one-way update transport, but they are not implemented and are not required for the current foundation. Any change to these constraints requires an approved update to the canonical documentation before implementation.
 
 ## Goals
 
@@ -189,7 +190,7 @@ Settings organize project and agent configuration. Skills are reusable operating
 
 ### Security and Privacy
 
-- Enforce project, agent, work, document, review, memory, and secret boundaries on the server. Production request authentication is a post-MVP requirement.
+- Enforce project, agent, work, document, review, memory, and secret boundaries in the backend. Authentication is not implemented in the current foundation; any approved authorization behavior must remain backend-owned.
 - Validate all untrusted input and fail closed for authorization and secret access.
 - Keep sensitive configuration out of source control and client bundles.
 - Record security-relevant actions without collecting credentials or unnecessary personal data.
@@ -238,8 +239,8 @@ Settings organize project and agent configuration. Skills are reusable operating
 | Worktree | Branch | Platform responsibility |
 | --- | --- | --- |
 | `devcrew` | `main` | Main integration point, cross-layer reconciliation, final product assembly, release validation, and release readiness. |
-| `devcrew-ui` | `feat/ui-shell` | Pages, components, layout, navigation, dark-theme presentation, responsive behavior, accessibility, and client interactions. It consumes backend contracts and does not own server business rules. |
-| `devcrew-backend` | `feat/orchestrator` | Server routes, services, orchestration, data models, persistence boundaries, validation, authorization, integrations, and operational behavior. It does not own presentation. |
+| `devcrew-ui` | `feat/ui-shell` | Browser-only Next.js pages, components, layout, navigation, dark-theme presentation, responsive behavior, accessibility, and client interactions. It consumes versioned HTTP JSON contracts, never connects to Supabase, and never imports backend or database modules. |
+| `devcrew-backend` | `feat/orchestrator` | Separate Hono HTTP service, contracts, services, orchestration, Drizzle models and migrations, Supabase PostgreSQL access, validation, authorization, secrets, API errors, integrations, and operational behavior. It is authoritative for server-owned behavior and does not own presentation. |
 | `devcrew-review` | `review/integration` | Independent code, architecture, UX, accessibility, security, performance, and release review. It produces findings and merge-readiness decisions rather than product features. |
 | `devcrew-docs` | `docs/context` | Canonical documentation worktree and sole source of truth for platform specification, architecture, design language, execution plan, and backlog. |
 
