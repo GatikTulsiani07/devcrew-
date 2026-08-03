@@ -11,6 +11,17 @@ export const createTaskRequestSchema = z.object({
   description: z.string().trim().min(1).max(4_000),
 });
 
+export const planDecisionRequestSchema = z.discriminatedUnion("decision", [
+  z.object({
+    decision: z.literal("APPROVE"),
+    reason: z.string().trim().max(1_000).optional(),
+  }),
+  z.object({
+    decision: z.literal("REJECT"),
+    reason: z.string().trim().min(1).max(1_000),
+  }),
+]);
+
 export const createTaskPathParamsSchema = z.object({
   projectId: projectIdSchema,
 });
@@ -20,4 +31,7 @@ export const getTaskPathParamsSchema = z.object({
   taskId: taskIdSchema,
 });
 
+export const planDecisionPathParamsSchema = getTaskPathParamsSchema;
+
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
+export type PlanDecisionRequest = z.infer<typeof planDecisionRequestSchema>;

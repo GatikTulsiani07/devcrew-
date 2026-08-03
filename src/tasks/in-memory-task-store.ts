@@ -8,6 +8,11 @@ export class InMemoryTaskStore implements TaskStore {
     return task;
   }
 
+  async update(task: TaskSnapshot): Promise<TaskSnapshot> {
+    this.#tasksByProjectAndId.set(taskKey(task.projectId, task.id), task);
+    return task;
+  }
+
   async findByProjectAndId(
     projectId: string,
     taskId: string,

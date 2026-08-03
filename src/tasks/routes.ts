@@ -5,6 +5,8 @@ import {
   createTaskPathParamsSchema,
   createTaskRequestSchema,
   getTaskPathParamsSchema,
+  planDecisionPathParamsSchema,
+  planDecisionRequestSchema,
 } from "./contracts.js";
 import type { TaskService } from "./task-service.js";
 
@@ -45,6 +47,26 @@ export function createTaskRoutes(taskService: TaskService): Hono<TaskRoutesEnv> 
     const task = await taskService.getTask(
       params.data.projectId,
       params.data.taskId,
+    );
+    return c.json({ task });
+  });
+
+  routes.post("/:projectId/tasks/:taskId/plan-decision", async (c) => {
+    const params = planDecisionPathParamsSchema.safeParse({
+      projectId: c.req.param("projectId"),
+      taskId: c.req.param("taskId"),
+    });
+    const body = await readJsonBody(c.req.json.bind(c.req));
+    const request = planDecisionRequestSchema.safeParse(body);
+
+    if (!params.success || !request.success) {
+      throw validationError();
+    }
+
+    const task = await taskService.decidePlan(
+      params.data.projectId,
+      params.data.taskId,
+      request.data,
     );
     return c.json({ task });
   });

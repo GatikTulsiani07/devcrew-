@@ -31,6 +31,11 @@ function fixedRequestId(): string {
   return "req_task_test";
 }
 
+interface TestAppOptions {
+  planner?: TaskPlanner;
+  dates?: readonly string[];
+}
+
 function createDeterministicProjectService(): ProjectService {
   let projectCount = 0;
   let repositoryCount = 0;
@@ -50,9 +55,13 @@ function createDeterministicProjectService(): ProjectService {
   });
 }
 
-function createTestApp(planner: TaskPlanner = createDeterministicPlanner()) {
+function createTestApp({
+  planner = createDeterministicPlanner(),
+  dates = ["2026-08-03T01:00:00.000Z"],
+}: TestAppOptions = {}) {
   const projectService = createDeterministicProjectService();
   let taskCount = 0;
+  let dateIndex = 0;
 
   return createApp({
     databaseHealth: fakeDatabase(),
@@ -66,7 +75,11 @@ function createTestApp(planner: TaskPlanner = createDeterministicPlanner()) {
         taskCount += 1;
         return `task_${String(taskCount).padStart(6, "0")}`;
       },
-      now: () => new Date("2026-08-03T01:00:00.000Z"),
+      now: () => {
+        const date = dates[Math.min(dateIndex, dates.length - 1)];
+        dateIndex += 1;
+        return new Date(date);
+      },
     }),
   });
 }
@@ -105,6 +118,22 @@ async function createTask(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+async function decidePlan(
+  app: ReturnType<typeof createTestApp>,
+  body: { decision: "APPROVE" | "REJECT"; reason?: string },
+  projectId = "proj_000001",
+  taskId = "task_000001",
+) {
+  return app.request(
+    `/api/v1/projects/${projectId}/tasks/${taskId}/plan-decision`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 describe("task manager planning API", () => {
@@ -350,7 +379,7 @@ describe("task manager planning API", () => {
         throw new Error(sensitiveMessage);
       },
     };
-    const app = createTestApp(planner);
+    const app = createTestApp({ planner });
     assert.equal((await createProject(app)).status, 201);
 
     const response = await createTask(app);
@@ -379,5 +408,355 @@ describe("task manager planning API", () => {
     assert.equal(body.includes("/Users/"), false);
     assert.equal(body.includes("private/tmp"), false);
     assert.equal(body.includes("repositoryPath"), false);
+  });
+
+  it("approves a waiting task successfully", async () => {
+    const app = createTestApp({
+      dates: ["2026-08-03T01:00:00.000Z", "2026-08-03T02:00:00.000Z"],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+
+    const response = await decidePlan(app, {
+      decision: "APPROVE",
+      reason: "The plan is clear and ready.",
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("X-Request-Id"), "req_task_test");
+    assert.deepEqual(await response.json(), {
+      task: {
+        id: "task_000001",
+        projectId: "proj_000001",
+        title: "Implement authentication middleware",
+        description: "Protect every API route with JWT middleware.",
+        status: "PLAN_APPROVED",
+        plan: {
+          summary: "Implement requested engineering task.",
+          steps: [
+            "Inspect relevant source files",
+            "Modify implementation",
+            "Add or update tests",
+            "Validate build",
+            "Prepare for review",
+          ],
+        },
+        planDecision: {
+          decision: "APPROVE",
+          reason: "The plan is clear and ready.",
+          decidedAt: "2026-08-03T02:00:00.000Z",
+        },
+        createdAt: "2026-08-03T01:00:00.000Z",
+        updatedAt: "2026-08-03T02:00:00.000Z",
+      },
+    });
+  });
+
+  it("rejects a waiting task successfully", async () => {
+    const app = createTestApp({
+      dates: ["2026-08-03T01:00:00.000Z", "2026-08-03T02:00:00.000Z"],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+
+    const response = await decidePlan(app, {
+      decision: "REJECT",
+      reason: "Add validation and rollback steps.",
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.task.status, "PLAN_REJECTED");
+    assert.deepEqual(body.task.planDecision, {
+      decision: "REJECT",
+      reason: "Add validation and rollback steps.",
+      decidedAt: "2026-08-03T02:00:00.000Z",
+    });
+  });
+
+  it("requires a reason when rejecting a plan", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+
+    const response = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001/plan-decision",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: "REJECT" }),
+      },
+    );
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+
+  it("trims optional approval reasons", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+
+    const response = await decidePlan(app, {
+      decision: "APPROVE",
+      reason: "  Ready for implementation.  ",
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(
+      (await response.json()).task.planDecision.reason,
+      "Ready for implementation.",
+    );
+  });
+
+  it("allows approval without a reason", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+
+    const response = await decidePlan(app, { decision: "APPROVE" });
+
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).task.planDecision.reason, undefined);
+  });
+
+  it("keeps plan content unchanged after approval", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    const before = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+
+    const after = await decidePlan(app, { decision: "APPROVE" });
+
+    assert.equal(after.status, 200);
+    assert.deepEqual((await after.json()).task.plan, (await before.json()).task.plan);
+  });
+
+  it("returns project not found for plan decisions in an unknown project", async () => {
+    const app = createTestApp();
+
+    const response = await decidePlan(
+      app,
+      { decision: "APPROVE" },
+      "proj_missing",
+      "task_000001",
+    );
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error.code, "PROJECT_NOT_FOUND");
+  });
+
+  it("returns task not found for plan decisions on an unknown task", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+
+    const response = await decidePlan(
+      app,
+      { decision: "APPROVE" },
+      "proj_000001",
+      "task_missing",
+    );
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error.code, "TASK_NOT_FOUND");
+  });
+
+  it("rejects cross-project plan decisions", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal(
+      (
+        await createProject(app, {
+          name: "Other",
+          publicRepositoryUrl: "https://github.com/example/other",
+          preparedRepositoryId: "prepared_other",
+        })
+      ).status,
+      201,
+    );
+    assert.equal((await createTask(app, "proj_000001")).status, 201);
+
+    const response = await decidePlan(
+      app,
+      { decision: "APPROVE" },
+      "proj_000002",
+      "task_000001",
+    );
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error.code, "TASK_NOT_FOUND");
+  });
+
+  it("rejects approving a task twice", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const response = await decidePlan(app, { decision: "APPROVE" });
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("rejects rejecting a task twice", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal(
+      (await decidePlan(app, {
+        decision: "REJECT",
+        reason: "Needs more detail.",
+      })).status,
+      200,
+    );
+
+    const response = await decidePlan(app, {
+      decision: "REJECT",
+      reason: "Still needs more detail.",
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("rejects approving after rejection", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal(
+      (await decidePlan(app, {
+        decision: "REJECT",
+        reason: "Needs more detail.",
+      })).status,
+      200,
+    );
+
+    const response = await decidePlan(app, { decision: "APPROVE" });
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("rejects rejecting after approval", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const response = await decidePlan(app, {
+      decision: "REJECT",
+      reason: "Needs more detail.",
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("rejects malformed plan decision bodies", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+
+    const response = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001/plan-decision",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{",
+      },
+    );
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      requestId: "req_task_test",
+      status: "error",
+      error: {
+        code: "VALIDATION_FAILED",
+        message: "Request validation failed",
+      },
+    });
+  });
+
+  it("includes request ids on plan decision errors", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const response = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001/plan-decision",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-Id": "req_plan_decision_error",
+        },
+        body: JSON.stringify({ decision: "APPROVE" }),
+      },
+    );
+
+    assert.equal(response.status, 409);
+    assert.equal(response.headers.get("X-Request-Id"), "req_plan_decision_error");
+    assert.equal((await response.json()).requestId, "req_plan_decision_error");
+  });
+
+  it("sanitizes unexpected plan decision failures", async () => {
+    const sensitiveMessage = "SENSITIVE_TASK_UPDATE_DETAIL";
+    const projectService = createDeterministicProjectService();
+    let taskCount = 0;
+    const taskStore = new InMemoryTaskStore();
+    const taskService = createTaskService({
+      projectService,
+      planner: createDeterministicPlanner(),
+      store: {
+        create: taskStore.create.bind(taskStore),
+        findByProjectAndId: taskStore.findByProjectAndId.bind(taskStore),
+        async update() {
+          throw new Error(sensitiveMessage);
+        },
+      },
+      generateTaskId: () => {
+        taskCount += 1;
+        return `task_${String(taskCount).padStart(6, "0")}`;
+      },
+      now: () => new Date("2026-08-03T01:00:00.000Z"),
+    });
+    const app = createApp({
+      databaseHealth: fakeDatabase(),
+      generateRequestId: fixedRequestId,
+      projectService,
+      taskService,
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+
+    const response = await decidePlan(app, { decision: "APPROVE" });
+    const body = await response.text();
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(JSON.parse(body), {
+      requestId: "req_task_test",
+      status: "error",
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "An unexpected error occurred",
+      },
+    });
+    assert.equal(body.includes(sensitiveMessage), false);
   });
 });

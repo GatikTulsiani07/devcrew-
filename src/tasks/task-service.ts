@@ -4,6 +4,7 @@ import { ApplicationError } from "../errors.js";
 import type { ProjectService } from "../projects/project-service.js";
 import type {
   CreateTaskInput,
+  PlanDecisionInput,
   TaskPlanner,
   TaskSnapshot,
   TaskStore,
@@ -26,6 +27,11 @@ export interface TaskService {
     input: CreateTaskInput,
   ): Promise<TaskSnapshot>;
   getTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
+  decidePlan(
+    projectId: string,
+    taskId: string,
+    input: PlanDecisionInput,
+  ): Promise<TaskSnapshot>;
 }
 
 export function createTaskService({
@@ -66,6 +72,39 @@ export function createTaskService({
 
       return copyTask(task);
     },
+
+    async decidePlan(projectId, taskId, input) {
+      await projectService.getProject(projectId);
+
+      const task = await store.findByProjectAndId(projectId, taskId);
+
+      if (task === undefined) {
+        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
+      }
+
+      if (task.status !== "WAITING_FOR_APPROVAL") {
+        throw new ApplicationError(
+          "INVALID_TASK_TRANSITION",
+          409,
+          "Task plan has already been decided",
+        );
+      }
+
+      const timestamp = now().toISOString();
+      const updatedTask: TaskSnapshot = {
+        ...copyTask(task),
+        status:
+          input.decision === "APPROVE" ? "PLAN_APPROVED" : "PLAN_REJECTED",
+        planDecision: {
+          decision: input.decision,
+          ...(input.reason === undefined ? {} : { reason: input.reason }),
+          decidedAt: timestamp,
+        },
+        updatedAt: timestamp,
+      };
+
+      return copyTask(await store.update(updatedTask));
+    },
   };
 }
 
@@ -80,6 +119,17 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
       summary: task.plan.summary,
       steps: [...task.plan.steps],
     },
+    ...(task.planDecision === undefined
+      ? {}
+      : {
+          planDecision: {
+            decision: task.planDecision.decision,
+            ...(task.planDecision.reason === undefined
+              ? {}
+              : { reason: task.planDecision.reason }),
+            decidedAt: task.planDecision.decidedAt,
+          },
+        }),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
