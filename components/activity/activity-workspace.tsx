@@ -1,306 +1,133 @@
 "use client";
 
 import { useMemo, useState, type FormEvent } from "react";
-import Link from "next/link";
-import {
-  AlertCircle,
-  ArrowRight,
-  Check,
-  CircleDashed,
-  Clock3,
-  ListTodo,
-  Radio,
-  Send,
-  Sparkles,
-} from "lucide-react";
-import {
-  agents,
-  queuedWork,
-  timelineEvents,
-  type Agent,
-  type TimelineEvent,
-} from "@/lib/mock-data";
-import { WorkshopRail } from "@/components/shell/workshop-rail";
+import { AlertCircle, Check, Clock3, Radio, Send, Sparkles } from "lucide-react";
+import { agents, queuedWork, timelineEvents, type Agent, type TimelineEvent } from "@/lib/mock-data";
 import { AgentAvatar } from "@/components/ui/agent-avatar";
-import { PageHeader } from "@/components/ui/page-header";
-import { Panel } from "@/components/ui/panel";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { WorkshopRail } from "@/components/shell/workshop-rail";
+import { useWorkspaceState } from "@/components/shell/workspace-state";
 
-const eventStyles: Record<
-  TimelineEvent["kind"],
-  { dot: string; icon: typeof Check }
-> = {
-  progress: { dot: "border-accent/30 bg-accent-soft text-accent", icon: Sparkles },
-  success: { dot: "border-success/30 bg-success-soft text-success", icon: Check },
-  warning: { dot: "border-warning/30 bg-warning-soft text-warning", icon: AlertCircle },
-  error: { dot: "border-error/30 bg-error-soft text-error", icon: AlertCircle },
-  queued: { dot: "border-border-strong bg-panel-strong text-ink-muted", icon: Clock3 },
+const eventStyles: Record<TimelineEvent["kind"], { className: string; icon: typeof Check }> = {
+  progress: { className: "border-accent/30 bg-accent-soft text-accent", icon: Sparkles },
+  success: { className: "border-success/30 bg-success-soft text-success", icon: Check },
+  warning: { className: "border-warning/30 bg-warning-soft text-warning", icon: AlertCircle },
+  error: { className: "border-error/30 bg-error-soft text-error", icon: AlertCircle },
+  queued: { className: "border-border-strong bg-panel text-ink-muted", icon: Clock3 },
 };
 
-function AgentList({
-  selectedId,
-  onSelect,
-}: {
-  selectedId: Agent["id"];
-  onSelect: (id: Agent["id"]) => void;
-}) {
+function visibleStatus(agent: Agent, online: boolean) {
+  return online ? { status: agent.status, label: agent.statusLabel } : { status: "idle" as const, label: "Offline" };
+}
+
+function AgentList({ selectedId, onSelect, online }: { selectedId: Agent["id"]; onSelect: (id: Agent["id"]) => void; online: boolean }) {
   return (
-    <Panel title="Team" description="Select an agent to inspect its work." className="min-w-0">
-      <div className="p-1.5">
-        <div className="scrollbar-subtle flex gap-1 overflow-x-auto lg:block lg:space-y-0.5 lg:overflow-visible">
-          {agents.map((agent) => {
-            const selected = agent.id === selectedId;
-            return (
-              <button
-                key={agent.id}
-                type="button"
-                onClick={() => onSelect(agent.id)}
-                aria-pressed={selected}
-                className={`flex min-w-[11rem] items-center gap-2 rounded-[var(--radius-small)] border px-2 py-1.5 text-left transition-colors duration-[var(--motion-fast)] lg:min-w-0 lg:w-full ${
-                  selected
-                    ? "border-accent/25 bg-accent-soft"
-                    : "border-transparent hover:border-border hover:bg-surface-hover"
-                }`}
-              >
-                <AgentAvatar agent={agent} size="small" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[0.68rem] font-medium text-ink">{agent.name}</span>
-                  <span className="flex items-center gap-1 truncate text-[0.57rem] text-ink-muted">
-                    <span
-                      aria-hidden="true"
-                      className={`size-1.5 shrink-0 rounded-full ${
-                        agent.status === "active"
-                          ? "bg-success"
-                          : agent.status === "queued"
-                            ? "bg-warning"
-                            : agent.status === "stopped"
-                              ? "bg-error"
-                              : "bg-ink-muted"
-                      }`}
-                    />
-                    {agent.statusLabel}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
+    <aside className="min-h-0 min-w-0 max-w-full rounded-[var(--radius-standard)] border border-border bg-panel/60 lg:overflow-hidden">
+      <div className="flex min-h-11 items-center justify-between border-b border-border px-3">
+        <div><h2 className="font-mono text-[0.53rem] uppercase tracking-[0.13em] text-ink-muted">Agents</h2><p className="mt-0.5 text-[0.54rem] text-ink-muted">Select a teammate</p></div>
+        <span className="rounded-full border border-border px-1.5 py-0.5 font-mono text-[0.5rem] text-ink-muted">{online ? "1 active" : "0 online"}</span>
       </div>
-    </Panel>
-  );
-}
-
-function AgentSummary({ agent }: { agent: Agent }) {
-  return (
-    <Panel className="min-w-0">
-      <div className="p-3.5 sm:p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <AgentAvatar agent={agent} size="large" />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-ink">{agent.name}</p>
-              <p className="mt-0.5 text-[0.66rem] text-ink-muted">{agent.role}</p>
-            </div>
-          </div>
-          <StatusBadge status={agent.status} label={agent.statusLabel} />
-        </div>
-
-        <div className="mt-3.5 border-l border-accent/50 pl-3">
-          <p className="font-mono text-[0.53rem] uppercase tracking-[0.12em] text-ink-muted">Current focus</p>
-          <p className="mt-1 text-xs leading-5 text-ink-secondary">{agent.currentFocus}</p>
-        </div>
-
-        <div className="mt-3.5 grid gap-px overflow-hidden rounded-[var(--radius-small)] border border-border bg-border sm:grid-cols-3">
-          <div className="bg-panel-strong/75 px-2.5 py-2">
-            <p className="font-mono text-[0.51rem] uppercase tracking-[0.11em] text-ink-muted">Model</p>
-            <p className="mt-0.5 font-mono text-[0.61rem] text-ink-secondary">{agent.model}</p>
-          </div>
-          <div className="bg-panel-strong/75 px-2.5 py-2">
-            <p className="font-mono text-[0.51rem] uppercase tracking-[0.11em] text-ink-muted">Workspace</p>
-            <p className="mt-0.5 font-mono text-[0.61rem] text-ink-secondary">DEV-MVP</p>
-          </div>
-          <div className="bg-panel-strong/75 px-2.5 py-2">
-            <p className="font-mono text-[0.51rem] uppercase tracking-[0.11em] text-ink-muted">Last update</p>
-            <p className="mt-0.5 font-mono text-[0.61rem] text-ink-secondary">2 min ago</p>
-          </div>
-        </div>
+      <div className="scrollbar-subtle flex max-w-full gap-1 overflow-x-auto p-1.5 lg:block lg:overflow-y-auto">
+        {agents.map((agent) => {
+          const selected = agent.id === selectedId;
+          const state = visibleStatus(agent, online);
+          return (
+            <button key={agent.id} type="button" onClick={() => onSelect(agent.id)} aria-pressed={selected} className={`relative flex min-w-[12rem] items-center gap-2.5 rounded-[var(--radius-small)] px-2 py-2 text-left lg:min-w-0 lg:w-full ${selected ? "bg-canvas" : "hover:bg-surface-hover/60"}`}>
+              {selected && <span aria-hidden="true" className="absolute inset-y-2 left-0 w-px bg-accent" />}
+              <AgentAvatar agent={agent} size="medium" />
+              <span className="min-w-0 flex-1"><span className="block truncate text-[0.68rem] font-semibold text-ink">{agent.name}</span><span className="mt-0.5 flex items-center gap-1 text-[0.56rem] text-ink-muted"><span className={`size-1.5 rounded-full ${online ? agent.status === "active" ? "bg-success" : agent.status === "queued" ? "bg-warning" : agent.status === "stopped" ? "bg-error" : "bg-ink-muted" : "bg-ink-muted"}`} />{state.label}</span></span>
+            </button>
+          );
+        })}
       </div>
-    </Panel>
+    </aside>
   );
 }
 
-function Timeline({ events }: { events: TimelineEvent[] }) {
+function TimelineEntry({ event, last }: { event: TimelineEvent; last: boolean }) {
+  const style = eventStyles[event.kind];
+  const Icon = style.icon;
   return (
-    <Panel
-      title="Live timeline"
-      description="A chronological view of the selected agent's work."
-      action={
-        <span className="flex items-center gap-1 rounded-full border border-success/15 bg-success-soft px-1.5 py-1 text-[0.56rem] font-medium text-success">
-          <Radio aria-hidden="true" className="size-2.5" />
-          Preview
-        </span>
-      }
-    >
-      {events.length === 0 ? (
-        <div className="flex min-h-44 flex-col items-center justify-center px-4 py-8 text-center">
-          <span className="grid size-8 place-items-center rounded-[var(--radius-small)] border border-border bg-panel-strong text-ink-muted">
-            <CircleDashed aria-hidden="true" className="size-4" />
-          </span>
-          <h3 className="mt-3 text-xs font-semibold text-ink">No activity yet</h3>
-          <p className="mt-1.5 max-w-sm text-xs leading-5 text-ink-secondary">
-            This agent is ready. Its first attributable event will appear here when work begins.
-          </p>
-        </div>
-      ) : (
-        <ol className="divide-y divide-border px-3.5 sm:px-4">
-          {events.map((event, index) => {
-            const agent = agents.find((item) => item.id === event.agentId)!;
-            const style = eventStyles[event.kind];
-            const Icon = style.icon;
-            return (
-              <li key={event.id} className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-2.5 py-3">
-                <div className="relative flex justify-center">
-                  {index !== events.length - 1 && (
-                    <span aria-hidden="true" className="absolute bottom-[-0.75rem] top-6 w-px bg-border" />
-                  )}
-                  <span className={`relative grid size-6 place-items-center rounded-full border ${style.dot}`}>
-                    <Icon aria-hidden="true" className="size-2.5" strokeWidth={2} />
-                  </span>
-                </div>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                    <h3 className="text-[0.7rem] font-semibold text-ink">{event.title}</h3>
-                    <time className="font-mono text-[0.55rem] text-ink-muted">{event.time}</time>
-                  </div>
-                  <p className="mt-1 text-[0.68rem] leading-4.5 text-ink-secondary">{event.detail}</p>
-                  <p className="mt-1.5 font-mono text-[0.51rem] uppercase tracking-[0.1em] text-ink-muted">
-                    {agent.name}
-                  </p>
-                </div>
-              </li>
-            );
-          })}
-        </ol>
-      )}
-    </Panel>
+    <li className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-2.5 py-3">
+      <div className="relative flex justify-center">
+        {!last && <span aria-hidden="true" className="absolute bottom-[-0.75rem] top-6 w-px bg-border" />}
+        <span className={`relative grid size-5 place-items-center rounded-full border ${style.className}`}><Icon aria-hidden="true" className="size-2.5" /></span>
+      </div>
+      <div className="min-w-0">
+        <div className="flex items-baseline justify-between gap-3"><h3 className="text-[0.68rem] font-semibold text-ink">{event.title}</h3><time className="font-mono text-[0.51rem] text-ink-muted">{event.time}</time></div>
+        <p className="mt-1 text-[0.64rem] leading-4.5 text-ink-secondary">{event.detail}</p>
+        {event.output && <pre className="mt-2 overflow-x-auto rounded-[var(--radius-small)] border border-border bg-canvas px-3 py-2 font-mono text-[0.56rem] leading-4 text-ink-secondary whitespace-pre-wrap">{event.output}</pre>}
+      </div>
+    </li>
   );
 }
 
-function WorkQueue() {
-  return (
-    <Panel
-      title="Queued work"
-      description="Planned tasks waiting for their accountable stage."
-      action={<span className="font-mono text-[0.55rem] text-ink-muted">3 ITEMS</span>}
-    >
-      <ul className="divide-y divide-border">
-        {queuedWork.map((item) => (
-          <li key={item.id} className="flex flex-col gap-2 px-3.5 py-2.5 sm:flex-row sm:items-center sm:px-4">
-            <span className="w-16 shrink-0 font-mono text-[0.57rem] text-accent">{item.id}</span>
-            <div className="min-w-0 flex-1">
-              <p className="text-[0.68rem] font-medium leading-4.5 text-ink">{item.title}</p>
-              <p className="text-[0.58rem] text-ink-muted">{item.owner}</p>
-            </div>
-            <div className="flex items-center gap-3 sm:justify-end">
-              <span className="rounded-full border border-border px-1.5 py-0.5 font-mono text-[0.52rem] text-ink-secondary">
-                {item.priority}
-              </span>
-              <span className="text-[0.57rem] text-ink-muted">{item.estimate}</span>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </Panel>
-  );
-}
-
-function TaskComposer() {
+function Composer({ disabled }: { disabled: boolean }) {
   const [task, setTask] = useState("");
   const [message, setMessage] = useState("");
-
-  function submitTask(event: FormEvent<HTMLFormElement>) {
+  function submit(event: FormEvent) {
     event.preventDefault();
-    const trimmed = task.trim();
-    if (!trimmed) {
-      setMessage("Describe the engineering task before sending it to the Manager.");
-      return;
-    }
-    setMessage("Task staged in this UI preview. No agent execution was started.");
+    if (!task.trim()) return setMessage("Describe a task before queueing it.");
+    setMessage("Task staged in this fixture preview. No execution started.");
     setTask("");
   }
-
   return (
-    <Panel title="Give the team a task" description="The Manager will turn your request into an approval-ready plan.">
-      <form onSubmit={submitTask} className="p-3.5 sm:p-4">
-        <label htmlFor="task-input" className="sr-only">Engineering task</label>
-        <textarea
-          id="task-input"
-          value={task}
-          onChange={(event) => {
-            setTask(event.target.value);
-            if (message) setMessage("");
-          }}
-          rows={3}
-          placeholder="Describe an engineering task, its constraints, and the result you need…"
-          className="min-h-20 w-full resize-y rounded-[var(--radius-small)] border border-border bg-panel-strong/75 px-3 py-2.5 text-xs leading-5 text-ink placeholder:text-ink-muted hover:border-border-strong focus:border-accent/60"
-        />
-        <div className="mt-2.5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <p className="min-h-4 text-[0.61rem] text-ink-muted" aria-live="polite">{message || "Local preview · input is not persisted"}</p>
-          <button
-            type="submit"
-            className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-[var(--radius-small)] bg-accent px-3 text-[0.68rem] font-semibold text-[#1c1008] transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Send to Manager
-            <Send aria-hidden="true" className="size-3.5" />
-          </button>
-        </div>
-      </form>
-    </Panel>
+    <form onSubmit={submit} className="border-t border-border bg-panel/40 p-3">
+      <label htmlFor="activity-composer" className="sr-only">Queue a message for the selected agent</label>
+      <div className="flex items-end gap-2 rounded-[var(--radius-small)] border border-border bg-canvas px-3 py-2 focus-within:border-accent/60">
+        <textarea id="activity-composer" rows={1} value={task} disabled={disabled} onChange={(event) => { setTask(event.target.value); setMessage(""); }} placeholder={disabled ? "Bring the crew online to queue work" : "Queue a task or message…"} className="min-h-6 min-w-0 flex-1 resize-none bg-transparent text-[0.67rem] leading-5 text-ink placeholder:text-ink-muted disabled:cursor-not-allowed" />
+        <button type="submit" disabled={disabled} className="inline-flex min-h-7 items-center gap-1.5 rounded-[var(--radius-small)] border border-border bg-panel px-2.5 text-[0.61rem] font-medium text-ink-secondary hover:border-border-strong hover:text-ink disabled:cursor-not-allowed disabled:opacity-40">Queue <Send aria-hidden="true" className="size-3" /></button>
+      </div>
+      <p aria-live="polite" className="mt-1.5 min-h-3 font-mono text-[0.49rem] text-ink-muted">{message || "Fixture only · messages are not persisted"}</p>
+    </form>
   );
 }
 
 export function ActivityWorkspace() {
-  const [selectedAgentId, setSelectedAgentId] = useState<Agent["id"]>("manager");
+  const { crewOnline, selectedAgentId, setSelectedAgentId } = useWorkspaceState();
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0];
-  const selectedEvents = useMemo(
-    () => timelineEvents.filter((event) => event.agentId === selectedAgentId),
-    [selectedAgentId],
-  );
+  const events = useMemo(() => timelineEvents.filter((event) => event.agentId === selectedAgentId), [selectedAgentId]);
+  const state = visibleStatus(selectedAgent, crewOnline);
 
   return (
-    <div className="mx-auto min-h-full w-full max-w-[96rem] px-[var(--space-page)] py-4 sm:py-5">
-      <PageHeader
-        eyebrow="Devcrew MVP · Activity"
-        title="Engineering, in motion."
-        description="Follow the team from planning through implementation, validation, and independent review—without losing the project context."
-        action={
-          <Link
-            href="/tickets"
-            className="inline-flex min-h-8 w-fit items-center gap-1.5 rounded-[var(--radius-small)] border border-border bg-panel/70 px-3 text-[0.68rem] font-medium text-ink-secondary transition-colors hover:bg-surface-hover hover:text-ink"
-          >
-            <ListTodo aria-hidden="true" className="size-3" />
-            View work queue
-            <ArrowRight aria-hidden="true" className="size-3" />
-          </Link>
-        }
-      />
+    <div className="flex min-h-full min-w-0 w-full max-w-full flex-col px-3 py-3 sm:px-4 sm:py-4">
+      <header className="mb-3 shrink-0 border-b border-border pb-3">
+        <p className="font-mono text-[0.52rem] uppercase tracking-[0.14em] text-accent">Devcrew MVP · Activity</p>
+        <h1 className="mt-1 font-display text-[1.65rem] leading-tight text-ink">Activity</h1>
+        <p className="mt-1 text-[0.68rem] text-ink-muted">See what each teammate is doing now, what is queued, and where a person is needed.</p>
+      </header>
 
-      <div className="mt-4 grid min-w-0 gap-2 lg:grid-cols-[13rem_minmax(0,1fr)]">
-        <AgentList selectedId={selectedAgentId} onSelect={setSelectedAgentId} />
-        <AgentSummary agent={selectedAgent} />
+      <div className="grid min-h-0 min-w-0 max-w-full flex-1 grid-cols-[minmax(0,1fr)] gap-2.5 lg:grid-cols-[13rem_minmax(0,1fr)]">
+        <AgentList selectedId={selectedAgentId} onSelect={setSelectedAgentId} online={crewOnline} />
+
+        <section aria-label={`${selectedAgent.name} execution workspace`} className="flex min-h-[36rem] min-w-0 flex-col overflow-hidden rounded-[var(--radius-standard)] border border-border bg-panel/60 lg:min-h-0">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="flex min-w-0 items-center gap-3"><AgentAvatar agent={selectedAgent} size="large" /><div className="min-w-0"><h2 className="truncate text-[0.82rem] font-semibold text-ink">{selectedAgent.name}</h2><p className="mt-0.5 truncate text-[0.58rem] text-ink-muted">{selectedAgent.role} · <span className="font-mono">@{selectedAgent.handle}</span></p></div></div>
+            <StatusBadge status={state.status} label={state.label} />
+          </div>
+
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] border-b border-border bg-panel-strong/35 sm:grid-cols-3">
+            {[{ label: "Current focus", value: crewOnline ? selectedAgent.currentFocus : "Crew power is off" }, { label: "Model", value: selectedAgent.model }, { label: "Workspace", value: "DEV-MVP · fixture" }].map((item) => <div key={item.label} className="border-b border-border px-3 py-2.5 last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0"><p className="font-mono text-[0.49rem] uppercase tracking-[0.11em] text-ink-muted">{item.label}</p><p className="mt-1 truncate text-[0.61rem] text-ink-secondary">{item.value}</p></div>)}
+          </div>
+
+          <div className="scrollbar-subtle min-h-0 min-w-0 flex-1 overflow-y-auto px-4">
+            <div className="flex items-center justify-between border-b border-border py-2.5"><h3 className="font-mono text-[0.53rem] uppercase tracking-[0.13em] text-ink-muted">Live timeline</h3><span className="flex items-center gap-1 text-[0.52rem] text-success"><Radio aria-hidden="true" className="size-2.5" /> Fixture</span></div>
+            {!crewOnline && <div className="my-3 rounded-[var(--radius-small)] border border-border bg-canvas px-3 py-2.5"><p className="text-[0.66rem] font-medium text-ink">All agents are offline</p><p className="mt-1 text-[0.59rem] leading-4 text-ink-muted">Use the power control beside Settings to restore the fixture crew. Existing history remains visible.</p></div>}
+            {events.length > 0 ? <ol>{events.map((event, index) => <TimelineEntry key={event.id} event={event} last={index === events.length - 1} />)}</ol> : <div className="py-8 text-center"><p className="text-[0.67rem] text-ink-secondary">No recent activity recorded.</p><p className="mt-1 text-[0.57rem] text-ink-muted">This fixture agent has not started work.</p></div>}
+
+            <section className="border-t border-border py-3">
+              <div className="mb-2 flex items-center gap-2"><h3 className="font-mono text-[0.53rem] uppercase tracking-[0.13em] text-ink-muted">Up next</h3><span className="rounded-full border border-border px-1.5 py-0.5 font-mono text-[0.49rem] text-ink-muted">{queuedWork.length} queued</span></div>
+              <ul className="divide-y divide-border border-y border-border">
+                {queuedWork.map((item) => <li key={item.id} className="grid gap-1 py-2.5 sm:grid-cols-[4rem_minmax(0,1fr)_8rem_5rem] sm:items-center"><span className="font-mono text-[0.52rem] text-accent">{item.id}</span><span className="text-[0.63rem] font-medium text-ink-secondary">{item.title}</span><span className="text-[0.54rem] text-ink-muted">{item.owner}</span><span className="text-[0.51rem] text-ink-muted sm:text-right">{item.dependency}</span></li>)}
+              </ul>
+            </section>
+          </div>
+
+          <Composer disabled={!crewOnline} />
+        </section>
       </div>
 
-      <div className="mt-2 grid min-w-0 gap-2 lg:grid-cols-[minmax(0,1.35fr)_minmax(17rem,0.65fr)]">
-        <Timeline events={selectedEvents} />
-        <div className="min-w-0 space-y-2">
-          <WorkQueue />
-          <TaskComposer />
-        </div>
-      </div>
-
-      <section aria-label="Workshop summary" className="mt-2 xl:hidden">
-        <WorkshopRail compact />
-      </section>
+      <section aria-label="Workshop summary" className="mt-3 xl:hidden"><WorkshopRail compact /></section>
     </div>
   );
 }
