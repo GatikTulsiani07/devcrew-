@@ -1,28 +1,31 @@
-# Codex Operating Manual: Devcrew UI
+# Devcrew Main Worktree Codex Manual
 
 ## 1. Purpose and Authority
 
-This manual defines how Codex operates in the Devcrew UI worktree. It governs local execution discipline and ownership boundaries; it does not replace product requirements, architecture, design rules, delivery sequencing, or the backlog.
+This manual governs Codex work in the main Devcrew integration worktree. It is permanent operating guidance, not a product specification. The user's current task defines the authorized change; the canonical shared documents define product scope, architecture, design, delivery sequence, and backlog.
 
-Authority flows from the canonical shared documents. When local guidance conflicts with them, stop, identify the conflict, and seek correction in the owning worktree before implementing affected behavior.
+When sources conflict, follow platform instructions, the user's explicit request, `AGENTS.md`, this manual, and then the canonical documents according to their stated authority. Do not silently resolve a material conflict that changes scope, architecture, security, data, contracts, or release behavior.
 
 ## 2. Worktree Role and Ownership Boundary
 
-The expected identity is:
+- Directory: `/Users/suniltulsiani/Desktop/devcrew`
+- Branch: `main`
+- Role: integration and release owner
 
-- Directory: `/Users/suniltulsiani/Desktop/devcrew-ui`
-- Branch: `feat/ui-shell`
-- Role: UI implementation owner
+Devcrew is one Git repository with multiple complete worktrees. This worktree owns integration, shared product composition, cross-layer compatibility, final validation, release-candidate assembly, and release readiness.
 
-Devcrew is one Git repository with multiple complete worktrees. Repeated files are normal and must not be treated as redundant copies to remove.
+It does not replace the owning branches:
 
-This worktree owns the application shell, navigation, pages, components, design-system implementation, accessibility, responsive behavior, client workflow state, interactions, and all loading, empty, error, disabled, partial-data, and success presentation states.
+- `devcrew-ui` / `feat/ui-shell`: UI implementation and client interaction
+- `devcrew-backend` / `feat/orchestrator`: backend, orchestration, domain behavior, and server adapters
+- `devcrew-review` / `review/integration`: independent verification and merge-readiness decisions
+- `devcrew-docs` / `docs/context`: canonical product and engineering documentation
 
-It does not own authoritative authorization, domain lifecycle enforcement, persistence, backend contracts, server secrets, Codex or Git execution, server orchestration, canonical documentation, independent approval, or release integration.
+Do not use `main` as the primary location for an isolated UI or backend feature. Do not integrate work that lacks independent review evidence, bypass canonical requirements, or invent a cross-layer contract independently.
 
 ## 3. Mandatory Reading Order
 
-Read completely, in order, before changing files:
+Before making changes, read completely and in this exact order:
 
 1. `AGENTS.md`
 2. `CODEX.md`
@@ -32,224 +35,212 @@ Read completely, in order, before changing files:
 6. `/Users/suniltulsiani/Desktop/devcrew-docs/design-system.md`
 7. `/Users/suniltulsiani/Desktop/devcrew-docs/plan.md`
 8. `/Users/suniltulsiani/Desktop/devcrew-docs/tasks.md`
-9. Relevant implementation, configuration, test, and package files
-10. The current task, acceptance criteria, and supplied evidence
+9. Relevant implementation files, tests, configuration, dependency manifests, and installed framework guidance
+10. The current task, acceptance criteria, and affected review evidence
 
-For Next.js work, also read the relevant installed guide in `node_modules/next/dist/docs/` before coding. Treat installed documentation and deprecation notices as authoritative for the repository's framework version.
-
-The audit is research input, not a screen specification or copy source. Guildly informs the calm, connected, typography-led design philosophy; Devcrew must remain its own product.
+The shared files are authoritative and must not be copied into this worktree. For Next.js changes, read the relevant installed documentation in `node_modules/next/dist/docs/` before coding and follow its version-specific conventions and deprecations.
 
 ## 4. Repository and Worktree Inspection
 
-Before planning:
+Start each task with read-only inspection:
 
-1. Run `pwd`.
-2. Run `git branch --show-current`.
-3. Run `git status --short`.
-4. Confirm the directory and branch match Section 2.
-5. Inspect relevant files, package scripts, tests, and local instructions.
-6. Identify pre-existing modifications and preserve them.
-7. Compare the request with the canonical backlog, contracts, and worktree boundary.
+1. Run `pwd` and `git branch --show-current`; stop if they do not match this manual.
+2. Run `git status --short` and inspect relevant diffs, including staged changes if any.
+3. Identify pre-existing user changes and keep them separate from session work.
+4. Confirm the task belongs to main integration ownership.
+5. Inspect the incoming branch, commits, diff, base, review decision, and acceptance evidence when integrating work.
+6. Read every file to be changed plus direct consumers, producers, tests, schemas, types, configuration, and relevant local Next.js guidance.
+7. Inspect `package.json` and its lockfile before choosing package-manager commands.
+8. Search for existing contracts, components, utilities, and conventions before adding anything.
 
-If identity does not match, stop without editing. Do not assume that a clean status is available, and do not overwrite unrelated user work.
+Repeated files across worktrees are normal because every worktree is a checkout of the same repository. Never remove a file merely because another worktree contains it.
 
-## 5. Task-Planning Procedure
+## 5. Task Planning
 
-For each task:
+Before implementation:
 
-1. Restate the requested outcome and acceptance criteria.
-2. Locate the governing requirements and design rules in the shared documents.
-3. Confirm the task belongs to UI ownership.
-4. Inspect the current implementation and version-specific framework guidance.
-5. Identify contract dependencies, user states, accessibility requirements, tests, and integration risks.
-6. Create the smallest coherent implementation plan.
-7. Implement only the approved scope.
-8. Validate proportionally to risk and record exact evidence.
+1. Restate the requested outcome, permitted files, acceptance criteria, and prohibited actions.
+2. Map the task to the applicable canonical requirements and backlog item.
+3. Identify affected owners, contracts, trust boundaries, lifecycle states, and user journeys.
+4. Separate pre-existing changes from the proposed diff.
+5. Choose the smallest complete and reversible approach.
+6. Define focused checks, integration gates, and manual verification before editing.
+7. Stop for direction if completion requires new authority or a material undocumented decision.
 
-Do not infer that a documented capability already exists. Inspect the code. Missing implementation is not evidence of permission to invent a contract or architecture.
+For larger integration work, keep a short live plan and update it as evidence changes. Never treat a plan or backlog entry as proof that implementation exists.
 
 ## 6. Scope Control
 
-- Keep presentation, interaction, and client-only workflow state in UI-owned modules.
-- Treat backend responses as authoritative for server-owned state.
-- Use mocked or deterministic data only where the approved MVP explicitly permits it, and never present simulated work as real execution.
-- Do not change backend architecture, API implementation, orchestration, server adapters, or lifecycle truth from this worktree.
-- Do not expand the hackathon slice into deferred platform features.
-- Stop and coordinate when a request requires a contract, architecture, product-scope, or canonical documentation change.
+- Implement only the user's authorized scope and behavior supported by canonical documentation.
+- Preserve current working behavior unless the task explicitly authorizes a change.
+- Avoid unrelated cleanup, broad refactors, speculative abstractions, dependency churn, and incidental renames.
+- Route substantial isolated UI or backend work to its owning worktree.
+- Treat the Guildly audit as research and design direction, not a screen specification, copy source, or authority to clone Guildly.
+- Keep deferred capabilities deferred unless the canonical documentation is updated and approved first.
+- Ask before making assumptions that alter architecture, security, data, public contracts, product behavior, or the MVP boundary.
 
-Material cross-layer work must identify the affected contract, producer, consumer, migration impact, and required review before implementation proceeds.
+The hackathon MVP is local-first, dark-mode-only, and one deterministic vertical slice: connect a prepared repository, submit one engineering task, obtain a Manager plan and human approval, produce a Full Stack Developer result, validate through DevOps, obtain a Reviewer verdict, and retain visible activity and final results.
+
+Do not add production authentication, durable persistence, autonomous merge, production deployment, or other deferred infrastructure to the judged MVP without an approved canonical documentation change.
 
 ## 7. Approved MVP Stack
 
-The frozen stack is:
+The canonical documentation freezes this summary:
 
 - Next.js App Router, React, strict TypeScript, Node.js runtime, and npm
-- Tailwind CSS, shadcn/ui where useful, Lucide React, and restrained CSS transitions
-- Zustand only when shared client state is genuinely required
-- Next.js Route Handlers under `app/api`
-- Zod validation and structured JSON errors
-- Server-Sent Events for one-way activity updates
-- Deterministic in-memory MVP stores behind replaceable interfaces
+- Tailwind CSS, shadcn/ui where useful, Lucide React, and restrained transitions
+- Next.js Route Handlers under `app/api`, Zod, structured JSON errors, and Server-Sent Events
 - Official OpenAI JavaScript/TypeScript SDK and OpenAI Responses API with structured outputs
-- Controlled server-side Codex CLI and Git adapters with allowlists, timeouts, and redaction
-- Local execution as the authoritative judged environment
-- Optional Vercel presentation build that makes no false execution claims
-- Dark-mode-only MVP presentation
+- Controlled server-side Codex CLI and Git adapters with allowlists, timeouts, redaction, and worktree-safe operations
+- Deterministic in-memory MVP persistence behind replaceable store interfaces
+- Local environment as the authoritative judged environment
+- Optional Vercel presentation build that does not claim local shell or Git execution
+- Dark-mode-only MVP
 
-Do not introduce undocumented frameworks, databases, queues, authentication providers, services, microservices, Redis, Kafka, Kubernetes, deployment systems, or other technology changes.
+Do not introduce undocumented frameworks, databases, queues, authentication providers, microservices, deployment systems, Redis, Kafka, Kubernetes, browser-side shell execution, or other technology changes.
 
-## 8. UI Engineering Rules
+## 8. Role-Specific Engineering Rules
 
-### Application and State
+Main integration work must:
 
-- Build with the App Router conventions installed in this repository.
-- Keep Server and Client Component boundaries deliberate; add client execution only for real interaction needs.
-- Preserve visible project, section, record, and lifecycle context across navigation.
-- Use documented lifecycle labels and contract values consistently.
-- Model loading, empty, error, retry, disabled, saving, unsaved, partial-data, stopped, completed, and success states where applicable.
-- Preserve user input when recovery is safe and provide an actionable next step on failure.
-- Avoid duplicate requests, fabricated progress, optimistic states that contradict server truth, and unbounded rendering.
+- Assemble only bounded, reviewed UI and backend deliverables.
+- Reconcile request, response, error, lifecycle, state, navigation, and terminology differences across layers.
+- Preserve server authority and presentation/domain separation.
+- Resolve conflicts semantically, preserving intentional work from both sides.
+- Return integration failures to the responsible owner when the correction is an isolated feature change.
+- Reopen review for materially changed scope.
+- Run focused checks per integration unit and full release gates on the assembled candidate.
 
-### Design System
+Respect other owners:
 
-- Implement semantic tokens for color, typography, spacing, sizing, radius, elevation, motion, layout, focus, and status.
-- Prefer shared primitives and composition over screenshot-specific markup or oversized variant-heavy components.
-- Use warm charcoal and brown-influenced surfaces, softened white text, restrained orange emphasis, subtle borders, and minimal elevation.
-- Use serif display typography sparingly, legible sans-serif for interface content, and monospace for technical values.
-- Keep the interface calm, information-led, and consistent; do not clone Guildly layouts, components, or copy.
-- Use Lucide icons to reinforce meaning, never as the sole carrier of essential information.
-- Honor reduced motion and avoid decorative animation that delays content.
-- Do not add a theme switcher or light mode during the hackathon MVP.
-
-### Responsive Behavior
-
-- Prioritize task completion and primary actions at every supported size.
-- Adapt navigation and supporting detail without removing essential capability.
-- Avoid horizontal scrolling except where the content structure genuinely requires it.
-- Verify long content, zoom, text resizing, reflow, and narrow viewports.
+- UI owns the application shell, navigation, pages, components, design-system implementation, accessibility, responsive behavior, client workflow state, and loading, empty, error, and success states. It must not authorize server behavior, expose credentials, execute shell or Git in the browser, redefine backend contracts, or add a light theme.
+- Backend owns Route Handlers, validation, domain and lifecycle enforcement, in-memory stores, OpenAI Responses integration, Codex and Git adapters, server secrets, Server-Sent Events, and structured errors. It must not leak secrets, run arbitrary unvalidated commands, import presentation code, add unapproved infrastructure, or autonomously merge or deploy.
+- Review owns independent requirement, architecture, contract, security, accessibility, performance, regression, and merge-readiness assessment. It must not implement features, silently fix code, approve incomplete evidence, claim unsupported passes, or merge without explicit user direction.
 
 ## 9. Security and Secret Handling
 
-- Never place secrets, API keys, tokens, credentials, or privileged configuration in client code, browser storage, URLs, rendered content, screenshots, fixtures, or logs.
-- Never expose stored secret values after submission; client interfaces may use safe metadata only when the contract permits it.
-- Never call OpenAI, Codex CLI, `child_process`, shell commands, or Git directly from browser code.
-- Do not treat hidden controls, disabled buttons, or client checks as authorization.
-- Render server errors safely and avoid leaking stack traces, internal paths, commands, prompts, or sensitive payloads.
-- Redact sensitive material from test evidence and completion reports.
-- Report suspected exposure immediately and do not propagate the value while diagnosing it.
-
-Production authentication is deferred for the judged MVP. This does not weaken server ownership of validation, project boundaries, secret access, or lifecycle enforcement.
+- Treat the client as untrusted; authoritative validation, project boundaries, lifecycle enforcement, persistence, and protected operations remain server-side.
+- Validate all untrusted input with documented schemas and fail closed at security boundaries.
+- Keep OpenAI credentials and all secret values server-side and out of source, client bundles, URLs, responses, logs, activity, screenshots, fixtures, review evidence, and final reports.
+- Use secret references and least privilege; audit access without recording values.
+- Permit only controlled, validated, allowlisted Codex CLI and Git operations with bounded arguments, timeouts, cancellation, redaction, and safe working directories.
+- Never execute arbitrary user-provided shell commands or expose server execution to browser code.
+- Do not claim production authentication or durable isolation exists in the hackathon MVP when it is deferred.
 
 ## 10. Contract and API Discipline
 
-- Consume documented backend inputs, outputs, errors, pagination, authorization expectations, and lifecycle effects.
-- Do not redefine contract fields, status meanings, identifiers, errors, or transition rules in UI code.
-- Centralize consumer types and adapters according to the established codebase pattern.
-- Validate assumptions against producer evidence; strict TypeScript types alone do not prove runtime compatibility.
-- Handle documented success and failure responses, cancellation, retry, delayed updates, and partial data.
-- Treat Server-Sent Events as ordered one-way updates and follow the documented reconnect and recovery behavior.
-- Coordinate breaking changes before either producer or consumer depends on them.
-- Preserve terminology across UI copy, backend contracts, activity, review evidence, and documentation.
+- Define or verify backend contracts before dependent UI integration.
+- Contracts must cover inputs, outputs, Zod validation, structured errors, lifecycle effects, project context, ordering, retry behavior, cancellation, and security expectations.
+- Keep the server response authoritative; client state may present or optimistically stage intent but must reconcile with server truth.
+- Invalid lifecycle transitions must fail consistently and actionably.
+- Server-Sent Events are one-way activity updates; preserve ordering, correlation, recovery behavior, and server boundaries.
+- Long-running work must retain its project, work-item, initiating-user, and agent relationships across queued, active, stopped, completed, failed, and reviewed states.
+- Breaking contract changes require a documented migration plan, coordinated producer and consumer updates, renewed verification, and review.
+- Do not create a second source of truth for schemas, status vocabulary, or API behavior.
 
 ## 11. Testing and Validation
 
-Run the checks supported by the repository and relevant to the change. The expected release evidence includes:
+Use scripts declared by the repository and the package manager established by its lockfile. Select checks proportionate to the change and record exact commands and outcomes.
 
-- ESLint
-- Strict TypeScript checking
-- Focused unit, component, and contract-consumer tests
+Applicable gates include:
+
+- ESLint and strict TypeScript checks
+- Focused unit, component, contract, integration, regression, and failure-path tests
 - Next.js production build
-- Manual critical-flow verification in the local environment
-- Manual responsive and state verification
-- Accessibility verification
+- Manual verification of the critical local workflow
+- Security, accessibility, performance, reliability, and secret-exposure review
+- Final diff inspection, `git diff --check`, and `git status --short`
 
-Test successful, loading, empty, error, retry, disabled, partial-data, long-content, and boundary behavior where applicable. For contract-dependent work, verify both the UI consumer assumption and the available backend producer evidence.
+Test success, empty, loading, error, retry, cancellation, invalid transition, partial failure, and boundary behavior where relevant. Verify producer and consumer contracts independently and together. Missing automation is a disclosed gap, never a passing result. Never suppress failures or declare release readiness while a required gate fails.
 
-Never suppress a failing gate to obtain a pass. Report missing scripts or unavailable environments as unverified gaps. A prior pass, another worktree's pass, or a clean build does not prove unaffected checks passed.
+Documentation-only changes normally require scoped Markdown structure, path, terminology, diff, and whitespace validation rather than unrelated application builds.
 
-## 12. Accessibility Requirements
+## 12. Accessibility
 
-Target WCAG 2.2 Level AA for every user-facing workflow.
+User-facing work targets WCAG 2.2 Level AA. When UI is integrated or changed, verify:
 
-- Use semantic HTML, landmarks, logical headings, native controls, and established interaction patterns.
-- Provide meaningful labels, names, descriptions, and alternatives for non-text content.
-- Support complete keyboard operation with logical order and visible focus.
-- Manage focus for navigation, dialogs, menus, validation, and dynamically inserted content.
-- Communicate status, errors, validation, and asynchronous changes to assistive technology at an appropriate urgency.
-- Meet applicable contrast requirements for text, controls, icons, focus, and every interaction state.
-- Never rely on color, motion, placement, or iconography alone to convey state.
-- Support zoom, reflow, long content, target sizes, and reduced-motion preferences without lost function.
+- Semantic HTML, landmarks, logical headings, labels, descriptions, and accessible control names
+- Complete keyboard operation, predictable focus management, and visible focus indicators
+- Sufficient contrast in every approved dark-theme state and non-color state cues
+- Zoom, text resize, reflow, long content, and representative responsive widths
+- Accessible loading, validation, asynchronous status, and error announcements
+- Reduced-motion behavior and alternatives for meaningful visuals
+- Loading, empty, error, disabled, saving, unsaved, success, and partial-data states
 
-Automated accessibility checks supplement, but do not replace, manual keyboard and assistive-technology-oriented review.
+Automated accessibility checks do not replace manual keyboard and assistive-technology-oriented review.
 
 ## 13. Git and Worktree Safety
 
-- Remember that all Devcrew worktrees share one repository and history.
-- Inspect status before and after work; preserve unrelated modifications.
-- Never delete a file because another worktree contains the same path.
-- Never use destructive reset, restore, clean, or checkout operations without explicit approval.
+- Inspect status and diffs before editing and before reporting.
+- Preserve unrelated and pre-existing user work; never make the worktree appear clean by discarding changes.
+- Never delete repeated files simply because they exist in another worktree.
+- Never use destructive reset or checkout operations without explicit approval.
 - Never force-push or rewrite published history.
 - Never stage unrelated changes.
-- Never stage or commit unless the user explicitly requests it.
-- Do not merge, rebase, cherry-pick, move work between worktrees, or alter worktree configuration unless explicitly authorized.
-- Verify the exact diff before reporting completion.
+- Do not stage, commit, amend, push, merge, rebase, cherry-pick, or open a pull request unless explicitly requested.
+- Before an authorized integration, confirm source, target, revision, operation, review evidence, and rollback implications.
+- Keep generated output, temporary files, secrets, and conflict markers out of the final diff.
 
 ## 14. Review and Integration Procedure
 
-1. Implement bounded UI work on `feat/ui-shell` against approved requirements and contracts.
-2. Run applicable static, automated, manual, responsive, and accessibility checks.
-3. Report changed scope, evidence, known gaps, and contract dependencies.
-4. Submit the change for independent review in `devcrew-review`.
-5. Address findings in the owning worktree and re-run affected checks.
-6. Reopen review after any material correction.
-7. Advance only independently approved work to `devcrew` for integration.
-8. Let the integration owner reconcile combined behavior and run end-to-end release gates.
+For each proposed integration unit:
 
-Review approval is evidence, not a substitute for integration testing. Do not self-approve, silently fix work in the review worktree, or claim merge readiness without the required record.
+1. Identify its source branch or commits, base, task, acceptance criteria, changed scope, and review outcome.
+2. Inspect the complete incoming diff and verify worktree ownership and documentation conformance.
+3. Confirm backend producer evidence and UI consumer expectations agree.
+4. Reject unresolved blocking findings or incomplete evidence; review approval does not replace integration testing.
+5. Apply only the explicitly authorized Git operation.
+6. Resolve conflicts by intent and contract semantics, not mechanically.
+7. Verify navigation, state reconciliation, lifecycle behavior, errors, security, accessibility, and terminology across layers.
+8. Run focused tests, then the complete applicable integration and release gates.
+9. Return isolated defects to the owning worktree; materially changed fixes require renewed review.
+10. Assemble a release candidate only when no release-blocking findings or required-gate failures remain.
+
+Never merge unreviewed work or infer approval from silence.
 
 ## 15. Documentation Rules
 
-- Treat all six absolute shared paths in Section 3 as authoritative.
-- Never create local copies of the shared audit, specification, architecture, design system, plan, or backlog.
-- Update canonical documents only from the `devcrew-docs` worktree.
-- Record material architecture changes before implementing dependent code.
-- Route product scope, contract, architecture, design-language, milestone, and backlog changes to their canonical owner.
-- Keep local guidance concise and link to shared authority instead of duplicating full specifications.
-- Keep terminology and lifecycle language consistent across every worktree.
-- If implementation and documentation disagree, verify the discrepancy and correct the appropriate source through review; do not silently choose one.
+- Treat the audit and five canonical documents listed by exact absolute path in the mandatory reading order as the shared authority for research, product, and engineering decisions.
+- Never create a local audit, local canonical-document copies, or competing specifications in an implementation worktree.
+- Update canonical documents only from the `devcrew-docs` worktree and only within authorized scope.
+- Record and approve material product, architecture, contract, design, stack, deployment, or persistence changes before implementation.
+- Keep AGENTS and Codex manuals operational; summarize constraints and link to authority instead of duplicating full specifications.
+- Preserve shared terminology and lifecycle labels across UI, backend, review, documentation, and integration.
+- If implementation and canonical documentation disagree, surface the discrepancy and correct the appropriate source through its owning workflow.
 
 ## 16. Prohibited Actions
 
-Codex must not:
+Do not:
 
-- Implement authoritative authorization or server business rules in the UI
-- Expose server credentials or sensitive values
-- Execute shell or Git commands in browser code
-- Redefine backend contracts or lifecycle truth
-- Modify backend architecture, services, API implementation, or orchestration from this worktree
-- Add light mode to the hackathon MVP
-- Add unapproved production authentication, durable persistence, autonomous merge, or production deployment
-- Introduce undocumented technology or infrastructure
-- Fabricate activity, progress, execution, review, test, or success evidence
-- Clone Guildly or treat its audit as a feature specification
-- Create competing canonical documentation
-- Modify files outside the requested scope
-- Stage, commit, merge, or publish without explicit authorization
+- Rewrite architecture or change the frozen stack without prior documentation approval.
+- Implement large branch-owned features on `main` or bypass independent review.
+- Invent requirements, contracts, data models, lifecycle states, workflows, or release claims.
+- Add production authentication, durable databases, autonomous merge, or production deployment to the judged MVP without approval.
+- Add a light theme or theme switcher to the hackathon MVP.
+- Run arbitrary shell commands from user input or browser code.
+- Expose secrets or sensitive configuration in any artifact.
+- Import presentation code into backend modules or make client state authoritative.
+- Remove shared assets, repeated worktree files, or working functionality without explicit authority.
+- Modify canonical documentation from this worktree or create repository-specific copies.
+- Hide failures with skipped checks, unsafe casts, disabled rules, or misleading reports.
+- Perform unrelated cleanup, speculative refactors, destructive Git operations, or unauthorized publication.
 
 ## 17. Definition of Done
 
-UI work is done only when:
+A main-worktree task is done only when:
 
-- The request and canonical acceptance criteria are satisfied within UI ownership.
-- Implementation follows the approved stack, design system, contracts, and terminology.
-- Required interaction states and responsive behavior are complete.
-- Applicable WCAG 2.2 AA requirements are verified.
-- Relevant lint, type, focused test, production build, and manual checks pass with recorded evidence.
-- No secrets, contract violations, unrelated changes, or release-blocking findings remain.
-- Canonical documentation impact has been assessed and routed to `devcrew-docs` when needed.
-- Independent review and integration requirements are clearly stated; they are not presumed complete.
+- The authorized outcome and acceptance criteria are satisfied without unsupported scope.
+- Worktree ownership, canonical requirements, architecture, and frozen MVP constraints are preserved.
+- Incoming work has adequate independent review and all material post-review changes were re-reviewed.
+- UI/backend contracts and complete affected journeys are compatible.
+- Relevant automated and manual checks pass, with exact evidence recorded.
+- Security, secret handling, accessibility, error, and lifecycle behavior are verified where applicable.
+- The diff is minimal, cohesive, reviewable, and contains no unrelated user work, conflict markers, secrets, debug artifacts, or accidental generated files.
+- Documentation remains consistent and any required canonical change went through `devcrew-docs` before implementation.
+- `git diff` and `git status --short` have been reviewed.
+- No blocking finding, required-gate failure, or undisclosed verification gap remains.
 
-If any condition is missing, report the work as partial or unverified rather than complete.
+Release readiness additionally requires validation of the exact assembled candidate, the deterministic critical workflow in the authoritative local environment, applicable full gates, configuration, operational constraints, and residual risk.
 
 ## 18. Required Final Report
 
@@ -257,20 +248,18 @@ Use this structure:
 
 ### Outcome
 
-A concise statement of what was completed or why work stopped.
+State what was completed or the precise blocker. Do not overstate readiness.
 
 ### Files Changed
 
-List each changed file and its purpose. State explicitly when no files changed.
+List every changed file and summarize its effect. Separate pre-existing worktree changes.
 
 ### Checks Run
 
-For each command or manual check, report the exact scope and result. Distinguish passed, failed, and not run.
+List each exact command or manual check with `passed`, `failed`, or `not run`, plus relevant evidence.
 
 ### Remaining Risks
 
-List unverified behavior, missing evidence, contract dependencies, documentation follow-up, review needs, and integration risks. State `None identified` only when supported by evidence.
+List unresolved risks, gaps, assumptions, deferred verification, or `None` when evidence supports that conclusion.
 
-### Git State
-
-Report the worktree path, branch, concise status, and whether anything was staged or committed. Never claim approval, merge readiness, or completion beyond the evidence shown.
+Never claim that tests passed, review approved, integration completed, or a release is ready without direct evidence.
