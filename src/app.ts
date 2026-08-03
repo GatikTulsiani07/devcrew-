@@ -2,7 +2,14 @@ import { Hono } from "hono";
 
 import type { DatabaseHealth } from "./db/health.js";
 import { ApplicationError, jsonError } from "./errors.js";
+import { InMemoryProjectStore } from "./projects/in-memory-project-store.js";
+import {
+  createProjectService,
+  type ProjectService,
+} from "./projects/project-service.js";
+import { createProjectRoutes } from "./projects/routes.js";
 import { resolveRequestId, type RequestIdGenerator } from "./request-id.js";
+import { preparedRepositories } from "./repositories/prepared-repositories.js";
 
 type AppEnv = {
   Variables: {
@@ -13,11 +20,16 @@ type AppEnv = {
 export interface AppDependencies {
   databaseHealth: DatabaseHealth;
   generateRequestId?: RequestIdGenerator;
+  projectService?: ProjectService;
 }
 
 export function createApp({
   databaseHealth,
   generateRequestId,
+  projectService = createProjectService({
+    store: new InMemoryProjectStore(),
+    preparedRepositories,
+  }),
 }: AppDependencies): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
@@ -55,6 +67,8 @@ export function createApp({
       database: "connected",
     });
   });
+
+  app.route("/api/v1/projects", createProjectRoutes(projectService));
 
   app.notFound((c) =>
     jsonError(c, new ApplicationError("NOT_FOUND", 404, "Route not found")),
