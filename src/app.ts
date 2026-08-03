@@ -2,13 +2,35 @@ import { Hono } from "hono";
 
 import type { DatabaseHealth } from "./db/health.js";
 import { ApplicationError, jsonError } from "./errors.js";
+import { resolveRequestId, type RequestIdGenerator } from "./request-id.js";
+
+type AppEnv = {
+  Variables: {
+    requestId: string;
+  };
+};
 
 export interface AppDependencies {
   databaseHealth: DatabaseHealth;
+  generateRequestId?: RequestIdGenerator;
 }
 
-export function createApp({ databaseHealth }: AppDependencies): Hono {
-  const app = new Hono();
+export function createApp({
+  databaseHealth,
+  generateRequestId,
+}: AppDependencies): Hono<AppEnv> {
+  const app = new Hono<AppEnv>();
+
+  app.use("*", async (c, next) => {
+    const requestId = resolveRequestId(
+      c.req.header("X-Request-Id"),
+      generateRequestId,
+    );
+
+    c.set("requestId", requestId);
+    c.header("X-Request-Id", requestId);
+    await next();
+  });
 
   app.get("/health", (c) =>
     c.json({

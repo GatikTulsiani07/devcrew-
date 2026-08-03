@@ -1,30 +1,20 @@
-# Devcrew Backend Worktree
+# Devcrew Main Worktree Guide
 
 ## Worktree Identity
 
-- Directory: `/Users/suniltulsiani/Desktop/devcrew-backend`
-- Branch: `feat/orchestrator`
-- Role: backend and orchestration owner
+- Directory: `/Users/suniltulsiani/Desktop/devcrew`
+- Branch: `main`
+- Role: integration and release owner
 
-If the directory or branch does not match this identity, stop before editing.
+Stop before editing if the current directory or branch does not match this identity.
 
 ## Repository Model
 
-Devcrew uses one Git repository with multiple worktrees and branches. Each
-worktree is a complete checkout, so repeated project files are expected. Never
-delete a file merely because it also appears in another worktree.
-
-This worktree is a standalone Hono backend. It contains no browser application
-and owns no presentation behavior. The UI communicates with this service only
-through coordinated, versioned HTTP JSON contracts.
-
-Canonical product documentation lives under
-`/Users/suniltulsiani/Desktop/devcrew-docs/`, and the research audit lives in
-the shared reference folder. Do not create local copies of either.
+Devcrew uses one Git repository with multiple worktrees and branches. Each worktree is a complete checkout, so repeated project files are expected. Never delete a file merely because it also appears in another worktree. Preserve branch ownership and shared history.
 
 ## Mandatory Reading Order
 
-Before planning or editing, read completely in this order:
+Before acting, read in this order:
 
 1. `AGENTS.md`
 2. `CODEX.md`
@@ -34,144 +24,63 @@ Before planning or editing, read completely in this order:
 6. `/Users/suniltulsiani/Desktop/devcrew-docs/design-system.md`
 7. `/Users/suniltulsiani/Desktop/devcrew-docs/plan.md`
 8. `/Users/suniltulsiani/Desktop/devcrew-docs/tasks.md`
-9. Relevant source, tests, package configuration, Drizzle configuration, and
-   installed framework guidance
-10. The current task again
+9. Relevant implementation files, tests, configuration, and installed framework guidance
+10. The current task and its acceptance criteria
 
-The shared documents are authoritative. Summarize them only as needed; do not
-reproduce their specifications in this worktree.
+The shared documents are authoritative. Do not create worktree-local copies of the audit or canonical documents.
 
-## Verified Sprint 1 Baseline
+For Next.js changes, read the relevant installed guide in `node_modules/next/dist/docs/` before coding. This repository may use version-specific APIs and conventions.
 
-The verified implementation currently includes only:
+## Shared MVP Constraints
 
-- A standalone Hono HTTP service using strict TypeScript.
-- Zod validation for runtime and Drizzle configuration.
-- `GET /health`.
-- `GET /health/database` using a lightweight database query.
-- Centralized, stable, sanitized JSON errors.
-- An injectable database-health boundary.
-- Separate application creation and network-server startup.
-- Drizzle ORM and Postgres.js connectivity to Supabase PostgreSQL.
-- Focused automated tests.
+- The hackathon MVP is local-first, dark-mode-only, and one deterministic vertical slice.
+- The approved stack is frozen in the canonical documentation; make no undocumented technology changes.
+- The local environment is the authoritative judged environment. A Vercel presentation build is optional.
+- Do not add production authentication, durable databases, autonomous merge, or production deployment to the judged MVP unless the canonical documentation is approved first.
+- Preserve the documented workflow, terminology, contracts, trust boundaries, and deferred scope.
 
-The local server uses configurable `PORT` with a default of `3001`.
-`DATABASE_URL` is the runtime transaction-pooler connection, and Postgres.js
-must use `prepare: false`. `DIRECT_URL` is reserved for Drizzle inspection and
-migrations through the session pooler.
+## Main Worktree Scope
 
-No product schema, authentication, projects, agents, tickets, activity,
-reviews, execution routes, or product persistence are implemented. Do not
-claim planned capabilities exist.
+This worktree owns:
 
-## Backend Ownership
-
-This worktree owns backend behavior only:
-
-- Hono HTTP routes and versioned JSON contracts.
-- Environment and request validation with Zod.
-- Application and domain services.
-- Backend-owned lifecycle and authorization rules when approved and
-  implemented.
-- Drizzle models and migrations when an approved product schema exists.
-- Supabase PostgreSQL access through Drizzle ORM and Postgres.js.
-- Stable JSON errors, secret handling, redaction, and operational evidence.
-- Injectable ports around database, AI, local execution, Git, and other
-  external boundaries.
-- Focused backend tests and verification.
+- Integration and shared product composition
+- Cross-layer compatibility and contract reconciliation
+- Final validation and product polish
+- Release-candidate assembly and release readiness
 
 This worktree must not:
 
-- Build pages, components, navigation, styling, layouts, or branding.
-- Add a Next.js or React application.
-- Import UI modules or make the UI authoritative for backend behavior.
-- Let the UI access Supabase or backend secrets directly.
-- Use process-local memory as authoritative product persistence.
-- Add authentication, product tables, Redis, queues, WebSockets, realtime
-  transport, new services, or deployment systems without approved canonical
-  scope.
-- Perform autonomous merges or deployments.
-- Execute arbitrary or unvalidated shell commands.
+- Become the primary implementation location for isolated UI or backend work
+- Merge unreviewed work
+- Bypass canonical documentation
+- Invent contracts independently
 
-## Backend Engineering Rules
-
-- Preserve the direction `Hono handler -> application service -> domain/port ->
-  controlled adapter`.
-- Keep handlers thin and reusable behavior independent of Hono request objects.
-- Keep application creation importable without binding a port or opening an
-  unexpected connection.
-- Keep network startup separate from application creation.
-- Keep external systems behind narrow injectable interfaces so tests can use
-  deterministic fakes.
-- Validate untrusted values with Zod and strict TypeScript.
-- Return stable, presentation-neutral JSON and never expose raw driver, SDK,
-  subprocess, SQL, filesystem, or stack-trace details.
-- Coordinate contract changes with UI, integration, review, and documentation
-  owners before consumers depend on them.
-- Do not create or apply a product migration without approved schema scope.
-
-## Security and Secret Handling
-
-- Treat requests, environment values, paths, model output, database failures,
-  subprocess results, and external responses as untrusted.
-- Never expose connection URLs, credentials, hosts, passwords, authorization
-  headers, cookies, tokens, private keys, or raw environment objects in source,
-  logs, responses, errors, tests, fixtures, screenshots, or documentation.
-- Report missing or invalid environment variable names without printing their
-  values.
-- Redact before logging, persistence, or response mapping.
-- Use fixed executables, argument arrays, allowlists, bounded output, and
-  timeouts for any approved local execution.
-- Fail closed at server trust boundaries.
+UI implementation belongs to `devcrew-ui`; backend and orchestration implementation belongs to `devcrew-backend`; independent verification belongs to `devcrew-review`; canonical documentation changes belong to `devcrew-docs`.
 
 ## Git Safety
 
-- Inspect `pwd`, branch, and `git status --short` before editing.
-- Treat pre-existing changes as user-owned and preserve them.
+- Inspect `git status --short` and relevant diffs before editing.
+- Preserve pre-existing and unrelated changes.
 - Never use destructive reset or checkout commands without explicit approval.
 - Never force-push or rewrite published history.
 - Never stage unrelated changes.
-- Never stage, commit, merge, rebase, push, or switch branches unless the user
-  explicitly requests the specific operation.
-- Keep changes within the current task and worktree ownership.
-
-## Validation Requirements
-
-Run the strongest relevant repository commands and report exact results:
-
-- Focused tests and affected regression tests.
-- `npm run lint`.
-- `npm run typecheck`.
-- `npm run build`.
-- `npm run db:check` for Drizzle configuration changes.
-- Manual endpoint verification when server behavior changes and it is safe.
-- Secret-exposure review.
-- `git diff --check`.
-
-Keep tests deterministic and inject fakes instead of requiring production
-services. Never weaken tests, types, lint, or security controls to obtain a
-pass. Missing or skipped checks are unverified, not passing.
+- Never commit, merge, rebase, push, or stage unless explicitly requested.
 
 ## Documentation Discipline
 
-- Treat the audit as research input and the files under
-  `/Users/suniltulsiani/Desktop/devcrew-docs/` as canonical platform authority.
-- Never create worktree-local copies of canonical documents.
-- Update canonical documents only in the documentation worktree on its owning
-  branch.
-- Record material architecture, contract, persistence, security, or deployment
-  changes before implementing dependent behavior.
-- When implementation and documentation differ, report the discrepancy and
-  resolve it through the owning worktree.
+- Treat the shared audit and canonical documents as authoritative.
+- Never create local copies or a repository-specific `audit.md`.
+- Update canonical documents only from the `devcrew-docs` worktree.
+- Record and approve material architecture changes there before implementation.
+- Preserve terminology across UI, backend, review, documentation, and integration work.
 
 ## Completion Report
 
-Every handoff must state:
+Every final report must state:
 
-- Files changed and their purpose.
-- Checks run, including pass, fail, or not run.
-- Contract, persistence, security, and consumer impact.
-- Remaining risks and follow-up ownership.
+- Files changed
+- Checks run and exact results
+- Remaining risks, gaps, or unverified behavior
+- Relevant pre-existing worktree changes
 
-Never claim implementation, approval, review, deployment, or a passing check
-without direct evidence.
+Never claim completion, test success, review approval, or release readiness without evidence.

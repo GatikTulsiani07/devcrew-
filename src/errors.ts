@@ -1,7 +1,14 @@
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
+type RequestContext = Context<{
+  Variables: {
+    requestId: string;
+  };
+}>;
+
 export interface ErrorBody {
+  requestId: string;
   status: "error";
   error: {
     code: string;
@@ -20,9 +27,13 @@ export class ApplicationError extends Error {
   }
 }
 
-export function jsonError(c: Context, error: ApplicationError) {
+export function jsonError(c: RequestContext, error: ApplicationError) {
+  const requestId = c.get("requestId");
+  c.header("X-Request-Id", requestId);
+
   return c.json<ErrorBody>(
     {
+      requestId,
       status: "error",
       error: {
         code: error.code,

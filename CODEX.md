@@ -1,393 +1,265 @@
-# Devcrew Backend Codex Operating Manual
+# Devcrew Main Worktree Codex Manual
 
 ## 1. Purpose and Authority
 
-This is the permanent operating manual for Codex in the Devcrew backend
-worktree. It governs investigation, planning, implementation, validation, and
-handoff for backend and orchestration work.
+This manual governs Codex work in the main Devcrew integration worktree. It is permanent operating guidance, not a product specification. The user's current task defines the authorized change; the canonical shared documents define product scope, architecture, design, delivery sequence, and backlog.
 
-Instruction precedence is:
+When sources conflict, follow platform instructions, the user's explicit request, `AGENTS.md`, this manual, and then the canonical documents according to their stated authority. Do not silently resolve a material conflict that changes scope, architecture, security, data, contracts, or release behavior.
 
-1. System and platform safety requirements.
-2. The user's current explicit request.
-3. The nearest applicable `AGENTS.md`.
-4. The canonical shared audit and Devcrew documentation.
-5. This manual.
-6. Existing repository conventions that do not conflict with higher authority.
+## 2. Worktree Role and Ownership Boundary
 
-The canonical documents define product scope, architecture, design language,
-delivery sequence, and backlog. This manual applies them to this worktree; it
-does not replace or redefine them. When requirements conflict or a material
-decision lacks authority, stop before the affected edit and report the exact
-conflict.
+- Directory: `/Users/suniltulsiani/Desktop/devcrew`
+- Branch: `main`
+- Role: integration and release owner
 
-## 2. Worktree Identity and Ownership Boundary
+Devcrew is one Git repository with multiple complete worktrees. This worktree owns integration, shared product composition, cross-layer compatibility, final validation, release-candidate assembly, and release readiness.
 
-The required identity is:
+It does not replace the owning branches:
 
-- Directory: `/Users/suniltulsiani/Desktop/devcrew-backend`.
-- Branch: `feat/orchestrator`.
-- Role: backend and orchestration owner.
+- `devcrew-ui` / `feat/ui-shell`: UI implementation and client interaction
+- `devcrew-backend` / `feat/orchestrator`: backend, orchestration, domain behavior, and server adapters
+- `devcrew-review` / `review/integration`: independent verification and merge-readiness decisions
+- `devcrew-docs` / `docs/context`: canonical product and engineering documentation
 
-Devcrew uses one Git repository with multiple worktrees. Repeated files across
-worktrees are normal and must not be treated as duplicates to remove.
+Do not use `main` as the primary location for an isolated UI or backend feature. Do not integrate work that lacks independent review evidence, bypass canonical requirements, or invent a cross-layer contract independently.
 
-This worktree is a standalone Hono HTTP service. It owns backend behavior only:
+## 3. Mandatory Reading Order
 
-- HTTP transport contracts and Hono routes.
-- Environment and request validation.
-- Application services and domain behavior.
-- Lifecycle and authorization enforcement when approved and implemented.
-- Drizzle schema and migration ownership when product schema work is approved.
-- Supabase PostgreSQL persistence through Drizzle ORM and Postgres.js.
-- Server-side configuration, secrets, redaction, and stable API errors.
-- Controlled AI, Codex CLI, Git, and other external adapters when approved.
-- Backend-focused automated and manual verification.
+Before making changes, read completely and in this exact order:
 
-It does not own presentation, pages, layout, styling, branding, navigation, or
-client-only interaction. This repository must not contain a Next.js or React
-application. The browser UI consumes versioned HTTP JSON contracts and never
-imports backend modules or accesses Supabase directly.
+1. `AGENTS.md`
+2. `CODEX.md`
+3. `/Users/suniltulsiani/Desktop/Guildly-Reference/audit.md`
+4. `/Users/suniltulsiani/Desktop/devcrew-docs/spec.md`
+5. `/Users/suniltulsiani/Desktop/devcrew-docs/architecture.md`
+6. `/Users/suniltulsiani/Desktop/devcrew-docs/design-system.md`
+7. `/Users/suniltulsiani/Desktop/devcrew-docs/plan.md`
+8. `/Users/suniltulsiani/Desktop/devcrew-docs/tasks.md`
+9. Relevant implementation files, tests, configuration, dependency manifests, and installed framework guidance
+10. The current task, acceptance criteria, and affected review evidence
 
-## 3. Verified Implementation Boundary
+The shared files are authoritative and must not be copied into this worktree. For Next.js changes, read the relevant installed documentation in `node_modules/next/dist/docs/` before coding and follow its version-specific conventions and deprecations.
 
-The verified Sprint 1 implementation consists of:
+## 4. Repository and Worktree Inspection
 
-- A Hono application that can be imported without binding a network port.
-- Separate server startup with configurable `PORT`, defaulting to `3001`.
-- Zod environment validation.
-- `GET /health`.
-- `GET /health/database`.
-- A lightweight database connectivity query behind an injectable interface.
-- Centralized, stable, sanitized JSON error responses.
-- A module-scoped Postgres.js client used through Drizzle ORM.
-- Automated health, failure-sanitization, and environment tests.
+Start each task with read-only inspection:
 
-Runtime database access uses `DATABASE_URL` through the Supabase transaction
-pooler and must configure Postgres.js with `prepare: false`. Drizzle inspection
-and migrations use `DIRECT_URL` through the session pooler.
+1. Run `pwd` and `git branch --show-current`; stop if they do not match this manual.
+2. Run `git status --short` and inspect relevant diffs, including staged changes if any.
+3. Identify pre-existing user changes and keep them separate from session work.
+4. Confirm the task belongs to main integration ownership.
+5. Inspect the incoming branch, commits, diff, base, review decision, and acceptance evidence when integrating work.
+6. Read every file to be changed plus direct consumers, producers, tests, schemas, types, configuration, and relevant local Next.js guidance.
+7. Inspect `package.json` and its lockfile before choosing package-manager commands.
+8. Search for existing contracts, components, utilities, and conventions before adding anything.
 
-No product schema, authentication, project routes, agent routes, ticket routes,
-activity transport, review workflow, execution workflow, or product persistence
-exists yet. Approved future architecture is not evidence of implementation.
+Repeated files across worktrees are normal because every worktree is a checkout of the same repository. Never remove a file merely because another worktree contains it.
 
-## 4. Mandatory Reading Order
+## 5. Task Planning
 
-Before planning or modifying files, read completely in this exact order:
+Before implementation:
 
-1. `AGENTS.md`.
-2. `CODEX.md`.
-3. `/Users/suniltulsiani/Desktop/Guildly-Reference/audit.md`.
-4. `/Users/suniltulsiani/Desktop/devcrew-docs/spec.md`.
-5. `/Users/suniltulsiani/Desktop/devcrew-docs/architecture.md`.
-6. `/Users/suniltulsiani/Desktop/devcrew-docs/design-system.md`.
-7. `/Users/suniltulsiani/Desktop/devcrew-docs/plan.md`.
-8. `/Users/suniltulsiani/Desktop/devcrew-docs/tasks.md`.
-9. Relevant source, tests, package scripts, compiler and lint configuration,
-   Drizzle configuration, environment example, and installed framework
-   guidance.
-10. The current task again.
+1. Restate the requested outcome, permitted files, acceptance criteria, and prohibited actions.
+2. Map the task to the applicable canonical requirements and backlog item.
+3. Identify affected owners, contracts, trust boundaries, lifecycle states, and user journeys.
+4. Separate pre-existing changes from the proposed diff.
+5. Choose the smallest complete and reversible approach.
+6. Define focused checks, integration gates, and manual verification before editing.
+7. Stop for direction if completion requires new authority or a material undocumented decision.
 
-Do not substitute memory, summaries, or worktree-local copies. The audit is
-research input; the files under `/Users/suniltulsiani/Desktop/devcrew-docs/`
-are canonical platform authority.
+For larger integration work, keep a short live plan and update it as evidence changes. Never treat a plan or backlog entry as proof that implementation exists.
 
-## 5. Repository Inspection Procedure
+## 6. Scope Control
 
-Before editing:
+- Implement only the user's authorized scope and behavior supported by canonical documentation.
+- Preserve current working behavior unless the task explicitly authorizes a change.
+- Avoid unrelated cleanup, broad refactors, speculative abstractions, dependency churn, and incidental renames.
+- Route substantial isolated UI or backend work to its owning worktree.
+- Treat the Guildly audit as research and design direction, not a screen specification, copy source, or authority to clone Guildly.
+- Keep deferred capabilities deferred unless the canonical documentation is updated and approved first.
+- Ask before making assumptions that alter architecture, security, data, public contracts, product behavior, or the MVP boundary.
 
-1. Run `pwd` and confirm the backend directory.
-2. Run `git branch --show-current` and confirm `feat/orchestrator`.
-3. Run `git status --short` and record all pre-existing changes.
-4. Use `rg --files` and `rg` to locate relevant routes, services, boundaries,
-   schemas, tests, configuration, and consumers.
-5. Inspect target files and their current diff.
-6. Search call sites before changing a shared type, schema, lifecycle, error, or
-   contract.
-7. Inspect installed versions and package scripts instead of assuming behavior.
-8. Read installed Hono, Drizzle, Postgres.js, Zod, or Node guidance for
-   version-sensitive work.
+The hackathon MVP is local-first, dark-mode-only, and one deterministic vertical slice: connect a prepared repository, submit one engineering task, obtain a Manager plan and human approval, produce a Full Stack Developer result, validate through DevOps, obtain a Reviewer verdict, and retain visible activity and final results.
 
-If the path or branch does not match, stop without editing. A dirty worktree is
-user-owned state: preserve unrelated changes and distinguish pre-existing
-failures from task results.
+Do not add production authentication, durable persistence, autonomous merge, production deployment, or other deferred infrastructure to the judged MVP without an approved canonical documentation change.
 
-## 6. Planning and Scope Control
+## 7. Approved MVP Stack
 
-For each task:
+The canonical documentation freezes this summary:
 
-1. Restate the requested outcome and acceptance criteria.
-2. Map it to the canonical specification, architecture, plan, and backlog.
-3. Identify affected HTTP contracts, lifecycle states, trust boundaries,
-   persistence behavior, consumers, and owners.
-4. Separate required work from optional cleanup and deferred work.
-5. Choose the smallest coherent implementation that completes approved scope.
-6. Define verification before editing.
-7. Surface documentation and cross-worktree coordination needs before dependent
-   implementation.
+- Next.js App Router, React, strict TypeScript, Node.js runtime, and npm
+- Tailwind CSS, shadcn/ui where useful, Lucide React, and restrained transitions
+- Next.js Route Handlers under `app/api`, Zod, structured JSON errors, and Server-Sent Events
+- Official OpenAI JavaScript/TypeScript SDK and OpenAI Responses API with structured outputs
+- Controlled server-side Codex CLI and Git adapters with allowlists, timeouts, redaction, and worktree-safe operations
+- Deterministic in-memory MVP persistence behind replaceable store interfaces
+- Local environment as the authoritative judged environment
+- Optional Vercel presentation build that does not claim local shell or Git execution
+- Dark-mode-only MVP
 
-Do not introduce speculative abstractions, dependencies, infrastructure, or
-refactors. Material architecture decisions must be approved in the canonical
-documentation before implementation.
+Do not introduce undocumented frameworks, databases, queues, authentication providers, microservices, deployment systems, Redis, Kafka, Kubernetes, browser-side shell execution, or other technology changes.
 
-The current foundation does not authorize authentication, product tables,
-Redis, queues, WebSockets, realtime transport, additional services, or
-deployment work. Add none of them unless a later explicit task and canonical
-scope approve them.
+## 8. Role-Specific Engineering Rules
 
-## 7. Approved Backend Stack and Configuration
+Main integration work must:
 
-The approved backend foundation is:
+- Assemble only bounded, reviewed UI and backend deliverables.
+- Reconcile request, response, error, lifecycle, state, navigation, and terminology differences across layers.
+- Preserve server authority and presentation/domain separation.
+- Resolve conflicts semantically, preserving intentional work from both sides.
+- Return integration failures to the responsible owner when the correction is an isolated feature change.
+- Reopen review for materially changed scope.
+- Run focused checks per integration unit and full release gates on the assembled candidate.
 
-- Hono as a standalone Node HTTP service.
-- Strict TypeScript and npm.
-- Zod for environment and request validation.
-- Drizzle ORM for schema definitions, queries, inspection, and migrations.
-- Postgres.js as the database driver.
-- Supabase PostgreSQL as the backend-only datastore.
-- Stable JSON errors and versioned HTTP JSON product contracts.
-- Local port `3001` by default, configurable through validated `PORT`.
+Respect other owners:
 
-Database configuration is split deliberately:
+- UI owns the application shell, navigation, pages, components, design-system implementation, accessibility, responsive behavior, client workflow state, and loading, empty, error, and success states. It must not authorize server behavior, expose credentials, execute shell or Git in the browser, redefine backend contracts, or add a light theme.
+- Backend owns Route Handlers, validation, domain and lifecycle enforcement, in-memory stores, OpenAI Responses integration, Codex and Git adapters, server secrets, Server-Sent Events, and structured errors. It must not leak secrets, run arbitrary unvalidated commands, import presentation code, add unapproved infrastructure, or autonomously merge or deploy.
+- Review owns independent requirement, architecture, contract, security, accessibility, performance, regression, and merge-readiness assessment. It must not implement features, silently fix code, approve incomplete evidence, claim unsupported passes, or merge without explicit user direction.
 
-- `DATABASE_URL` is required at runtime and targets the transaction pooler.
-- Postgres.js must use `prepare: false` on the runtime connection.
-- `DIRECT_URL` is required for Drizzle inspection and migration commands and
-  targets the session pooler.
-- Neither connection value may appear in source, output, logs, tests, fixtures,
-  errors, screenshots, or documentation.
+## 9. Security and Secret Handling
 
-Do not use process-local memory as authoritative product persistence. Do not
-create or apply product migrations until the schema and acceptance criteria are
-explicitly approved.
+- Treat the client as untrusted; authoritative validation, project boundaries, lifecycle enforcement, persistence, and protected operations remain server-side.
+- Validate all untrusted input with documented schemas and fail closed at security boundaries.
+- Keep OpenAI credentials and all secret values server-side and out of source, client bundles, URLs, responses, logs, activity, screenshots, fixtures, review evidence, and final reports.
+- Use secret references and least privilege; audit access without recording values.
+- Permit only controlled, validated, allowlisted Codex CLI and Git operations with bounded arguments, timeouts, cancellation, redaction, and safe working directories.
+- Never execute arbitrary user-provided shell commands or expose server execution to browser code.
+- Do not claim production authentication or durable isolation exists in the hackathon MVP when it is deferred.
 
-## 8. Backend Engineering Rules
+## 10. Contract and API Discipline
 
-Use this dependency direction unless canonical architecture defines a more
-specific one:
-
-`Hono handler -> application service -> domain/port -> controlled adapter`
-
-- Keep Hono handlers thin: parse, validate, call a service, and map stable
-  results or errors.
-- Keep business and lifecycle rules outside transport code.
-- Keep application and domain logic independent of HTTP request objects.
-- Keep application creation separate from network-server startup.
-- Ensure tests can import and construct the application without binding a port,
-  opening an unexpected connection, or requiring live infrastructure.
-- Preserve narrow injectable interfaces around database, AI, subprocess, Git,
-  filesystem, and other external behavior.
-- Keep the reusable Postgres.js client at module scope and close it during
-  controlled shutdown.
-- Accept untrusted values as `unknown` and narrow them with Zod.
-- Model lifecycle transitions explicitly once those lifecycles are approved.
-- Keep initialization bounded and free from unexpected side effects.
-- Never expose raw store, driver, SDK, SQL, subprocess, filesystem, or error
-  objects through HTTP contracts.
-
-## 9. Contract and Error Discipline
-
-The UI communicates with this backend only through coordinated HTTP JSON
-contracts.
-
-- Define product routes under an approved versioning scheme before UI
-  integration.
-- Define request input, response output, status codes, stable error codes,
-  lifecycle effects, and recovery behavior.
-- Use one authoritative schema or type where practical.
-- Validate path, query, header, and body inputs with Zod.
-- Use accurate HTTP statuses; never return success for an error outcome.
-- Preserve centralized JSON error mapping.
-- Keep messages machine-readable, actionable, stable, and non-sensitive.
-- Do not serialize raw exceptions or stack traces.
-- Coordinate breaking changes across backend, UI, review, integration, and
-  documentation owners.
-- Do not claim a route or capability exists merely because canonical documents
-  describe future intent.
-
-The current verified contracts remain only `GET /health` and
-`GET /health/database`.
-
-## 10. Security and Secret Handling
-
-- Treat requests, paths, repository URLs, model output, database failures,
-  subprocess results, environment values, and external responses as untrusted.
-- Validate at the server boundary and fail closed.
-- Keep all credentials server-side.
-- Never log authorization headers, cookies, tokens, connection values, raw
-  environment objects, private keys, or secret-bearing payloads.
-- Environment validation may identify missing or invalid variable names but
-  must never print their values.
-- Redact command and driver output before persistence, logging, or response
-  mapping.
-- Prevent command injection with fixed executables, argument arrays,
-  allowlists, validated paths, timeouts, and bounded output.
-- Prevent path traversal by resolving and enforcing approved roots.
-- Return safe errors without internal hosts, credentials, SQL, filesystem paths,
-  SDK payloads, subprocess details, or stack traces.
-- Do not invent authentication. If later approved, authorization remains
-  backend-owned and must be enforced server-side.
+- Define or verify backend contracts before dependent UI integration.
+- Contracts must cover inputs, outputs, Zod validation, structured errors, lifecycle effects, project context, ordering, retry behavior, cancellation, and security expectations.
+- Keep the server response authoritative; client state may present or optimistically stage intent but must reconcile with server truth.
+- Invalid lifecycle transitions must fail consistently and actionably.
+- Server-Sent Events are one-way activity updates; preserve ordering, correlation, recovery behavior, and server boundaries.
+- Long-running work must retain its project, work-item, initiating-user, and agent relationships across queued, active, stopped, completed, failed, and reviewed states.
+- Breaking contract changes require a documented migration plan, coordinated producer and consumer updates, renewed verification, and review.
+- Do not create a second source of truth for schemas, status vocabulary, or API behavior.
 
 ## 11. Testing and Validation
 
-Validation must be proportional to risk and based on commands actually run.
+Use scripts declared by the repository and the package manager established by its lockfile. Select checks proportionate to the change and record exact commands and outcomes.
 
-Cover as applicable:
+Applicable gates include:
 
-- Success and expected failure behavior.
-- Boundary and malformed inputs.
-- Environment names without value disclosure.
-- Database success and sanitized failure through injected fakes.
-- Contract status codes and response shapes.
-- Valid and invalid lifecycle transitions once implemented.
-- Project isolation and authorization once implemented.
-- Retry, stop, cancellation, ordering, and duplicate prevention once
-  implemented.
-- Adapter behavior without unsafe production mutations.
+- ESLint and strict TypeScript checks
+- Focused unit, component, contract, integration, regression, and failure-path tests
+- Next.js production build
+- Manual verification of the critical local workflow
+- Security, accessibility, performance, reliability, and secret-exposure review
+- Final diff inspection, `git diff --check`, and `git status --short`
 
-Before handoff, run the strongest relevant available checks:
+Test success, empty, loading, error, retry, cancellation, invalid transition, partial failure, and boundary behavior where relevant. Verify producer and consumer contracts independently and together. Missing automation is a disclosed gap, never a passing result. Never suppress failures or declare release readiness while a required gate fails.
 
-1. Focused tests.
-2. Affected regression tests.
-3. `npm run lint`.
-4. `npm run typecheck`.
-5. `npm run build`.
-6. `npm run db:check` when Drizzle or database configuration is affected.
-7. Manual endpoint verification when server behavior changes and it is safe.
-8. Security and secret-exposure review.
-9. `git diff --check`.
+Documentation-only changes normally require scoped Markdown structure, path, terminology, diff, and whitespace validation rather than unrelated application builds.
 
-Use repository scripts. Keep tests deterministic by injecting clocks,
-identifiers, database boundaries, model responses, subprocesses, and external
-I/O. Never call a production service merely to prove a unit test. Never weaken
-tests, types, lint, or security controls to obtain a pass. Report unavailable,
-skipped, and failing checks precisely.
+## 12. Accessibility
 
-Documentation-only changes require Markdown structure, fence, path, terminology,
-scope, final-diff, and whitespace validation. Application builds are not needed
-unless executable behavior or configuration changed.
+User-facing work targets WCAG 2.2 Level AA. When UI is integrated or changed, verify:
 
-## 12. Git and Worktree Safety
+- Semantic HTML, landmarks, logical headings, labels, descriptions, and accessible control names
+- Complete keyboard operation, predictable focus management, and visible focus indicators
+- Sufficient contrast in every approved dark-theme state and non-color state cues
+- Zoom, text resize, reflow, long content, and representative responsive widths
+- Accessible loading, validation, asynchronous status, and error announcements
+- Reduced-motion behavior and alternatives for meaningful visuals
+- Loading, empty, error, disabled, saving, unsaved, success, and partial-data states
 
-- Inspect `git status --short` before and after work.
-- Modify only files required by the current task.
-- Preserve pre-existing and unrelated changes.
-- Never use destructive reset or forced checkout without explicit approval.
+Automated accessibility checks do not replace manual keyboard and assistive-technology-oriented review.
+
+## 13. Git and Worktree Safety
+
+- Inspect status and diffs before editing and before reporting.
+- Preserve unrelated and pre-existing user work; never make the worktree appear clean by discarding changes.
+- Never delete repeated files simply because they exist in another worktree.
+- Never use destructive reset or checkout operations without explicit approval.
 - Never force-push or rewrite published history.
 - Never stage unrelated changes.
-- Do not stage, commit, amend, merge, rebase, push, switch branches, or deploy
-  unless the user explicitly requests that specific action.
-- Do not bypass hooks or checks without explicit approval and a recorded reason.
-- Use non-interactive, worktree-safe Git operations and inspect the final diff.
-- Never delete files because matching paths exist in another worktree.
+- Do not stage, commit, amend, push, merge, rebase, cherry-pick, or open a pull request unless explicitly requested.
+- Before an authorized integration, confirm source, target, revision, operation, review evidence, and rollback implications.
+- Keep generated output, temporary files, secrets, and conflict markers out of the final diff.
 
-## 13. Review and Integration
+## 14. Review and Integration Procedure
 
-1. Begin from an approved task and acceptance criteria.
-2. Implement and validate the bounded change in this worktree.
-3. Record affected contracts, persistence behavior, verification evidence,
-   security impact, risks, and dependent UI behavior.
-4. Submit the change to the independent review owner.
-5. Address findings in the backend worktree and rerun affected verification.
-6. Advance only evidence-backed reviewed work to the integration worktree.
-7. Treat integration failures as new evidence requiring owner correction and,
-   where material, renewed review.
+For each proposed integration unit:
 
-Review approval does not replace integration testing, and integration does not
-override unresolved findings.
+1. Identify its source branch or commits, base, task, acceptance criteria, changed scope, and review outcome.
+2. Inspect the complete incoming diff and verify worktree ownership and documentation conformance.
+3. Confirm backend producer evidence and UI consumer expectations agree.
+4. Reject unresolved blocking findings or incomplete evidence; review approval does not replace integration testing.
+5. Apply only the explicitly authorized Git operation.
+6. Resolve conflicts by intent and contract semantics, not mechanically.
+7. Verify navigation, state reconciliation, lifecycle behavior, errors, security, accessibility, and terminology across layers.
+8. Run focused tests, then the complete applicable integration and release gates.
+9. Return isolated defects to the owning worktree; materially changed fixes require renewed review.
+10. Assemble a release candidate only when no release-blocking findings or required-gate failures remain.
 
-## 14. Documentation Rules
+Never merge unreviewed work or infer approval from silence.
 
-- Treat `/Users/suniltulsiani/Desktop/Guildly-Reference/audit.md` as shared
-  research input.
-- Treat `/Users/suniltulsiani/Desktop/devcrew-docs/spec.md`,
-  `/Users/suniltulsiani/Desktop/devcrew-docs/architecture.md`,
-  `/Users/suniltulsiani/Desktop/devcrew-docs/design-system.md`,
-  `/Users/suniltulsiani/Desktop/devcrew-docs/plan.md`, and
-  `/Users/suniltulsiani/Desktop/devcrew-docs/tasks.md` as canonical platform
-  documentation.
-- Never create local copies of those sources.
-- Update canonical platform documents only from their documentation worktree and
-  owning branch.
-- Record material product, architecture, contract, lifecycle, persistence,
-  security, or deployment changes before dependent implementation.
-- Preserve shared terminology and state meanings.
-- When code and canonical documentation disagree, verify the discrepancy,
-  report it, and correct the proper source through its owner.
+## 15. Documentation Rules
 
-## 15. Prohibited Actions
+- Treat the audit and five canonical documents listed by exact absolute path in the mandatory reading order as the shared authority for research, product, and engineering decisions.
+- Never create a local audit, local canonical-document copies, or competing specifications in an implementation worktree.
+- Update canonical documents only from the `devcrew-docs` worktree and only within authorized scope.
+- Record and approve material product, architecture, contract, design, stack, deployment, or persistence changes before implementation.
+- Keep AGENTS and Codex manuals operational; summarize constraints and link to authority instead of duplicating full specifications.
+- Preserve shared terminology and lifecycle labels across UI, backend, review, documentation, and integration.
+- If implementation and canonical documentation disagree, surface the discrepancy and correct the appropriate source through its owning workflow.
 
-Codex must not:
+## 16. Prohibited Actions
 
-- Skip identity checks, mandatory reading, or relevant implementation
-  inspection.
-- Build UI features or add a frontend application to this worktree.
-- Allow the UI to import backend modules or access Supabase directly.
-- Add unapproved authentication, product schema, Redis, queues, WebSockets,
-  realtime transport, services, or deployment infrastructure.
-- Use non-durable process state as authoritative product persistence.
-- Execute arbitrary, unvalidated, unbounded, or secret-bearing commands.
-- Put secrets in source, logs, responses, activity, errors, tests, fixtures,
-  reviews, screenshots, or documentation.
-- Trust client validation, lifecycle state, authorization claims, paths, or AI
-  output.
-- Put reusable business logic in Hono handlers.
-- Expose internal database, SDK, subprocess, filesystem, or error details.
-- Introduce undocumented technologies or competing architecture.
-- Modify canonical documentation outside its owning worktree.
-- Create local canonical-document copies.
-- Weaken checks or claim unperformed validation.
-- Modify unrelated files or overwrite user-owned changes.
-- Stage, commit, merge, push, switch branches, or deploy without explicit
-  instruction.
+Do not:
 
-## 16. Definition of Done
+- Rewrite architecture or change the frozen stack without prior documentation approval.
+- Implement large branch-owned features on `main` or bypass independent review.
+- Invent requirements, contracts, data models, lifecycle states, workflows, or release claims.
+- Add production authentication, durable databases, autonomous merge, or production deployment to the judged MVP without approval.
+- Add a light theme or theme switcher to the hackathon MVP.
+- Run arbitrary shell commands from user input or browser code.
+- Expose secrets or sensitive configuration in any artifact.
+- Import presentation code into backend modules or make client state authoritative.
+- Remove shared assets, repeated worktree files, or working functionality without explicit authority.
+- Modify canonical documentation from this worktree or create repository-specific copies.
+- Hide failures with skipped checks, unsafe casts, disabled rules, or misleading reports.
+- Perform unrelated cleanup, speculative refactors, destructive Git operations, or unauthorized publication.
 
-A backend task is done only when all applicable conditions are evidenced:
+## 17. Definition of Done
 
-- Worktree identity and pre-existing status were inspected.
-- Mandatory sources and relevant implementation guidance were read.
-- The task maps to approved requirements and stays within backend ownership.
-- HTTP contracts and lifecycle effects are explicit, stable, validated, and
-  coordinated.
-- Domain behavior is separated from transport and controlled adapters.
-- Application construction remains separate from server startup.
-- External boundaries remain injectable and testable.
-- Secrets, configuration, paths, commands, database output, model output, and
-  errors respect server trust boundaries.
-- Focused tests and applicable lint, typecheck, build, Drizzle, manual,
-  security, and diff checks pass.
-- No unrelated file was changed, staged, deleted, or overwritten.
-- Documentation impact and review or integration needs are identified.
-- Remaining risks and unrun checks are reported truthfully.
+A main-worktree task is done only when:
 
-If an applicable condition is missing, report the precise gap instead of
-declaring completion.
+- The authorized outcome and acceptance criteria are satisfied without unsupported scope.
+- Worktree ownership, canonical requirements, architecture, and frozen MVP constraints are preserved.
+- Incoming work has adequate independent review and all material post-review changes were re-reviewed.
+- UI/backend contracts and complete affected journeys are compatible.
+- Relevant automated and manual checks pass, with exact evidence recorded.
+- Security, secret handling, accessibility, error, and lifecycle behavior are verified where applicable.
+- The diff is minimal, cohesive, reviewable, and contains no unrelated user work, conflict markers, secrets, debug artifacts, or accidental generated files.
+- Documentation remains consistent and any required canonical change went through `devcrew-docs` before implementation.
+- `git diff` and `git status --short` have been reviewed.
+- No blocking finding, required-gate failure, or undisclosed verification gap remains.
 
-## 17. Required Final Report Format
+Release readiness additionally requires validation of the exact assembled candidate, the deterministic critical workflow in the authoritative local environment, applicable full gates, configuration, operational constraints, and residual risk.
 
-Lead with the outcome, then report:
+## 18. Required Final Report
 
-### Files changed
+Use this structure:
 
-- Each changed file and its purpose.
+### Outcome
 
-### Checks run
+State what was completed or the precise blocker. Do not overstate readiness.
 
-- Exact command or manual check.
-- Pass, fail, or not run.
-- Relevant result and cause of any failure.
+### Files Changed
 
-### Contract and architecture impact
+List every changed file and summarize its effect. Separate pre-existing worktree changes.
 
-- Affected API, lifecycle, security, persistence, execution, or consumer
-  behavior.
-- Canonical documentation impact and coordination required.
+### Checks Run
 
-### Remaining risks and follow-up
+List each exact command or manual check with `passed`, `failed`, or `not run`, plus relevant evidence.
 
-- Known limitations, unverified behavior, pre-existing failures, and the owning
-  worktree.
+### Remaining Risks
 
-Never state that work is complete, reviewed, merged, deployed, or passing
-without direct evidence.
+List unresolved risks, gaps, assumptions, deferred verification, or `None` when evidence supports that conclusion.
+
+Never claim that tests passed, review approved, integration completed, or a release is ready without direct evidence.
