@@ -1,8 +1,19 @@
-export type TaskStatus = "WAITING_FOR_APPROVAL";
+export type TaskStatus =
+  | "WAITING_FOR_APPROVAL"
+  | "PLAN_APPROVED"
+  | "PLAN_REJECTED";
+
+export type PlanDecisionType = "APPROVE" | "REJECT";
 
 export interface TaskPlan {
   summary: string;
   steps: readonly string[];
+}
+
+export interface PlanDecision {
+  decision: PlanDecisionType;
+  reason?: string;
+  decidedAt: string;
 }
 
 export interface TaskSnapshot {
@@ -12,6 +23,7 @@ export interface TaskSnapshot {
   description: string;
   status: TaskStatus;
   plan: TaskPlan;
+  planDecision?: PlanDecision;
   createdAt: string;
   updatedAt: string;
 }
@@ -21,8 +33,14 @@ export interface CreateTaskInput {
   description: string;
 }
 
+export interface PlanDecisionInput {
+  decision: PlanDecisionType;
+  reason?: string;
+}
+
 export interface TaskStore {
   create(task: TaskSnapshot): Promise<TaskSnapshot>;
+  update(task: TaskSnapshot): Promise<TaskSnapshot>;
   findByProjectAndId(
     projectId: string,
     taskId: string,
