@@ -10,6 +10,13 @@ import {
 import { createProjectRoutes } from "./projects/routes.js";
 import { resolveRequestId, type RequestIdGenerator } from "./request-id.js";
 import { preparedRepositories } from "./repositories/prepared-repositories.js";
+import { createDeterministicPlanner } from "./tasks/deterministic-planner.js";
+import { InMemoryTaskStore } from "./tasks/in-memory-task-store.js";
+import { createTaskRoutes } from "./tasks/routes.js";
+import {
+  createTaskService,
+  type TaskService,
+} from "./tasks/task-service.js";
 
 type AppEnv = {
   Variables: {
@@ -21,16 +28,24 @@ export interface AppDependencies {
   databaseHealth: DatabaseHealth;
   generateRequestId?: RequestIdGenerator;
   projectService?: ProjectService;
+  taskService?: TaskService;
 }
 
-export function createApp({
-  databaseHealth,
-  generateRequestId,
-  projectService = createProjectService({
-    store: new InMemoryProjectStore(),
-    preparedRepositories,
-  }),
-}: AppDependencies): Hono<AppEnv> {
+export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
+  const { databaseHealth, generateRequestId } = dependencies;
+  const projectService =
+    dependencies.projectService ??
+    createProjectService({
+      store: new InMemoryProjectStore(),
+      preparedRepositories,
+    });
+  const taskService =
+    dependencies.taskService ??
+    createTaskService({
+      projectService,
+      planner: createDeterministicPlanner(),
+      store: new InMemoryTaskStore(),
+    });
   const app = new Hono<AppEnv>();
 
   app.use("*", async (c, next) => {
@@ -69,6 +84,7 @@ export function createApp({
   });
 
   app.route("/api/v1/projects", createProjectRoutes(projectService));
+  app.route("/api/v1/projects", createTaskRoutes(taskService));
 
   app.notFound((c) =>
     jsonError(c, new ApplicationError("NOT_FOUND", 404, "Route not found")),
