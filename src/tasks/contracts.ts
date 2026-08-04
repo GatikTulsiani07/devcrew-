@@ -37,6 +37,11 @@ export const executeTaskPathParamsSchema = getTaskPathParamsSchema;
 
 export const executeTaskRequestSchema = z.object({}).strict();
 
+export const validateTaskPathParamsSchema = getTaskPathParamsSchema;
+
+export const validateTaskRequestSchema = z.object({}).strict();
+
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
 export type PlanDecisionRequest = z.infer<typeof planDecisionRequestSchema>;
 export type ExecuteTaskRequest = z.infer<typeof executeTaskRequestSchema>;
+export type ValidateTaskRequest = z.infer<typeof validateTaskRequestSchema>;
