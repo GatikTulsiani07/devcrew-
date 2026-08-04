@@ -1,5 +1,13 @@
 import { Hono } from "hono";
 
+import {
+  createActivityReadService,
+  createActivityService,
+  type ActivityReadService,
+  type ActivityService,
+} from "./activity/activity-service.js";
+import { InMemoryActivityStore } from "./activity/in-memory-activity-store.js";
+import { createActivityRoutes } from "./activity/routes.js";
 import type { DatabaseHealth } from "./db/health.js";
 import { ApplicationError, jsonError } from "./errors.js";
 import { InMemoryProjectStore } from "./projects/in-memory-project-store.js";
@@ -32,15 +40,24 @@ export interface AppDependencies {
   generateRequestId?: RequestIdGenerator;
   projectService?: ProjectService;
   taskService?: TaskService;
+  activityService?: ActivityService;
+  activityReadService?: ActivityReadService;
+  activityHeartbeatIntervalMs?: number;
 }
 
 export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
   const { databaseHealth, generateRequestId } = dependencies;
+  const activityService =
+    dependencies.activityService ??
+    createActivityService({
+      store: new InMemoryActivityStore(),
+    });
   const projectService =
     dependencies.projectService ??
     createProjectService({
       store: new InMemoryProjectStore(),
       preparedRepositories,
+      activityService,
     });
   const taskService =
     dependencies.taskService ??
@@ -51,6 +68,13 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       devOpsValidator: createDeterministicDevOpsValidator(),
       taskReviewer: createDeterministicReviewer(),
       store: new InMemoryTaskStore(),
+      activityService,
+    });
+  const activityReadService =
+    dependencies.activityReadService ??
+    createActivityReadService({
+      projectService,
+      activityService,
     });
   const app = new Hono<AppEnv>();
 
@@ -91,6 +115,12 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
 
   app.route("/api/v1/projects", createProjectRoutes(projectService));
   app.route("/api/v1/projects", createTaskRoutes(taskService));
+  app.route(
+    "/api/v1/projects",
+    createActivityRoutes(activityReadService, {
+      heartbeatIntervalMs: dependencies.activityHeartbeatIntervalMs,
+    }),
+  );
 
   app.notFound((c) =>
     jsonError(c, new ApplicationError("NOT_FOUND", 404, "Route not found")),
