@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  createNoopActivityService,
+  type ActivityService,
+} from "../activity/activity-service.js";
 import { ApplicationError } from "../errors.js";
 import type { ProjectService } from "../projects/project-service.js";
 import type {
@@ -25,6 +29,7 @@ export interface TaskServiceDependencies {
   store: TaskStore;
   generateTaskId?: TaskIdGenerator;
   now?: TaskClock;
+  activityService?: ActivityService;
 }
 
 export interface TaskService {
@@ -52,6 +57,7 @@ export function createTaskService({
   store,
   generateTaskId = () => `task_${randomUUID()}`,
   now = () => new Date(),
+  activityService = createNoopActivityService(),
 }: TaskServiceDependencies): TaskService {
   return {
     async createTask(projectId, input) {
@@ -70,7 +76,23 @@ export function createTaskService({
         updatedAt: timestamp,
       };
 
-      return copyTask(await store.create(task));
+      const createdTask = copyTask(await store.create(task));
+      await activityService.append({
+        projectId,
+        taskId: createdTask.id,
+        type: "TASK_CREATED",
+        actor: { kind: "HUMAN" },
+        summary: "Engineering task created.",
+      });
+      await activityService.append({
+        projectId,
+        taskId: createdTask.id,
+        type: "PLAN_CREATED",
+        actor: { kind: "AGENT", role: "MANAGER" },
+        summary: "Manager created an engineering plan.",
+      });
+
+      return createdTask;
     },
 
     async getTask(projectId, taskId) {
@@ -115,7 +137,20 @@ export function createTaskService({
         updatedAt: timestamp,
       };
 
-      return copyTask(await store.update(updatedTask));
+      const decidedTask = copyTask(await store.update(updatedTask));
+      await activityService.append({
+        projectId,
+        taskId,
+        type:
+          input.decision === "APPROVE" ? "PLAN_APPROVED" : "PLAN_REJECTED",
+        actor: { kind: "HUMAN" },
+        summary:
+          input.decision === "APPROVE"
+            ? "Plan approved for implementation."
+            : "Plan rejected by human reviewer.",
+      });
+
+      return decidedTask;
     },
 
     async executeTask(projectId, taskId) {
@@ -144,7 +179,16 @@ export function createTaskService({
         updatedAt: timestamp,
       };
 
-      return copyTask(await store.update(updatedTask));
+      const executedTask = copyTask(await store.update(updatedTask));
+      await activityService.append({
+        projectId,
+        taskId,
+        type: "IMPLEMENTATION_COMPLETED",
+        actor: { kind: "AGENT", role: "FULL_STACK_DEVELOPER" },
+        summary: "Full Stack Developer completed implementation.",
+      });
+
+      return executedTask;
     },
 
     async validateTask(projectId, taskId) {
@@ -176,7 +220,16 @@ export function createTaskService({
         updatedAt: timestamp,
       };
 
-      return copyTask(await store.update(updatedTask));
+      const validatedTask = copyTask(await store.update(updatedTask));
+      await activityService.append({
+        projectId,
+        taskId,
+        type: "VALIDATION_COMPLETED",
+        actor: { kind: "AGENT", role: "DEVOPS_ENGINEER" },
+        summary: "DevOps Engineer completed validation.",
+      });
+
+      return validatedTask;
     },
 
     async reviewTask(projectId, taskId) {
@@ -205,7 +258,16 @@ export function createTaskService({
         updatedAt: timestamp,
       };
 
-      return copyTask(await store.update(updatedTask));
+      const reviewedTask = copyTask(await store.update(updatedTask));
+      await activityService.append({
+        projectId,
+        taskId,
+        type: "REVIEW_COMPLETED",
+        actor: { kind: "AGENT", role: "REVIEWER" },
+        summary: "Reviewer approved the completed work.",
+      });
+
+      return reviewedTask;
     },
   };
 }

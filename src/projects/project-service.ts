@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  createNoopActivityService,
+  type ActivityService,
+} from "../activity/activity-service.js";
 import { ApplicationError } from "../errors.js";
 import {
   findPreparedRepository,
@@ -21,6 +25,7 @@ export interface ProjectServiceDependencies {
   generateProjectId?: IdGenerator;
   generateRepositoryId?: IdGenerator;
   now?: Clock;
+  activityService?: ActivityService;
 }
 
 export interface ProjectService {
@@ -34,6 +39,7 @@ export function createProjectService({
   generateProjectId = () => `proj_${randomUUID()}`,
   generateRepositoryId = () => `repo_${randomUUID()}`,
   now = () => new Date(),
+  activityService = createNoopActivityService(),
 }: ProjectServiceDependencies): ProjectService {
   return {
     async createProject(input) {
@@ -94,7 +100,15 @@ export function createProjectService({
         updatedAt: timestamp,
       };
 
-      return toProjectSnapshot(await store.create(project));
+      const createdProject = toProjectSnapshot(await store.create(project));
+      await activityService.append({
+        projectId: createdProject.id,
+        type: "PROJECT_CREATED",
+        actor: { kind: "HUMAN" },
+        summary: "Project connected to a prepared repository.",
+      });
+
+      return createdProject;
     },
 
     async getProject(projectId) {
