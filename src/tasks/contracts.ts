@@ -33,5 +33,10 @@ export const getTaskPathParamsSchema = z.object({
 
 export const planDecisionPathParamsSchema = getTaskPathParamsSchema;
 
+export const executeTaskPathParamsSchema = getTaskPathParamsSchema;
+
+export const executeTaskRequestSchema = z.object({}).strict();
+
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>;
 export type PlanDecisionRequest = z.infer<typeof planDecisionRequestSchema>;
+export type ExecuteTaskRequest = z.infer<typeof executeTaskRequestSchema>;

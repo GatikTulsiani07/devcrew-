@@ -1,9 +1,13 @@
 export type TaskStatus =
   | "WAITING_FOR_APPROVAL"
   | "PLAN_APPROVED"
-  | "PLAN_REJECTED";
+  | "PLAN_REJECTED"
+  | "IMPLEMENTATION_COMPLETED";
 
 export type PlanDecisionType = "APPROVE" | "REJECT";
+export type ExecutionId = string;
+export type ExecutionRole = "FULL_STACK_DEVELOPER";
+export type ExecutionStatus = "COMPLETED";
 
 export interface TaskPlan {
   summary: string;
@@ -16,6 +20,22 @@ export interface PlanDecision {
   decidedAt: string;
 }
 
+export interface ImplementationResult {
+  summary: string;
+  changedFiles: readonly string[];
+  verification: readonly string[];
+}
+
+export interface TaskExecution {
+  id: ExecutionId;
+  role: ExecutionRole;
+  status: ExecutionStatus;
+  attempt: 1;
+  startedAt: string;
+  completedAt: string;
+  result: ImplementationResult;
+}
+
 export interface TaskSnapshot {
   id: string;
   projectId: string;
@@ -24,6 +44,7 @@ export interface TaskSnapshot {
   status: TaskStatus;
   plan: TaskPlan;
   planDecision?: PlanDecision;
+  execution?: TaskExecution;
   createdAt: string;
   updatedAt: string;
 }
@@ -49,4 +70,8 @@ export interface TaskStore {
 
 export interface TaskPlanner {
   createPlan(input: CreateTaskInput): Promise<TaskPlan>;
+}
+
+export interface DeveloperExecutor {
+  execute(task: TaskSnapshot): Promise<TaskExecution>;
 }
