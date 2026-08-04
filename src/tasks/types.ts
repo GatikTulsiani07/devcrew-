@@ -2,12 +2,18 @@ export type TaskStatus =
   | "WAITING_FOR_APPROVAL"
   | "PLAN_APPROVED"
   | "PLAN_REJECTED"
-  | "IMPLEMENTATION_COMPLETED";
+  | "IMPLEMENTATION_COMPLETED"
+  | "VALIDATION_COMPLETED";
 
 export type PlanDecisionType = "APPROVE" | "REJECT";
 export type ExecutionId = string;
 export type ExecutionRole = "FULL_STACK_DEVELOPER";
 export type ExecutionStatus = "COMPLETED";
+export type ValidationId = string;
+export type ValidationRole = "DEVOPS_ENGINEER";
+export type ValidationStatus = "PASSED";
+export type ValidationCheckName = "typecheck" | "tests" | "build";
+export type ValidationCheckStatus = "PASSED";
 
 export interface TaskPlan {
   summary: string;
@@ -36,6 +42,23 @@ export interface TaskExecution {
   result: ImplementationResult;
 }
 
+export interface ValidationCheck {
+  name: ValidationCheckName;
+  status: ValidationCheckStatus;
+  summary: string;
+}
+
+export interface TaskValidation {
+  id: ValidationId;
+  role: ValidationRole;
+  status: ValidationStatus;
+  attempt: 1;
+  startedAt: string;
+  completedAt: string;
+  checks: readonly ValidationCheck[];
+  summary: string;
+}
+
 export interface TaskSnapshot {
   id: string;
   projectId: string;
@@ -45,6 +68,7 @@ export interface TaskSnapshot {
   plan: TaskPlan;
   planDecision?: PlanDecision;
   execution?: TaskExecution;
+  validation?: TaskValidation;
   createdAt: string;
   updatedAt: string;
 }
@@ -74,4 +98,8 @@ export interface TaskPlanner {
 
 export interface DeveloperExecutor {
   execute(task: TaskSnapshot): Promise<TaskExecution>;
+}
+
+export interface DevOpsValidator {
+  validate(task: TaskSnapshot): Promise<TaskValidation>;
 }

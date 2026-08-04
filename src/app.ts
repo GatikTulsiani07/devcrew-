@@ -11,6 +11,7 @@ import { createProjectRoutes } from "./projects/routes.js";
 import { resolveRequestId, type RequestIdGenerator } from "./request-id.js";
 import { preparedRepositories } from "./repositories/prepared-repositories.js";
 import { createDeterministicDeveloperExecutor } from "./tasks/deterministic-developer-executor.js";
+import { createDeterministicDevOpsValidator } from "./tasks/deterministic-devops-validator.js";
 import { createDeterministicPlanner } from "./tasks/deterministic-planner.js";
 import { InMemoryTaskStore } from "./tasks/in-memory-task-store.js";
 import { createTaskRoutes } from "./tasks/routes.js";
@@ -46,6 +47,7 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       projectService,
       planner: createDeterministicPlanner(),
       developerExecutor: createDeterministicDeveloperExecutor(),
+      devOpsValidator: createDeterministicDevOpsValidator(),
       store: new InMemoryTaskStore(),
     });
   const app = new Hono<AppEnv>();

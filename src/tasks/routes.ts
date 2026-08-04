@@ -9,6 +9,8 @@ import {
   getTaskPathParamsSchema,
   planDecisionPathParamsSchema,
   planDecisionRequestSchema,
+  validateTaskPathParamsSchema,
+  validateTaskRequestSchema,
 } from "./contracts.js";
 import type { TaskService } from "./task-service.js";
 
@@ -86,6 +88,25 @@ export function createTaskRoutes(taskService: TaskService): Hono<TaskRoutesEnv> 
     }
 
     const task = await taskService.executeTask(
+      params.data.projectId,
+      params.data.taskId,
+    );
+    return c.json({ task });
+  });
+
+  routes.post("/:projectId/tasks/:taskId/validate", async (c) => {
+    const params = validateTaskPathParamsSchema.safeParse({
+      projectId: c.req.param("projectId"),
+      taskId: c.req.param("taskId"),
+    });
+    const body = await readOptionalJsonBody(c.req.text.bind(c.req));
+    const request = validateTaskRequestSchema.safeParse(body);
+
+    if (!params.success || !request.success) {
+      throw validationError();
+    }
+
+    const task = await taskService.validateTask(
       params.data.projectId,
       params.data.taskId,
     );

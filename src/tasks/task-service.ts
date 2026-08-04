@@ -5,6 +5,7 @@ import type { ProjectService } from "../projects/project-service.js";
 import type {
   CreateTaskInput,
   DeveloperExecutor,
+  DevOpsValidator,
   PlanDecisionInput,
   TaskPlanner,
   TaskSnapshot,
@@ -18,6 +19,7 @@ export interface TaskServiceDependencies {
   projectService: ProjectService;
   planner: TaskPlanner;
   developerExecutor: DeveloperExecutor;
+  devOpsValidator: DevOpsValidator;
   store: TaskStore;
   generateTaskId?: TaskIdGenerator;
   now?: TaskClock;
@@ -35,12 +37,14 @@ export interface TaskService {
     input: PlanDecisionInput,
   ): Promise<TaskSnapshot>;
   executeTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
+  validateTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
 }
 
 export function createTaskService({
   projectService,
   planner,
   developerExecutor,
+  devOpsValidator,
   store,
   generateTaskId = () => `task_${randomUUID()}`,
   now = () => new Date(),
@@ -138,6 +142,38 @@ export function createTaskService({
 
       return copyTask(await store.update(updatedTask));
     },
+
+    async validateTask(projectId, taskId) {
+      await projectService.getProject(projectId);
+
+      const task = await store.findByProjectAndId(projectId, taskId);
+
+      if (task === undefined) {
+        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
+      }
+
+      if (
+        task.status !== "IMPLEMENTATION_COMPLETED" ||
+        task.validation !== undefined
+      ) {
+        throw new ApplicationError(
+          "INVALID_TASK_TRANSITION",
+          409,
+          "Task implementation is not ready for validation",
+        );
+      }
+
+      const validation = await devOpsValidator.validate(copyTask(task));
+      const timestamp = now().toISOString();
+      const updatedTask: TaskSnapshot = {
+        ...copyTask(task),
+        status: "VALIDATION_COMPLETED",
+        validation,
+        updatedAt: timestamp,
+      };
+
+      return copyTask(await store.update(updatedTask));
+    },
   };
 }
 
@@ -178,6 +214,24 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               changedFiles: [...task.execution.result.changedFiles],
               verification: [...task.execution.result.verification],
             },
+          },
+        }),
+    ...(task.validation === undefined
+      ? {}
+      : {
+          validation: {
+            id: task.validation.id,
+            role: task.validation.role,
+            status: task.validation.status,
+            attempt: task.validation.attempt,
+            startedAt: task.validation.startedAt,
+            completedAt: task.validation.completedAt,
+            checks: task.validation.checks.map((check) => ({
+              name: check.name,
+              status: check.status,
+              summary: check.summary,
+            })),
+            summary: task.validation.summary,
           },
         }),
     createdAt: task.createdAt,

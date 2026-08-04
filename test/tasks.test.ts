@@ -8,10 +8,15 @@ import { createProjectService } from "../src/projects/project-service.js";
 import type { ProjectService } from "../src/projects/project-service.js";
 import type { PreparedRepository } from "../src/repositories/prepared-repositories.js";
 import { createDeterministicDeveloperExecutor } from "../src/tasks/deterministic-developer-executor.js";
+import { createDeterministicDevOpsValidator } from "../src/tasks/deterministic-devops-validator.js";
 import { createDeterministicPlanner } from "../src/tasks/deterministic-planner.js";
 import { InMemoryTaskStore } from "../src/tasks/in-memory-task-store.js";
 import { createTaskService } from "../src/tasks/task-service.js";
-import type { DeveloperExecutor, TaskPlanner } from "../src/tasks/types.js";
+import type {
+  DeveloperExecutor,
+  DevOpsValidator,
+  TaskPlanner,
+} from "../src/tasks/types.js";
 
 const preparedRepositories: readonly PreparedRepository[] = [
   {
@@ -35,6 +40,7 @@ function fixedRequestId(): string {
 interface TestAppOptions {
   planner?: TaskPlanner;
   developerExecutor?: DeveloperExecutor;
+  devOpsValidator?: DevOpsValidator;
   dates?: readonly string[];
 }
 
@@ -60,11 +66,13 @@ function createDeterministicProjectService(): ProjectService {
 function createTestApp({
   planner = createDeterministicPlanner(),
   developerExecutor,
+  devOpsValidator,
   dates = ["2026-08-03T01:00:00.000Z"],
 }: TestAppOptions = {}) {
   const projectService = createDeterministicProjectService();
   let taskCount = 0;
   let executionCount = 0;
+  let validationCount = 0;
   let dateIndex = 0;
   const nextDate = () => {
     const date = dates[Math.min(dateIndex, dates.length - 1)];
@@ -85,6 +93,15 @@ function createTestApp({
           generateExecutionId: () => {
             executionCount += 1;
             return `exec_${String(executionCount).padStart(6, "0")}`;
+          },
+          now: nextDate,
+        }),
+      devOpsValidator:
+        devOpsValidator ??
+        createDeterministicDevOpsValidator({
+          generateValidationId: () => {
+            validationCount += 1;
+            return `val_${String(validationCount).padStart(6, "0")}`;
           },
           now: nextDate,
         }),
@@ -158,6 +175,21 @@ async function executeTask(
 ) {
   return app.request(
     `/api/v1/projects/${projectId}/tasks/${taskId}/execute`,
+    {
+      method: "POST",
+      ...init,
+    },
+  );
+}
+
+async function validateTask(
+  app: ReturnType<typeof createTestApp>,
+  projectId = "proj_000001",
+  taskId = "task_000001",
+  init: RequestInit = {},
+) {
+  return app.request(
+    `/api/v1/projects/${projectId}/tasks/${taskId}/validate`,
     {
       method: "POST",
       ...init,
@@ -753,6 +785,7 @@ describe("task manager planning API", () => {
       projectService,
       planner: createDeterministicPlanner(),
       developerExecutor: createDeterministicDeveloperExecutor(),
+      devOpsValidator: createDeterministicDevOpsValidator(),
       store: {
         create: taskStore.create.bind(taskStore),
         findByProjectAndId: taskStore.findByProjectAndId.bind(taskStore),
@@ -1114,6 +1147,399 @@ describe("task manager planning API", () => {
     assert.equal(body.includes("repositoryPath"), false);
     assert.equal(body.includes("child_process"), false);
     assert.equal(body.includes("git status"), false);
+    assert.equal(body.includes("SENSITIVE"), false);
+    assert.equal(body.includes("stack"), false);
+  });
+
+  it("validates an implementation-completed task synchronously with persisted evidence", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal(
+      (
+        await decidePlan(app, {
+          decision: "APPROVE",
+          reason: "The plan is clear and ready.",
+        })
+      ).status,
+      200,
+    );
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("X-Request-Id"), "req_task_test");
+    assert.deepEqual(await response.json(), {
+      task: {
+        id: "task_000001",
+        projectId: "proj_000001",
+        title: "Implement authentication middleware",
+        description: "Protect every API route with JWT middleware.",
+        status: "VALIDATION_COMPLETED",
+        plan: {
+          summary: "Implement requested engineering task.",
+          steps: [
+            "Inspect relevant source files",
+            "Modify implementation",
+            "Add or update tests",
+            "Validate build",
+            "Prepare for review",
+          ],
+        },
+        planDecision: {
+          decision: "APPROVE",
+          reason: "The plan is clear and ready.",
+          decidedAt: "2026-08-03T02:00:00.000Z",
+        },
+        execution: {
+          id: "exec_000001",
+          role: "FULL_STACK_DEVELOPER",
+          status: "COMPLETED",
+          attempt: 1,
+          startedAt: "2026-08-03T03:00:00.000Z",
+          completedAt: "2026-08-03T04:00:00.000Z",
+          result: {
+            summary: "Implemented the approved engineering task.",
+            changedFiles: [],
+            verification: [
+              "Implementation adapter completed deterministically.",
+            ],
+          },
+        },
+        validation: {
+          id: "val_000001",
+          role: "DEVOPS_ENGINEER",
+          status: "PASSED",
+          attempt: 1,
+          startedAt: "2026-08-03T06:00:00.000Z",
+          completedAt: "2026-08-03T07:00:00.000Z",
+          checks: [
+            {
+              name: "typecheck",
+              status: "PASSED",
+              summary: "Type checking completed successfully.",
+            },
+            {
+              name: "tests",
+              status: "PASSED",
+              summary: "Automated tests completed successfully.",
+            },
+            {
+              name: "build",
+              status: "PASSED",
+              summary: "Production build completed successfully.",
+            },
+          ],
+          summary: "Deterministic validation completed successfully.",
+        },
+        createdAt: "2026-08-03T01:00:00.000Z",
+        updatedAt: "2026-08-03T08:00:00.000Z",
+      },
+    });
+  });
+
+  it("keeps the plan, plan decision, and execution unchanged during validation", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    const executed = await executeTask(app);
+    const executedTask = (await executed.json()).task;
+
+    const validated = await validateTask(app);
+    const validatedTask = (await validated.json()).task;
+
+    assert.deepEqual(validatedTask.plan, executedTask.plan);
+    assert.deepEqual(validatedTask.planDecision, executedTask.planDecision);
+    assert.deepEqual(validatedTask.execution, executedTask.execution);
+  });
+
+  it("returns the exact persisted validation snapshot on later task reads", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const validated = await validateTask(app);
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+
+    assert.equal(read.status, 200);
+    assert.deepEqual(await read.json(), await validated.json());
+  });
+
+  it("rejects validation while waiting for approval", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+
+    const response = await validateTask(app);
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("rejects validation after approval but before execution", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const response = await validateTask(app);
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("rejects validation after plan rejection", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal(
+      (
+        await decidePlan(app, {
+          decision: "REJECT",
+          reason: "Needs more detail.",
+        })
+      ).status,
+      200,
+    );
+
+    const response = await validateTask(app);
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("rejects validating a completed validation again", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const response = await validateTask(app);
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("returns project not found for validation in an unknown project", async () => {
+    const app = createTestApp();
+
+    const response = await validateTask(app, "proj_missing", "task_000001");
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error.code, "PROJECT_NOT_FOUND");
+  });
+
+  it("returns task not found for validation of an unknown task", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+
+    const response = await validateTask(app, "proj_000001", "task_missing");
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error.code, "TASK_NOT_FOUND");
+  });
+
+  it("rejects cross-project task validation", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal(
+      (
+        await createProject(app, {
+          name: "Other",
+          publicRepositoryUrl: "https://github.com/example/other",
+          preparedRepositoryId: "prepared_other",
+        })
+      ).status,
+      201,
+    );
+    assert.equal((await createTask(app, "proj_000001")).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app, "proj_000002", "task_000001");
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error.code, "TASK_NOT_FOUND");
+  });
+
+  it("rejects invalid validation path parameters", async () => {
+    const app = createTestApp();
+
+    const response = await validateTask(app, "not a project", "not a task");
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+
+  it("rejects non-empty validation request bodies", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unexpected: true }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+
+  it("propagates request ids on validation success and errors", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const success = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "X-Request-Id": "req_validate_success" },
+    });
+    const error = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "X-Request-Id": "req_validate_error" },
+    });
+
+    assert.equal(success.status, 200);
+    assert.equal(success.headers.get("X-Request-Id"), "req_validate_success");
+    assert.equal(error.status, 409);
+    assert.equal(error.headers.get("X-Request-Id"), "req_validate_error");
+    assert.equal((await error.json()).requestId, "req_validate_error");
+  });
+
+  it("sanitizes unexpected DevOps validator failures", async () => {
+    const sensitiveMessage = "SENSITIVE_DEVOPS_VALIDATOR_DETAIL";
+    const devOpsValidator: DevOpsValidator = {
+      async validate() {
+        throw new Error(sensitiveMessage);
+      },
+    };
+    const app = createTestApp({ devOpsValidator });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app);
+    const body = await response.text();
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(JSON.parse(body), {
+      requestId: "req_task_test",
+      status: "error",
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "An unexpected error occurred",
+      },
+    });
+    assert.equal(body.includes(sensitiveMessage), false);
+  });
+
+  it("does not return filesystem paths, shell commands, secrets, prompts, or stack traces in validation responses", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.includes("/Users/"), false);
+    assert.equal(body.includes("private/tmp"), false);
+    assert.equal(body.includes("repositoryPath"), false);
+    assert.equal(body.includes("child_process"), false);
+    assert.equal(body.includes("npm run"), false);
+    assert.equal(body.includes("git status"), false);
+    assert.equal(body.includes("prompt"), false);
     assert.equal(body.includes("SENSITIVE"), false);
     assert.equal(body.includes("stack"), false);
   });
