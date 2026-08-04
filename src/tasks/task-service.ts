@@ -8,6 +8,7 @@ import type {
   DevOpsValidator,
   PlanDecisionInput,
   TaskPlanner,
+  TaskReviewer,
   TaskSnapshot,
   TaskStore,
 } from "./types.js";
@@ -20,6 +21,7 @@ export interface TaskServiceDependencies {
   planner: TaskPlanner;
   developerExecutor: DeveloperExecutor;
   devOpsValidator: DevOpsValidator;
+  taskReviewer: TaskReviewer;
   store: TaskStore;
   generateTaskId?: TaskIdGenerator;
   now?: TaskClock;
@@ -38,6 +40,7 @@ export interface TaskService {
   ): Promise<TaskSnapshot>;
   executeTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   validateTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
+  reviewTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
 }
 
 export function createTaskService({
@@ -45,6 +48,7 @@ export function createTaskService({
   planner,
   developerExecutor,
   devOpsValidator,
+  taskReviewer,
   store,
   generateTaskId = () => `task_${randomUUID()}`,
   now = () => new Date(),
@@ -174,6 +178,35 @@ export function createTaskService({
 
       return copyTask(await store.update(updatedTask));
     },
+
+    async reviewTask(projectId, taskId) {
+      await projectService.getProject(projectId);
+
+      const task = await store.findByProjectAndId(projectId, taskId);
+
+      if (task === undefined) {
+        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
+      }
+
+      if (task.status !== "VALIDATION_COMPLETED" || task.review !== undefined) {
+        throw new ApplicationError(
+          "INVALID_TASK_TRANSITION",
+          409,
+          "Task validation is not ready for review",
+        );
+      }
+
+      const review = await taskReviewer.review(copyTask(task));
+      const timestamp = now().toISOString();
+      const updatedTask: TaskSnapshot = {
+        ...copyTask(task),
+        status: "REVIEW_COMPLETED",
+        review,
+        updatedAt: timestamp,
+      };
+
+      return copyTask(await store.update(updatedTask));
+    },
   };
 }
 
@@ -232,6 +265,25 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               summary: check.summary,
             })),
             summary: task.validation.summary,
+          },
+        }),
+    ...(task.review === undefined
+      ? {}
+      : {
+          review: {
+            id: task.review.id,
+            role: task.review.role,
+            status: task.review.status,
+            verdict: task.review.verdict,
+            attempt: task.review.attempt,
+            startedAt: task.review.startedAt,
+            completedAt: task.review.completedAt,
+            summary: task.review.summary,
+            findings: task.review.findings.map((finding) => ({
+              severity: finding.severity,
+              title: finding.title,
+              description: finding.description,
+            })),
           },
         }),
     createdAt: task.createdAt,

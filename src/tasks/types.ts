@@ -3,7 +3,8 @@ export type TaskStatus =
   | "PLAN_APPROVED"
   | "PLAN_REJECTED"
   | "IMPLEMENTATION_COMPLETED"
-  | "VALIDATION_COMPLETED";
+  | "VALIDATION_COMPLETED"
+  | "REVIEW_COMPLETED";
 
 export type PlanDecisionType = "APPROVE" | "REJECT";
 export type ExecutionId = string;
@@ -14,6 +15,11 @@ export type ValidationRole = "DEVOPS_ENGINEER";
 export type ValidationStatus = "PASSED";
 export type ValidationCheckName = "typecheck" | "tests" | "build";
 export type ValidationCheckStatus = "PASSED";
+export type ReviewId = string;
+export type ReviewRole = "REVIEWER";
+export type ReviewStatus = "COMPLETED";
+export type ReviewVerdict = "APPROVED";
+export type ReviewFindingSeverity = "INFO";
 
 export interface TaskPlan {
   summary: string;
@@ -59,6 +65,24 @@ export interface TaskValidation {
   summary: string;
 }
 
+export interface ReviewFinding {
+  severity: ReviewFindingSeverity;
+  title: string;
+  description: string;
+}
+
+export interface TaskReview {
+  id: ReviewId;
+  role: ReviewRole;
+  status: ReviewStatus;
+  verdict: ReviewVerdict;
+  attempt: 1;
+  startedAt: string;
+  completedAt: string;
+  summary: string;
+  findings: readonly ReviewFinding[];
+}
+
 export interface TaskSnapshot {
   id: string;
   projectId: string;
@@ -69,6 +93,7 @@ export interface TaskSnapshot {
   planDecision?: PlanDecision;
   execution?: TaskExecution;
   validation?: TaskValidation;
+  review?: TaskReview;
   createdAt: string;
   updatedAt: string;
 }
@@ -102,4 +127,8 @@ export interface DeveloperExecutor {
 
 export interface DevOpsValidator {
   validate(task: TaskSnapshot): Promise<TaskValidation>;
+}
+
+export interface TaskReviewer {
+  review(task: TaskSnapshot): Promise<TaskReview>;
 }

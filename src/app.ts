@@ -13,6 +13,7 @@ import { preparedRepositories } from "./repositories/prepared-repositories.js";
 import { createDeterministicDeveloperExecutor } from "./tasks/deterministic-developer-executor.js";
 import { createDeterministicDevOpsValidator } from "./tasks/deterministic-devops-validator.js";
 import { createDeterministicPlanner } from "./tasks/deterministic-planner.js";
+import { createDeterministicReviewer } from "./tasks/deterministic-reviewer.js";
 import { InMemoryTaskStore } from "./tasks/in-memory-task-store.js";
 import { createTaskRoutes } from "./tasks/routes.js";
 import {
@@ -48,6 +49,7 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       planner: createDeterministicPlanner(),
       developerExecutor: createDeterministicDeveloperExecutor(),
       devOpsValidator: createDeterministicDevOpsValidator(),
+      taskReviewer: createDeterministicReviewer(),
       store: new InMemoryTaskStore(),
     });
   const app = new Hono<AppEnv>();

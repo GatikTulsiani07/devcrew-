@@ -10,12 +10,14 @@ import type { PreparedRepository } from "../src/repositories/prepared-repositori
 import { createDeterministicDeveloperExecutor } from "../src/tasks/deterministic-developer-executor.js";
 import { createDeterministicDevOpsValidator } from "../src/tasks/deterministic-devops-validator.js";
 import { createDeterministicPlanner } from "../src/tasks/deterministic-planner.js";
+import { createDeterministicReviewer } from "../src/tasks/deterministic-reviewer.js";
 import { InMemoryTaskStore } from "../src/tasks/in-memory-task-store.js";
 import { createTaskService } from "../src/tasks/task-service.js";
 import type {
   DeveloperExecutor,
   DevOpsValidator,
   TaskPlanner,
+  TaskReviewer,
 } from "../src/tasks/types.js";
 
 const preparedRepositories: readonly PreparedRepository[] = [
@@ -41,6 +43,7 @@ interface TestAppOptions {
   planner?: TaskPlanner;
   developerExecutor?: DeveloperExecutor;
   devOpsValidator?: DevOpsValidator;
+  taskReviewer?: TaskReviewer;
   dates?: readonly string[];
 }
 
@@ -67,12 +70,14 @@ function createTestApp({
   planner = createDeterministicPlanner(),
   developerExecutor,
   devOpsValidator,
+  taskReviewer,
   dates = ["2026-08-03T01:00:00.000Z"],
 }: TestAppOptions = {}) {
   const projectService = createDeterministicProjectService();
   let taskCount = 0;
   let executionCount = 0;
   let validationCount = 0;
+  let reviewCount = 0;
   let dateIndex = 0;
   const nextDate = () => {
     const date = dates[Math.min(dateIndex, dates.length - 1)];
@@ -102,6 +107,15 @@ function createTestApp({
           generateValidationId: () => {
             validationCount += 1;
             return `val_${String(validationCount).padStart(6, "0")}`;
+          },
+          now: nextDate,
+        }),
+      taskReviewer:
+        taskReviewer ??
+        createDeterministicReviewer({
+          generateReviewId: () => {
+            reviewCount += 1;
+            return `review_${String(reviewCount).padStart(6, "0")}`;
           },
           now: nextDate,
         }),
@@ -190,6 +204,21 @@ async function validateTask(
 ) {
   return app.request(
     `/api/v1/projects/${projectId}/tasks/${taskId}/validate`,
+    {
+      method: "POST",
+      ...init,
+    },
+  );
+}
+
+async function reviewTask(
+  app: ReturnType<typeof createTestApp>,
+  projectId = "proj_000001",
+  taskId = "task_000001",
+  init: RequestInit = {},
+) {
+  return app.request(
+    `/api/v1/projects/${projectId}/tasks/${taskId}/review`,
     {
       method: "POST",
       ...init,
@@ -786,6 +815,7 @@ describe("task manager planning API", () => {
       planner: createDeterministicPlanner(),
       developerExecutor: createDeterministicDeveloperExecutor(),
       devOpsValidator: createDeterministicDevOpsValidator(),
+      taskReviewer: createDeterministicReviewer(),
       store: {
         create: taskStore.create.bind(taskStore),
         findByProjectAndId: taskStore.findByProjectAndId.bind(taskStore),
@@ -1530,6 +1560,461 @@ describe("task manager planning API", () => {
     assert.equal((await executeTask(app)).status, 200);
 
     const response = await validateTask(app);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.includes("/Users/"), false);
+    assert.equal(body.includes("private/tmp"), false);
+    assert.equal(body.includes("repositoryPath"), false);
+    assert.equal(body.includes("child_process"), false);
+    assert.equal(body.includes("npm run"), false);
+    assert.equal(body.includes("git status"), false);
+    assert.equal(body.includes("prompt"), false);
+    assert.equal(body.includes("SENSITIVE"), false);
+    assert.equal(body.includes("stack"), false);
+  });
+
+  it("reviews a validation-completed task synchronously with a persisted approved verdict", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+        "2026-08-03T09:00:00.000Z",
+        "2026-08-03T10:00:00.000Z",
+        "2026-08-03T11:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal(
+      (
+        await decidePlan(app, {
+          decision: "APPROVE",
+          reason: "The plan is clear and ready.",
+        })
+      ).status,
+      200,
+    );
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const response = await reviewTask(app);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("X-Request-Id"), "req_task_test");
+    assert.deepEqual(await response.json(), {
+      task: {
+        id: "task_000001",
+        projectId: "proj_000001",
+        title: "Implement authentication middleware",
+        description: "Protect every API route with JWT middleware.",
+        status: "REVIEW_COMPLETED",
+        plan: {
+          summary: "Implement requested engineering task.",
+          steps: [
+            "Inspect relevant source files",
+            "Modify implementation",
+            "Add or update tests",
+            "Validate build",
+            "Prepare for review",
+          ],
+        },
+        planDecision: {
+          decision: "APPROVE",
+          reason: "The plan is clear and ready.",
+          decidedAt: "2026-08-03T02:00:00.000Z",
+        },
+        execution: {
+          id: "exec_000001",
+          role: "FULL_STACK_DEVELOPER",
+          status: "COMPLETED",
+          attempt: 1,
+          startedAt: "2026-08-03T03:00:00.000Z",
+          completedAt: "2026-08-03T04:00:00.000Z",
+          result: {
+            summary: "Implemented the approved engineering task.",
+            changedFiles: [],
+            verification: [
+              "Implementation adapter completed deterministically.",
+            ],
+          },
+        },
+        validation: {
+          id: "val_000001",
+          role: "DEVOPS_ENGINEER",
+          status: "PASSED",
+          attempt: 1,
+          startedAt: "2026-08-03T06:00:00.000Z",
+          completedAt: "2026-08-03T07:00:00.000Z",
+          checks: [
+            {
+              name: "typecheck",
+              status: "PASSED",
+              summary: "Type checking completed successfully.",
+            },
+            {
+              name: "tests",
+              status: "PASSED",
+              summary: "Automated tests completed successfully.",
+            },
+            {
+              name: "build",
+              status: "PASSED",
+              summary: "Production build completed successfully.",
+            },
+          ],
+          summary: "Deterministic validation completed successfully.",
+        },
+        review: {
+          id: "review_000001",
+          role: "REVIEWER",
+          status: "COMPLETED",
+          verdict: "APPROVED",
+          attempt: 1,
+          startedAt: "2026-08-03T09:00:00.000Z",
+          completedAt: "2026-08-03T10:00:00.000Z",
+          summary: "Deterministic review completed successfully.",
+          findings: [
+            {
+              severity: "INFO",
+              title: "Implementation evidence available",
+              description:
+                "The implementation and validation evidence are complete for deterministic review.",
+            },
+          ],
+        },
+        createdAt: "2026-08-03T01:00:00.000Z",
+        updatedAt: "2026-08-03T11:00:00.000Z",
+      },
+    });
+  });
+
+  it("keeps plan, decision, execution, and validation unchanged during review", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+        "2026-08-03T09:00:00.000Z",
+        "2026-08-03T10:00:00.000Z",
+        "2026-08-03T11:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    const validated = await validateTask(app);
+    const validatedTask = (await validated.json()).task;
+
+    const reviewed = await reviewTask(app);
+    const reviewedTask = (await reviewed.json()).task;
+
+    assert.deepEqual(reviewedTask.plan, validatedTask.plan);
+    assert.deepEqual(reviewedTask.planDecision, validatedTask.planDecision);
+    assert.deepEqual(reviewedTask.execution, validatedTask.execution);
+    assert.deepEqual(reviewedTask.validation, validatedTask.validation);
+  });
+
+  it("returns the exact persisted review snapshot on later task reads", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+        "2026-08-03T09:00:00.000Z",
+        "2026-08-03T10:00:00.000Z",
+        "2026-08-03T11:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const reviewed = await reviewTask(app);
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+
+    assert.equal(read.status, 200);
+    assert.deepEqual(await read.json(), await reviewed.json());
+  });
+
+  it("rejects review while waiting for approval", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+
+    const response = await reviewTask(app);
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("rejects review after approval but before execution", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const response = await reviewTask(app);
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("rejects review after plan rejection", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal(
+      (
+        await decidePlan(app, {
+          decision: "REJECT",
+          reason: "Needs more detail.",
+        })
+      ).status,
+      200,
+    );
+
+    const response = await reviewTask(app);
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("rejects review after implementation before validation", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await reviewTask(app);
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("rejects reviewing a completed review again", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+        "2026-08-03T09:00:00.000Z",
+        "2026-08-03T10:00:00.000Z",
+        "2026-08-03T11:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+
+    const response = await reviewTask(app);
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("returns project not found for review in an unknown project", async () => {
+    const app = createTestApp();
+
+    const response = await reviewTask(app, "proj_missing", "task_000001");
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error.code, "PROJECT_NOT_FOUND");
+  });
+
+  it("returns task not found for review of an unknown task", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+
+    const response = await reviewTask(app, "proj_000001", "task_missing");
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error.code, "TASK_NOT_FOUND");
+  });
+
+  it("rejects cross-project task review", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal(
+      (
+        await createProject(app, {
+          name: "Other",
+          publicRepositoryUrl: "https://github.com/example/other",
+          preparedRepositoryId: "prepared_other",
+        })
+      ).status,
+      201,
+    );
+    assert.equal((await createTask(app, "proj_000001")).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const response = await reviewTask(app, "proj_000002", "task_000001");
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error.code, "TASK_NOT_FOUND");
+  });
+
+  it("rejects invalid review path parameters", async () => {
+    const app = createTestApp();
+
+    const response = await reviewTask(app, "not a project", "not a task");
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+
+  it("rejects non-empty review request bodies", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const response = await reviewTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unexpected: true }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+
+  it("propagates request ids on review success and errors", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+        "2026-08-03T09:00:00.000Z",
+        "2026-08-03T10:00:00.000Z",
+        "2026-08-03T11:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const success = await reviewTask(app, "proj_000001", "task_000001", {
+      headers: { "X-Request-Id": "req_review_success" },
+    });
+    const error = await reviewTask(app, "proj_000001", "task_000001", {
+      headers: { "X-Request-Id": "req_review_error" },
+    });
+
+    assert.equal(success.status, 200);
+    assert.equal(success.headers.get("X-Request-Id"), "req_review_success");
+    assert.equal(error.status, 409);
+    assert.equal(error.headers.get("X-Request-Id"), "req_review_error");
+    assert.equal((await error.json()).requestId, "req_review_error");
+  });
+
+  it("sanitizes unexpected reviewer failures", async () => {
+    const sensitiveMessage = "SENSITIVE_REVIEWER_DETAIL";
+    const taskReviewer: TaskReviewer = {
+      async review() {
+        throw new Error(sensitiveMessage);
+      },
+    };
+    const app = createTestApp({ taskReviewer });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const response = await reviewTask(app);
+    const body = await response.text();
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(JSON.parse(body), {
+      requestId: "req_task_test",
+      status: "error",
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "An unexpected error occurred",
+      },
+    });
+    assert.equal(body.includes(sensitiveMessage), false);
+  });
+
+  it("does not return filesystem paths, commands, secrets, prompts, or stack traces in review responses", async () => {
+    const app = createTestApp({
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+        "2026-08-03T07:00:00.000Z",
+        "2026-08-03T08:00:00.000Z",
+        "2026-08-03T09:00:00.000Z",
+        "2026-08-03T10:00:00.000Z",
+        "2026-08-03T11:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const response = await reviewTask(app);
     const body = await response.text();
 
     assert.equal(response.status, 200);
