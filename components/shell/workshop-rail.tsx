@@ -1,23 +1,9 @@
 "use client";
 
-import { Activity, Bot, Boxes, GitBranch } from "lucide-react";
+import { Activity, GitBranch } from "lucide-react";
 import { agents, project, recentEvents } from "@/lib/mock-data";
 import { AgentAvatar } from "@/components/ui/agent-avatar";
 import { useWorkspaceState } from "@/components/shell/workspace-state";
-
-function OfficePreview() {
-  return (
-    <div className="relative h-28 overflow-hidden rounded-[var(--radius-small)] border border-border bg-canvas" aria-label="Abstract Devcrew office preview">
-      <div className="absolute inset-3 grid grid-cols-4 grid-rows-3 gap-px border border-border bg-border">
-        {Array.from({ length: 12 }, (_, index) => <span key={index} className="bg-panel" />)}
-      </div>
-      <span className="absolute left-[30%] top-[32%] size-2 rounded-full border border-canvas bg-accent" />
-      <span className="absolute left-[53%] top-[46%] size-2 rounded-full border border-canvas bg-success" />
-      <span className="absolute left-[67%] top-[28%] size-2 rounded-full border border-canvas bg-warning" />
-      <span className="absolute bottom-3 left-3 rounded-[var(--radius-small)] bg-canvas/90 px-1.5 py-1 font-mono text-[0.48rem] uppercase tracking-[0.08em] text-ink-muted">Local floor · fixture</span>
-    </div>
-  );
-}
 
 export function WorkshopRail({ compact = false }: { compact?: boolean }) {
   const { crewOnline, selectedAgentId } = useWorkspaceState();
@@ -25,61 +11,66 @@ export function WorkshopRail({ compact = false }: { compact?: boolean }) {
 
   if (compact) {
     return (
-      <section className="border-t border-border px-3.5 py-3">
-        <div className="flex items-center justify-between">
-          <div><p className="text-[0.68rem] font-semibold text-ink">Workshop</p><p className="text-[0.56rem] text-ink-muted">Local team context</p></div>
-          <span className={`text-[0.58rem] ${crewOnline ? "text-success" : "text-ink-muted"}`}>{crewOnline ? "Crew online" : "Crew offline"}</span>
+      <section className="rounded-[var(--radius-standard)] bg-panel/40 px-4 py-4 shadow-[inset_0_1px_0_rgb(255_255_255/0.025)]">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-[0.9rem] font-medium text-ink">Project context</p>
+            <p className="mt-1 text-[0.78rem] text-ink-muted">{project.repository}</p>
+          </div>
+          <span className={`text-[0.8rem] ${crewOnline ? "text-accent" : "text-ink-muted"}`}>{crewOnline ? "Crew online" : "Crew offline"}</span>
         </div>
       </section>
     );
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="border-b border-border px-3.5 py-3">
-        <p className="font-mono text-[0.51rem] uppercase tracking-[0.14em] text-ink-muted">Workshop</p>
-        <h2 className="mt-1 font-display text-[1.18rem] leading-tight text-ink">What the crew is doing</h2>
+    <div className="flex h-full min-h-0 flex-col px-5 py-6">
+      <header className="pb-7">
+        <p className="text-[0.8rem] text-ink-muted">Context</p>
+        <h2 className="mt-2 font-display text-[1.65rem] leading-tight text-ink">Current run</h2>
       </header>
 
-      <div className="scrollbar-subtle min-h-0 flex-1 overflow-y-auto px-2.5 py-3">
-        <section aria-labelledby="office-heading">
-          <div className="mb-2 flex items-center justify-between px-1">
-            <h3 id="office-heading" className="font-mono text-[0.51rem] uppercase tracking-[0.13em] text-ink-muted">Office</h3>
-            <span className="font-mono text-[0.49rem] text-ink-muted">4 seats</span>
-          </div>
-          <div className="rounded-[var(--radius-standard)] border border-border bg-panel/60 p-2">
-            <div className="mb-2 flex items-center gap-2"><Boxes aria-hidden="true" className="size-3 text-accent" /><span className="text-[0.65rem] font-medium text-ink">Devcrew floor</span><span className="ml-auto font-mono text-[0.5rem] text-ink-muted">LOCAL</span></div>
-            <OfficePreview />
+      <div className="scrollbar-subtle min-h-0 flex-1 overflow-y-auto">
+        <section aria-labelledby="project-context-heading">
+          <h3 id="project-context-heading" className="text-[0.95rem] font-medium text-ink">Project</h3>
+          <div className="mt-4 space-y-4 text-[0.82rem] text-ink-muted">
+            <p className="leading-6 text-ink-secondary">{project.name} is running as a local fixture workspace. No browser action executes shell or Git.</p>
+            <div className="flex items-center gap-2 font-mono text-[0.72rem]">
+              <GitBranch aria-hidden="true" className="size-3.5" />
+              <span className="min-w-0 truncate">{project.branch}</span>
+            </div>
           </div>
         </section>
 
-        <section aria-labelledby="activity-heading" className="mt-4">
-          <h3 id="activity-heading" className="mb-2 px-1 font-mono text-[0.51rem] uppercase tracking-[0.13em] text-ink-muted">Activity</h3>
-          <div className="space-y-1.5">
-            <div className="flex min-h-10 items-center gap-2 rounded-[var(--radius-small)] border border-border bg-panel/60 px-2">
-              <span className="grid size-6 place-items-center rounded-[var(--radius-small)] bg-accent-soft text-accent"><Activity aria-hidden="true" className="size-3" /></span>
-              <div className="min-w-0 flex-1"><p className="text-[0.63rem] font-medium text-ink">System</p><p className="truncate text-[0.52rem] text-ink-muted">Fixture workspace</p></div>
-              <span className={`size-1.5 rounded-full ${crewOnline ? "bg-success" : "bg-ink-muted"}`} aria-label={crewOnline ? "Online" : "Offline"} />
-            </div>
-            <div className="flex min-h-10 items-center gap-2 rounded-[var(--radius-small)] border border-border bg-panel/60 px-2">
-              <AgentAvatar agent={selectedAgent} size="small" />
-              <div className="min-w-0 flex-1"><p className="truncate text-[0.63rem] font-medium text-ink">{selectedAgent.name}</p><p className="truncate font-mono text-[0.5rem] text-ink-muted">@{selectedAgent.handle}</p></div>
-              <span className="text-[0.52rem] text-ink-muted">{crewOnline ? selectedAgent.statusLabel : "Offline"}</span>
+        <section aria-labelledby="selected-agent-heading" className="mt-9 border-t border-border/45 pt-7">
+          <h3 id="selected-agent-heading" className="text-[0.95rem] font-medium text-ink">Lead now</h3>
+          <div className="mt-4 flex items-center gap-3">
+            <AgentAvatar agent={selectedAgent} size="medium" />
+            <div className="min-w-0">
+              <p className="truncate text-[0.9rem] font-medium text-ink">{selectedAgent.name}</p>
+              <p className="mt-1 truncate text-[0.76rem] text-ink-muted">{crewOnline ? selectedAgent.statusLabel : "Offline"}</p>
             </div>
           </div>
-          <ul className="mt-2 divide-y divide-border border-y border-border">
+        </section>
+
+        <section aria-labelledby="key-activity-heading" className="mt-9 border-t border-border/45 pt-7">
+          <h3 id="key-activity-heading" className="text-[0.95rem] font-medium text-ink">Key activity</h3>
+          <ul className="mt-3 space-y-3">
             {recentEvents.slice(0, 3).map((event) => (
-              <li key={event.actor} className="flex gap-2 px-1 py-2">
-                <Bot aria-hidden="true" className="mt-0.5 size-2.5 shrink-0 text-ink-muted" />
-                <p className="text-[0.56rem] leading-4 text-ink-muted"><span className="text-ink-secondary">{event.actor}</span> · {event.detail}</p>
+              <li key={event.actor} className="flex gap-3 py-1">
+                <Activity aria-hidden="true" className="mt-1 size-3.5 shrink-0 text-ink-muted" />
+                <p className="text-[0.8rem] leading-5 text-ink-muted"><span className="text-ink-secondary">{event.actor}</span> · {event.detail}</p>
               </li>
             ))}
           </ul>
         </section>
       </div>
 
-      <footer className="border-t border-border px-3.5 py-2.5">
-        <div className="flex items-center gap-2"><GitBranch aria-hidden="true" className="size-3 text-ink-muted" /><span className="min-w-0 flex-1 truncate font-mono text-[0.52rem] text-ink-muted">{project.branch}</span><span className={`size-1.5 rounded-full ${crewOnline ? "bg-success" : "bg-ink-muted"}`} /></div>
+      <footer className="border-t border-border/45 pt-4 text-[0.76rem] text-ink-muted">
+        <div className="flex items-center justify-between gap-3">
+          <span>Local environment</span>
+          <span className={crewOnline ? "text-accent" : "text-ink-muted"}>{crewOnline ? "Online" : "Offline"}</span>
+        </div>
       </footer>
     </div>
   );

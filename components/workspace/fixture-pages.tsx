@@ -9,15 +9,15 @@ import { DenseListRow, DetailSection, MasterDetail, MetadataGrid, SectionLabel, 
 type Tone = "neutral" | "accent" | "success" | "warning" | "error";
 
 function SearchField({ label, placeholder, value, onChange }: { label: string; placeholder: string; value: string; onChange: (value: string) => void }) {
-  return <div className="border-b border-border p-2"><label className="flex min-h-8 items-center gap-2 rounded-[var(--radius-small)] border border-border bg-canvas px-2"><Search aria-hidden="true" className="size-3 text-ink-muted" /><span className="sr-only">{label}</span><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="min-w-0 flex-1 bg-transparent text-[0.62rem] text-ink placeholder:text-ink-muted" /></label></div>;
+  return <div className="border-b border-border/30 p-3"><label className="flex min-h-10 items-center gap-2.5 rounded-[var(--radius-small)] bg-panel/45 px-3 focus-within:shadow-[inset_0_0_0_1px_var(--focus-ring)]"><Search aria-hidden="true" className="size-3.5 text-ink-muted" /><span className="sr-only">{label}</span><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="min-w-0 flex-1 bg-transparent text-[0.82rem] text-ink placeholder:text-ink-muted" /></label></div>;
 }
 
 function EmptyResults({ label }: { label: string }) {
-  return <p className="border-t border-border px-3 py-5 text-center text-[0.61rem] text-ink-muted">No {label} match this search.</p>;
+  return <p className="border-t border-border/30 px-4 py-8 text-center text-[0.82rem] text-ink-muted">No {label} match this search.</p>;
 }
 
 function PreviewButton({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <button type="button" disabled title="Preview only" className={`${className} cursor-not-allowed opacity-60`}>{children}</button>;
+  return <button type="button" disabled title="Preview only" className={`${className} cursor-not-allowed opacity-55`}>{children}</button>;
 }
 
 function useFixtureSelection<T extends { id: string }>(items: T[]) {

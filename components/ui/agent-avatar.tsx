@@ -1,10 +1,10 @@
 import type { Agent } from "@/lib/mock-data";
 
 const tones: Record<Agent["avatarTone"], string> = {
-  ember: "border-accent/35 bg-accent-soft text-[#efad7d]",
-  moss: "border-success/30 bg-success-soft text-success",
-  slate: "border-[#71829a]/35 bg-[#1d252e] text-[#9eb0c8]",
-  plum: "border-[#9b7f9f]/35 bg-[#2a202b] text-[#c0a2c4]",
+  ember: "bg-panel-strong text-[#d2cdc5]",
+  moss: "bg-panel-strong text-[#b9beb5]",
+  slate: "bg-panel-strong text-[#b8bab8]",
+  plum: "bg-panel-strong text-[#c1bbb9]",
 };
 
 type AgentAvatarProps = {
@@ -22,7 +22,7 @@ export function AgentAvatar({ agent, size = "medium" }: AgentAvatarProps) {
   return (
     <span
       aria-hidden="true"
-      className={`inline-flex shrink-0 items-center justify-center rounded-[var(--radius-standard)] border font-mono font-semibold tracking-[0.08em] ${tones[agent.avatarTone]} ${sizes[size]}`}
+      className={`inline-flex shrink-0 items-center justify-center rounded-[var(--radius-small)] font-mono font-medium tracking-[0.08em] shadow-[inset_0_1px_0_rgb(255_255_255/0.035)] ${tones[agent.avatarTone]} ${sizes[size]}`}
       title={agent.name}
     >
       {agent.shortName}
