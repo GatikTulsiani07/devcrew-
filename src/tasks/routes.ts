@@ -4,6 +4,8 @@ import { ApplicationError } from "../errors.js";
 import {
   createTaskPathParamsSchema,
   createTaskRequestSchema,
+  executeTaskPathParamsSchema,
+  executeTaskRequestSchema,
   getTaskPathParamsSchema,
   planDecisionPathParamsSchema,
   planDecisionRequestSchema,
@@ -71,12 +73,53 @@ export function createTaskRoutes(taskService: TaskService): Hono<TaskRoutesEnv> 
     return c.json({ task });
   });
 
+  routes.post("/:projectId/tasks/:taskId/execute", async (c) => {
+    const params = executeTaskPathParamsSchema.safeParse({
+      projectId: c.req.param("projectId"),
+      taskId: c.req.param("taskId"),
+    });
+    const body = await readOptionalJsonBody(c.req.text.bind(c.req));
+    const request = executeTaskRequestSchema.safeParse(body);
+
+    if (!params.success || !request.success) {
+      throw validationError();
+    }
+
+    const task = await taskService.executeTask(
+      params.data.projectId,
+      params.data.taskId,
+    );
+    return c.json({ task });
+  });
+
   return routes;
 }
 
 async function readJsonBody(parseJson: () => Promise<unknown>): Promise<unknown> {
   try {
     return await parseJson();
+  } catch {
+    throw validationError();
+  }
+}
+
+async function readOptionalJsonBody(
+  readText: () => Promise<string>,
+): Promise<unknown> {
+  let text: string;
+
+  try {
+    text = await readText();
+  } catch {
+    throw validationError();
+  }
+
+  if (text.trim() === "") {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text);
   } catch {
     throw validationError();
   }

@@ -4,6 +4,7 @@ import { ApplicationError } from "../errors.js";
 import type { ProjectService } from "../projects/project-service.js";
 import type {
   CreateTaskInput,
+  DeveloperExecutor,
   PlanDecisionInput,
   TaskPlanner,
   TaskSnapshot,
@@ -16,6 +17,7 @@ export type TaskClock = () => Date;
 export interface TaskServiceDependencies {
   projectService: ProjectService;
   planner: TaskPlanner;
+  developerExecutor: DeveloperExecutor;
   store: TaskStore;
   generateTaskId?: TaskIdGenerator;
   now?: TaskClock;
@@ -32,11 +34,13 @@ export interface TaskService {
     taskId: string,
     input: PlanDecisionInput,
   ): Promise<TaskSnapshot>;
+  executeTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
 }
 
 export function createTaskService({
   projectService,
   planner,
+  developerExecutor,
   store,
   generateTaskId = () => `task_${randomUUID()}`,
   now = () => new Date(),
@@ -105,6 +109,35 @@ export function createTaskService({
 
       return copyTask(await store.update(updatedTask));
     },
+
+    async executeTask(projectId, taskId) {
+      await projectService.getProject(projectId);
+
+      const task = await store.findByProjectAndId(projectId, taskId);
+
+      if (task === undefined) {
+        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
+      }
+
+      if (task.status !== "PLAN_APPROVED" || task.execution !== undefined) {
+        throw new ApplicationError(
+          "INVALID_TASK_TRANSITION",
+          409,
+          "Task is not approved for implementation",
+        );
+      }
+
+      const execution = await developerExecutor.execute(copyTask(task));
+      const timestamp = now().toISOString();
+      const updatedTask: TaskSnapshot = {
+        ...copyTask(task),
+        status: "IMPLEMENTATION_COMPLETED",
+        execution,
+        updatedAt: timestamp,
+      };
+
+      return copyTask(await store.update(updatedTask));
+    },
   };
 }
 
@@ -128,6 +161,23 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               ? {}
               : { reason: task.planDecision.reason }),
             decidedAt: task.planDecision.decidedAt,
+          },
+        }),
+    ...(task.execution === undefined
+      ? {}
+      : {
+          execution: {
+            id: task.execution.id,
+            role: task.execution.role,
+            status: task.execution.status,
+            attempt: task.execution.attempt,
+            startedAt: task.execution.startedAt,
+            completedAt: task.execution.completedAt,
+            result: {
+              summary: task.execution.result.summary,
+              changedFiles: [...task.execution.result.changedFiles],
+              verification: [...task.execution.result.verification],
+            },
           },
         }),
     createdAt: task.createdAt,
