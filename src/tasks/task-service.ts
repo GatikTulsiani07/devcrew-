@@ -154,7 +154,7 @@ export function createTaskService({
     },
 
     async executeTask(projectId, taskId) {
-      await projectService.getProject(projectId);
+      const project = await projectService.getProject(projectId);
 
       const task = await store.findByProjectAndId(projectId, taskId);
 
@@ -170,7 +170,10 @@ export function createTaskService({
         );
       }
 
-      const execution = await developerExecutor.execute(copyTask(task));
+      const execution = await developerExecutor.execute({
+        project,
+        task: copyTask(task),
+      });
       const timestamp = now().toISOString();
       const updatedTask: TaskSnapshot = {
         ...copyTask(task),
