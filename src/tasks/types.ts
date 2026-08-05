@@ -141,5 +141,5 @@ export interface DevOpsValidator {
 }
 
 export interface TaskReviewer {
-  review(task: TaskSnapshot): Promise<TaskReview>;
+  review(task: TaskSnapshot, project?: ProjectSnapshot): Promise<TaskReview>;
 }

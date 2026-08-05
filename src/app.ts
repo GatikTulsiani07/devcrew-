@@ -19,10 +19,10 @@ import { createProjectRoutes } from "./projects/routes.js";
 import { resolveRequestId, type RequestIdGenerator } from "./request-id.js";
 import { preparedRepositories } from "./repositories/prepared-repositories.js";
 import { createDeterministicDevOpsValidator } from "./tasks/deterministic-devops-validator.js";
-import { createDeterministicReviewer } from "./tasks/deterministic-reviewer.js";
 import { InMemoryTaskStore } from "./tasks/in-memory-task-store.js";
 import { createDeveloperExecutorFromEnv } from "./tasks/openai-developer-executor.js";
 import { createManagerPlannerFromEnv } from "./tasks/openai-manager.js";
+import { createReviewerFromEnv } from "./tasks/openai-reviewer.js";
 import { createTaskRoutes } from "./tasks/routes.js";
 import {
   createTaskService,
@@ -66,7 +66,7 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       planner: createManagerPlannerFromEnv(),
       developerExecutor: createDeveloperExecutorFromEnv(),
       devOpsValidator: createDeterministicDevOpsValidator(),
-      taskReviewer: createDeterministicReviewer(),
+      taskReviewer: createReviewerFromEnv(),
       store: new InMemoryTaskStore(),
       activityService,
     });

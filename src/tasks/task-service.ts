@@ -236,7 +236,7 @@ export function createTaskService({
     },
 
     async reviewTask(projectId, taskId) {
-      await projectService.getProject(projectId);
+      const project = await projectService.getProject(projectId);
 
       const task = await store.findByProjectAndId(projectId, taskId);
 
@@ -252,7 +252,7 @@ export function createTaskService({
         );
       }
 
-      const review = await taskReviewer.review(copyTask(task));
+      const review = await taskReviewer.review(copyTask(task), project);
       const timestamp = now().toISOString();
       const updatedTask: TaskSnapshot = {
         ...copyTask(task),
