@@ -1,7 +1,7 @@
 "use client";
 
 import { Activity, GitBranch } from "lucide-react";
-import { agents, project, recentEvents } from "@/lib/mock-data";
+import { agents, project } from "@/lib/mock-data";
 import { AgentAvatar } from "@/components/ui/agent-avatar";
 import { useWorkspaceState } from "@/components/shell/workspace-state";
 
@@ -34,7 +34,7 @@ export function WorkshopRail({ compact = false }: { compact?: boolean }) {
         <section aria-labelledby="project-context-heading">
           <h3 id="project-context-heading" className="text-[0.95rem] font-medium text-ink">Project</h3>
           <div className="mt-4 space-y-4 text-[0.82rem] text-ink-muted">
-            <p className="leading-6 text-ink-secondary">{project.name} is running as a local fixture workspace. No browser action executes shell or Git.</p>
+            <p className="leading-6 text-ink-secondary">{project.name} is connected through the backend workflow. No browser action executes shell or Git.</p>
             <div className="flex items-center gap-2 font-mono text-[0.72rem]">
               <GitBranch aria-hidden="true" className="size-3.5" />
               <span className="min-w-0 truncate">{project.branch}</span>
@@ -56,12 +56,14 @@ export function WorkshopRail({ compact = false }: { compact?: boolean }) {
         <section aria-labelledby="key-activity-heading" className="mt-9 border-t border-border/45 pt-7">
           <h3 id="key-activity-heading" className="text-[0.95rem] font-medium text-ink">Key activity</h3>
           <ul className="mt-3 space-y-3">
-            {recentEvents.slice(0, 3).map((event) => (
-              <li key={event.actor} className="flex gap-3 py-1">
-                <Activity aria-hidden="true" className="mt-1 size-3.5 shrink-0 text-ink-muted" />
-                <p className="text-[0.8rem] leading-5 text-ink-muted"><span className="text-ink-secondary">{event.actor}</span> · {event.detail}</p>
-              </li>
-            ))}
+            <li className="flex gap-3 py-1">
+              <Activity aria-hidden="true" className="mt-1 size-3.5 shrink-0 text-ink-muted" />
+              <p className="text-[0.8rem] leading-5 text-ink-muted"><span className="text-ink-secondary">Timeline</span> · Backend events appear in the Activity timeline.</p>
+            </li>
+            <li className="flex gap-3 py-1">
+              <Activity aria-hidden="true" className="mt-1 size-3.5 shrink-0 text-ink-muted" />
+              <p className="text-[0.8rem] leading-5 text-ink-muted"><span className="text-ink-secondary">State</span> · Lifecycle actions follow the authoritative task status.</p>
+            </li>
           </ul>
         </section>
       </div>

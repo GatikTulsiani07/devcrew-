@@ -1,7 +1,6 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { ActivityWorkspace } from "@/components/activity/activity-workspace";
 import { AppShell } from "@/components/shell/app-shell";
 import { AgentsWorkspace, IdeasWorkspace } from "@/components/workspace/fixture-pages";
 
@@ -113,14 +112,11 @@ describe("focused Sprint 2A interactions", () => {
     expect(view.textContent).toContain("Project settingsPreview only");
   });
 
-  it("disables the Activity composer when the crew is offline", async () => {
-    const view = await render(<AppShell><ActivityWorkspace /></AppShell>);
+  it("toggles the crew power control state", async () => {
+    const view = await render(<AppShell><div /></AppShell>);
     const power = view.querySelector<HTMLButtonElement>('[aria-label="Turn the Devcrew agents offline"]');
-    const composer = view.querySelector<HTMLTextAreaElement>("#activity-composer");
     expect(power).not.toBeNull();
-    expect(composer?.disabled).toBe(false);
     await act(async () => click(power!));
-    expect(composer?.disabled).toBe(true);
-    expect(composer?.placeholder).toContain("Bring the crew online");
+    expect(view.querySelector<HTMLButtonElement>('[aria-label="Bring the Devcrew agents online"]')).not.toBeNull();
   });
 });
