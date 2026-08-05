@@ -10,8 +10,8 @@ import type {
   CreateTaskInput,
   DeveloperExecutor,
   DevOpsValidator,
+  ManagerPlanner,
   PlanDecisionInput,
-  TaskPlanner,
   TaskReviewer,
   TaskSnapshot,
   TaskStore,
@@ -22,7 +22,7 @@ export type TaskClock = () => Date;
 
 export interface TaskServiceDependencies {
   projectService: ProjectService;
-  planner: TaskPlanner;
+  planner: ManagerPlanner;
   developerExecutor: DeveloperExecutor;
   devOpsValidator: DevOpsValidator;
   taskReviewer: TaskReviewer;
@@ -61,9 +61,9 @@ export function createTaskService({
 }: TaskServiceDependencies): TaskService {
   return {
     async createTask(projectId, input) {
-      await projectService.getProject(projectId);
+      const project = await projectService.getProject(projectId);
 
-      const plan = await planner.createPlan(input);
+      const plan = await planner.createPlan({ ...input, project });
       const timestamp = now().toISOString();
       const task: TaskSnapshot = {
         id: generateTaskId(),

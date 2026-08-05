@@ -1,3 +1,5 @@
+import type { ProjectSnapshot } from "../projects/types.js";
+
 export type TaskStatus =
   | "WAITING_FOR_APPROVAL"
   | "PLAN_APPROVED"
@@ -103,6 +105,10 @@ export interface CreateTaskInput {
   description: string;
 }
 
+export interface ManagerPlanInput extends CreateTaskInput {
+  project: ProjectSnapshot;
+}
+
 export interface PlanDecisionInput {
   decision: PlanDecisionType;
   reason?: string;
@@ -117,8 +123,8 @@ export interface TaskStore {
   ): Promise<TaskSnapshot | undefined>;
 }
 
-export interface TaskPlanner {
-  createPlan(input: CreateTaskInput): Promise<TaskPlan>;
+export interface ManagerPlanner {
+  createPlan(input: ManagerPlanInput): Promise<TaskPlan>;
 }
 
 export interface DeveloperExecutor {

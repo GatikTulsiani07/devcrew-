@@ -20,9 +20,9 @@ import { resolveRequestId, type RequestIdGenerator } from "./request-id.js";
 import { preparedRepositories } from "./repositories/prepared-repositories.js";
 import { createDeterministicDeveloperExecutor } from "./tasks/deterministic-developer-executor.js";
 import { createDeterministicDevOpsValidator } from "./tasks/deterministic-devops-validator.js";
-import { createDeterministicPlanner } from "./tasks/deterministic-planner.js";
 import { createDeterministicReviewer } from "./tasks/deterministic-reviewer.js";
 import { InMemoryTaskStore } from "./tasks/in-memory-task-store.js";
+import { createManagerPlannerFromEnv } from "./tasks/openai-manager.js";
 import { createTaskRoutes } from "./tasks/routes.js";
 import {
   createTaskService,
@@ -63,7 +63,7 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
     dependencies.taskService ??
     createTaskService({
       projectService,
-      planner: createDeterministicPlanner(),
+      planner: createManagerPlannerFromEnv(),
       developerExecutor: createDeterministicDeveloperExecutor(),
       devOpsValidator: createDeterministicDevOpsValidator(),
       taskReviewer: createDeterministicReviewer(),
