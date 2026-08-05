@@ -1,4 +1,4 @@
-import type { TaskPlanner, TaskPlan } from "./types.js";
+import type { ManagerPlanner, TaskPlan } from "./types.js";
 
 const deterministicPlan: TaskPlan = {
   summary: "Implement requested engineering task.",
@@ -11,7 +11,7 @@ const deterministicPlan: TaskPlan = {
   ],
 };
 
-export function createDeterministicPlanner(): TaskPlanner {
+export function createDeterministicPlanner(): ManagerPlanner {
   return {
     async createPlan() {
       return {
