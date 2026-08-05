@@ -1184,6 +1184,10 @@ describe("task manager planning API", () => {
 
     const response = await executeTask(app);
     const body = await response.text();
+    const taskRead = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const persistedTask = (await taskRead.json()).task;
 
     assert.equal(response.status, 500);
     assert.deepEqual(JSON.parse(body), {
@@ -1195,6 +1199,8 @@ describe("task manager planning API", () => {
       },
     });
     assert.equal(body.includes(sensitiveMessage), false);
+    assert.equal(persistedTask.status, "PLAN_APPROVED");
+    assert.equal(persistedTask.execution, undefined);
   });
 
   it("does not return filesystem paths, shell commands, secrets, or stack traces in execution responses", async () => {

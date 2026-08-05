@@ -22,6 +22,7 @@ import { createDeterministicPlanner } from "../src/tasks/deterministic-planner.j
 import { createDeterministicReviewer } from "../src/tasks/deterministic-reviewer.js";
 import { InMemoryTaskStore } from "../src/tasks/in-memory-task-store.js";
 import { createTaskService } from "../src/tasks/task-service.js";
+import type { DeveloperExecutor } from "../src/tasks/types.js";
 
 const preparedRepositories: readonly PreparedRepository[] = [
   {
@@ -83,7 +84,9 @@ function createDeterministicProjectService(
   });
 }
 
-function createTestApp() {
+function createTestApp({
+  developerExecutor,
+}: { developerExecutor?: DeveloperExecutor } = {}) {
   const store = new InMemoryActivityStore();
   const activityService = createDeterministicActivityService(store);
   const projectService = createDeterministicProjectService(activityService);
@@ -92,10 +95,12 @@ function createTestApp() {
   const taskService = createTaskService({
     projectService,
     planner: createDeterministicPlanner(),
-    developerExecutor: createDeterministicDeveloperExecutor({
-      generateExecutionId: () => "exec_000001",
-      now: () => new Date("2026-08-03T03:00:00.000Z"),
-    }),
+    developerExecutor:
+      developerExecutor ??
+      createDeterministicDeveloperExecutor({
+        generateExecutionId: () => "exec_000001",
+        now: () => new Date("2026-08-03T03:00:00.000Z"),
+      }),
     devOpsValidator: createDeterministicDevOpsValidator({
       generateValidationId: () => "val_000001",
       now: () => new Date("2026-08-03T04:00:00.000Z"),
@@ -401,6 +406,28 @@ describe("activity API", () => {
 
     assert.equal(failed.status, 404);
     assert.deepEqual(after, before);
+  });
+
+  it("does not append IMPLEMENTATION_COMPLETED when developer execution fails", async () => {
+    const developerExecutor: DeveloperExecutor = {
+      async execute() {
+        throw new Error("SENSITIVE_DEVELOPER_FAILURE");
+      },
+    };
+    const { app } = createTestApp({ developerExecutor });
+
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await approvePlan(app)).status, 200);
+
+    const response = await executeTask(app);
+    const snapshot = await activitySnapshot(app);
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(
+      snapshot.events.map((event) => event.type),
+      ["PROJECT_CREATED", "TASK_CREATED", "PLAN_CREATED", "PLAN_APPROVED"],
+    );
   });
 
   it("sanitizes unexpected activity store failures", async () => {

@@ -114,6 +114,11 @@ export interface PlanDecisionInput {
   reason?: string;
 }
 
+export interface DeveloperExecutionInput {
+  project: ProjectSnapshot;
+  task: TaskSnapshot;
+}
+
 export interface TaskStore {
   create(task: TaskSnapshot): Promise<TaskSnapshot>;
   update(task: TaskSnapshot): Promise<TaskSnapshot>;
@@ -128,7 +133,7 @@ export interface ManagerPlanner {
 }
 
 export interface DeveloperExecutor {
-  execute(task: TaskSnapshot): Promise<TaskExecution>;
+  execute(input: DeveloperExecutionInput): Promise<TaskExecution>;
 }
 
 export interface DevOpsValidator {
