@@ -3,6 +3,7 @@ import { z } from "zod";
 const runtimeEnvSchema = z.object({
   DATABASE_URL: z.url(),
   PORT: z.coerce.number().int().min(1).max(65_535).default(3001),
+  HOST: z.string().trim().min(1).default("127.0.0.1"),
 });
 
 const drizzleEnvSchema = z.object({
