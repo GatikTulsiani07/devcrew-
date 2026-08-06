@@ -1,21 +1,25 @@
 "use client";
 
-import { Activity, GitBranch } from "lucide-react";
+import { Activity, Hash, Link2 } from "lucide-react";
 import { agents, project } from "@/lib/mock-data";
 import { AgentAvatar } from "@/components/ui/agent-avatar";
 import { useWorkspaceState } from "@/components/shell/workspace-state";
 
 export function WorkshopRail({ compact = false }: { compact?: boolean }) {
-  const { crewOnline, selectedAgentId } = useWorkspaceState();
+  const { crewOnline, selectedAgentId, workflow } = useWorkspaceState();
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0];
+  const activeProject = workflow.project;
+  const projectName = activeProject?.name ?? project.name;
+  const repositoryUrl = activeProject?.repository.publicRepositoryUrl ?? project.repository;
 
   if (compact) {
     return (
       <section className="rounded-[var(--radius-standard)] bg-panel/40 px-4 py-4 shadow-[inset_0_1px_0_rgb(255_255_255/0.025)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <p className="text-[0.9rem] font-medium text-ink">Project context</p>
-            <p className="mt-1 text-[0.78rem] text-ink-muted">{project.repository}</p>
+            <p className="mt-1 break-all text-[0.78rem] text-ink-muted">{repositoryUrl}</p>
+            {!activeProject && <p className="mt-1 text-[0.72rem] text-ink-muted">Fixture setup fallback</p>}
           </div>
           <span className={`text-[0.8rem] ${crewOnline ? "text-accent" : "text-ink-muted"}`}>{crewOnline ? "Crew online" : "Crew offline"}</span>
         </div>
@@ -34,11 +38,19 @@ export function WorkshopRail({ compact = false }: { compact?: boolean }) {
         <section aria-labelledby="project-context-heading">
           <h3 id="project-context-heading" className="text-[0.95rem] font-medium text-ink">Project</h3>
           <div className="mt-4 space-y-4 text-[0.82rem] text-ink-muted">
-            <p className="leading-6 text-ink-secondary">{project.name} is connected through the backend workflow. No browser action executes shell or Git.</p>
+            <p className="break-words leading-6 text-ink-secondary">
+              {activeProject ? projectName : `${projectName} is fixture setup context until the backend project exists.`}
+            </p>
             <div className="flex items-center gap-2 font-mono text-[0.72rem]">
-              <GitBranch aria-hidden="true" className="size-3.5" />
-              <span className="min-w-0 truncate">{project.branch}</span>
+              <Link2 aria-hidden="true" className="size-3.5 shrink-0" />
+              <span title={repositoryUrl} className="min-w-0 break-all">{repositoryUrl}</span>
             </div>
+            {activeProject && (
+              <div className="flex items-center gap-2 font-mono text-[0.72rem]">
+                <Hash aria-hidden="true" className="size-3.5 shrink-0" />
+                <span className="min-w-0 truncate">Project ID {activeProject.id}</span>
+              </div>
+            )}
           </div>
         </section>
 

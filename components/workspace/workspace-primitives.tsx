@@ -129,7 +129,7 @@ export function MetadataGrid({ items }: { items: Array<{ label: string; value: s
       {items.map((item) => (
         <div key={item.label} className="border-b border-r border-border/25 px-4 py-3.5">
           <dt className="font-mono text-[0.54rem] uppercase tracking-[0.1em] text-ink-muted">{item.label}</dt>
-          <dd className="mt-1.5 text-[0.78rem] text-ink-secondary">{item.value}</dd>
+          <dd title={item.value} className="mt-1.5 break-words text-[0.78rem] text-ink-secondary">{item.value}</dd>
         </div>
       ))}
     </dl>

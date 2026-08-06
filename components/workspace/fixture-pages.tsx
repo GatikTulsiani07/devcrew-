@@ -4,6 +4,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { AlertTriangle, ArrowUpRight, Bot, BookOpenText, Brain, Check, CircleDashed, FileText, FolderKanban, GitBranch, KeyRound, Lightbulb, Link2, Plus, Search, ShieldCheck, Ticket, Wrench } from "lucide-react";
 import { agents, documents, ideas, projects, reviews, tickets } from "@/lib/mock-data";
 import { AgentAvatar } from "@/components/ui/agent-avatar";
+import { useWorkspaceState } from "@/components/shell/workspace-state";
 import { DenseListRow, DetailSection, MasterDetail, MetadataGrid, SectionLabel, SurfaceHeader, Tag, WorkspaceHeader, WorkspacePage } from "@/components/workspace/workspace-primitives";
 
 type Tone = "neutral" | "accent" | "success" | "warning" | "error";
@@ -38,9 +39,64 @@ function useFixtureSelection<T extends { id: string }>(items: T[]) {
 }
 
 export function ProjectsWorkspace() {
+  const { workflow } = useWorkspaceState();
+  const activeProject = workflow.project;
   const state = useFixtureSelection(projects);
   const selected = state.selected;
-  return <WorkspacePage><WorkspaceHeader icon={FolderKanban} title="Projects" meta="2 workspaces · 1 connected" action={<PreviewButton className="inline-flex min-h-8 items-center gap-1.5 rounded-[var(--radius-small)] border border-border bg-panel px-2.5 text-[0.62rem] text-ink-secondary"><Plus aria-hidden="true" className="size-3" /> New project · Preview only</PreviewButton>} /><MasterDetail master={<><SearchField label="Search projects" placeholder="Search projects…" value={state.query} onChange={state.updateQuery} /><SectionLabel count={state.filtered.length}>Repositories</SectionLabel>{state.filtered.length ? state.filtered.map((item, index) => <DenseListRow key={item.id} selected={item.id === state.selectedId} onClick={() => state.setSelectedId(item.id)} icon={<span className="grid size-7 place-items-center rounded-[var(--radius-small)] bg-accent-soft font-mono text-[0.51rem] text-accent">{index === 0 ? "DM" : "DR"}</span>} title={item.name} meta={`${item.repository} · ${item.branch}`} trailing={<span className={`size-1.5 rounded-full ${item.state === "Connected" ? "bg-success" : "bg-ink-muted"}`} />}/>) : <EmptyResults label="projects" />}</>} detail={<><SurfaceHeader eyebrow={selected.state === "Connected" ? "Connected project" : "Available project"} title={selected.name} description="The selected repository, crew, knowledge, and delivery history share this visible project boundary." action={<Tag tone={selected.state === "Connected" ? "success" : "neutral"}>{selected.state}</Tag>} /><DetailSection title="Repository"><MetadataGrid items={[{ label: "Repository", value: selected.repository }, { label: "Branch", value: selected.branch }, { label: "Indexing", value: selected.indexing }, { label: "Environment", value: selected.state === "Connected" ? "Prepared local worktree" : "Read-only reference" }, { label: "Crew", value: selected.state === "Connected" ? "4 fixed roles" : "Not assigned" }, { label: "Visibility", value: "Local fixture" }]} /></DetailSection><DetailSection title="Project actions"><div className="grid gap-2 sm:grid-cols-2"><div id="new-project" className="scroll-mt-4"><PreviewButton className="flex min-h-12 w-full items-center gap-3 rounded-[var(--radius-small)] border border-border bg-panel px-3 text-left"><Plus aria-hidden="true" className="size-4 text-accent" /><span><span className="block text-[0.67rem] font-medium text-ink">Create project</span><span className="mt-0.5 block text-[0.56rem] text-ink-muted">Preview only</span></span></PreviewButton></div><div id="link-repository" className="scroll-mt-4"><PreviewButton className="flex min-h-12 w-full items-center gap-3 rounded-[var(--radius-small)] border border-border bg-panel px-3 text-left"><Link2 aria-hidden="true" className="size-4 text-accent" /><span><span className="block text-[0.67rem] font-medium text-ink">Connect repository</span><span className="mt-0.5 block text-[0.56rem] text-ink-muted">Preview only</span></span></PreviewButton></div></div></DetailSection><DetailSection title="Recent project activity"><ol className="divide-y divide-border border-y border-border"><li className="flex gap-3 py-2.5"><GitBranch aria-hidden="true" className="mt-0.5 size-3 text-ink-muted" /><div><p className="text-[0.64rem] text-ink-secondary">{selected.branch} selected for inspection</p><time className="font-mono text-[0.5rem] text-ink-muted">2 min ago</time></div></li><li className="flex gap-3 py-2.5"><FolderKanban aria-hidden="true" className="mt-0.5 size-3 text-ink-muted" /><div><p className="text-[0.64rem] text-ink-secondary">Project context available to the Manager fixture</p><time className="font-mono text-[0.5rem] text-ink-muted">12 min ago</time></div></li></ol></DetailSection><div id="settings" className="scroll-mt-4 px-5 py-4"><p className="text-[0.62rem] text-ink-muted">Project settings remain presentation-only until an approved contract exists.</p></div></>} /></WorkspacePage>;
+
+  if (activeProject) {
+    return (
+      <WorkspacePage>
+        <WorkspaceHeader
+          icon={FolderKanban}
+          title="Projects"
+          meta="1 backend project · authoritative"
+          action={<PreviewButton className="inline-flex min-h-8 items-center gap-1.5 rounded-[var(--radius-small)] border border-border bg-panel px-2.5 text-[0.62rem] text-ink-secondary"><Plus aria-hidden="true" className="size-3" /> New project · Preview only</PreviewButton>}
+        />
+        <MasterDetail
+          master={<>
+            <SectionLabel count={1}>Backend project</SectionLabel>
+            <DenseListRow
+              selected
+              icon={<span className="grid size-7 place-items-center rounded-[var(--radius-small)] bg-accent-soft font-mono text-[0.51rem] text-accent">BP</span>}
+              title={activeProject.name}
+              meta={activeProject.repository.publicRepositoryUrl}
+              trailing={<span className="size-1.5 rounded-full bg-success" />}
+            />
+          </>}
+          detail={<>
+            <SurfaceHeader
+              eyebrow="Backend project"
+              title={activeProject.name}
+              description="Project identity comes from the backend project returned by the active workflow."
+              action={<Tag tone="success">Authoritative</Tag>}
+            />
+            <DetailSection title="Repository">
+              <MetadataGrid items={[
+                { label: "Public repository URL", value: activeProject.repository.publicRepositoryUrl },
+                { label: "Project ID", value: activeProject.id },
+              ]} />
+            </DetailSection>
+            <DetailSection title="Project actions">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div id="new-project" className="scroll-mt-4">
+                  <PreviewButton className="flex min-h-12 w-full items-center gap-3 rounded-[var(--radius-small)] border border-border bg-panel px-3 text-left"><Plus aria-hidden="true" className="size-4 text-accent" /><span><span className="block text-[0.67rem] font-medium text-ink">Create project</span><span className="mt-0.5 block text-[0.56rem] text-ink-muted">Preview only</span></span></PreviewButton>
+                </div>
+                <div id="link-repository" className="scroll-mt-4">
+                  <PreviewButton className="flex min-h-12 w-full items-center gap-3 rounded-[var(--radius-small)] border border-border bg-panel px-3 text-left"><Link2 aria-hidden="true" className="size-4 text-accent" /><span><span className="block text-[0.67rem] font-medium text-ink">Connect repository</span><span className="mt-0.5 block text-[0.56rem] text-ink-muted">Preview only</span></span></PreviewButton>
+                </div>
+              </div>
+            </DetailSection>
+            <div id="settings" className="scroll-mt-4 px-5 py-4">
+              <p className="text-[0.62rem] text-ink-muted">Project settings remain presentation-only until an approved settings contract exists.</p>
+            </div>
+          </>}
+        />
+      </WorkspacePage>
+    );
+  }
+
+  return <WorkspacePage><WorkspaceHeader icon={FolderKanban} title="Projects" meta="Fixture setup fallback · backend project pending" action={<PreviewButton className="inline-flex min-h-8 items-center gap-1.5 rounded-[var(--radius-small)] border border-border bg-panel px-2.5 text-[0.62rem] text-ink-secondary"><Plus aria-hidden="true" className="size-3" /> New project · Preview only</PreviewButton>} /><MasterDetail master={<><SearchField label="Search projects" placeholder="Search projects…" value={state.query} onChange={state.updateQuery} /><SectionLabel count={state.filtered.length}>Fixture repositories</SectionLabel>{state.filtered.length ? state.filtered.map((item, index) => <DenseListRow key={item.id} selected={item.id === state.selectedId} onClick={() => state.setSelectedId(item.id)} icon={<span className="grid size-7 place-items-center rounded-[var(--radius-small)] bg-accent-soft font-mono text-[0.51rem] text-accent">{index === 0 ? "DM" : "DR"}</span>} title={item.name} meta={`${item.repository} · ${item.branch}`} trailing={<span className={`size-1.5 rounded-full ${item.state === "Connected" ? "bg-success" : "bg-ink-muted"}`} />}/>) : <EmptyResults label="projects" />}</>} detail={<><SurfaceHeader eyebrow="Fixture project" title={selected.name} description="Fixture project context remains visible only until the backend project exists." action={<Tag tone="neutral">Fixture</Tag>} /><DetailSection title="Repository"><MetadataGrid items={[{ label: "Repository", value: selected.repository }, { label: "Branch", value: selected.branch }, { label: "Indexing", value: selected.indexing }, { label: "Environment", value: selected.state === "Connected" ? "Prepared local worktree" : "Read-only reference" }, { label: "Crew", value: selected.state === "Connected" ? "4 fixed roles" : "Not assigned" }, { label: "Visibility", value: "Local fixture" }]} /></DetailSection><DetailSection title="Project actions"><div className="grid gap-2 sm:grid-cols-2"><div id="new-project" className="scroll-mt-4"><PreviewButton className="flex min-h-12 w-full items-center gap-3 rounded-[var(--radius-small)] border border-border bg-panel px-3 text-left"><Plus aria-hidden="true" className="size-4 text-accent" /><span><span className="block text-[0.67rem] font-medium text-ink">Create project</span><span className="mt-0.5 block text-[0.56rem] text-ink-muted">Preview only</span></span></PreviewButton></div><div id="link-repository" className="scroll-mt-4"><PreviewButton className="flex min-h-12 w-full items-center gap-3 rounded-[var(--radius-small)] border border-border bg-panel px-3 text-left"><Link2 aria-hidden="true" className="size-4 text-accent" /><span><span className="block text-[0.67rem] font-medium text-ink">Connect repository</span><span className="mt-0.5 block text-[0.56rem] text-ink-muted">Preview only</span></span></PreviewButton></div></div></DetailSection><DetailSection title="Recent project activity"><ol className="divide-y divide-border border-y border-border"><li className="flex gap-3 py-2.5"><GitBranch aria-hidden="true" className="mt-0.5 size-3 text-ink-muted" /><div><p className="text-[0.64rem] text-ink-secondary">{selected.branch} selected for inspection</p><time className="font-mono text-[0.5rem] text-ink-muted">2 min ago</time></div></li><li className="flex gap-3 py-2.5"><FolderKanban aria-hidden="true" className="mt-0.5 size-3 text-ink-muted" /><div><p className="text-[0.64rem] text-ink-secondary">Project context available to the Manager fixture</p><time className="font-mono text-[0.5rem] text-ink-muted">12 min ago</time></div></li></ol></DetailSection><div id="settings" className="scroll-mt-4 px-5 py-4"><p className="text-[0.62rem] text-ink-muted">Project settings remain presentation-only until an approved contract exists.</p></div></>} /></WorkspacePage>;
 }
 
 export function AgentsWorkspace() {

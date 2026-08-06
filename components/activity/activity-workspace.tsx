@@ -3,7 +3,6 @@
 import { useMemo } from "react";
 import { AlertCircle, Check, Clock3, Radio, Send, Sparkles, UserCheck } from "lucide-react";
 import { useProjectActivity } from "@/hooks/use-project-activity";
-import { useProjectWorkflow } from "@/hooks/use-project-workflow";
 import type { ActivityEvent, ActivityEventType, TaskSnapshot, TaskStatus } from "@/lib/api-types";
 import { agents, type Agent, type AgentStatus } from "@/lib/mock-data";
 import { AgentAvatar } from "@/components/ui/agent-avatar";
@@ -245,8 +244,7 @@ function TaskResult({ task }: { task: TaskSnapshot }) {
 }
 
 export function ActivityWorkspace() {
-  const { crewOnline, selectedAgentId, setSelectedAgentId } = useWorkspaceState();
-  const workflow = useProjectWorkflow();
+  const { crewOnline, selectedAgentId, setSelectedAgentId, workflow } = useWorkspaceState();
   const activity = useProjectActivity(workflow.project?.id);
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0];
   const events = useMemo(() => activity.events.map(toTimelineEvent), [activity.events]);
@@ -255,7 +253,7 @@ export function ActivityWorkspace() {
   return (
     <div className="mx-auto flex min-h-full w-full max-w-[78rem] flex-col px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
       <header className="mb-9 max-w-4xl">
-        <p className="text-[0.82rem] text-ink-muted">Devcrew MVP</p>
+        <p className="text-[0.82rem] text-ink-muted">{workflow.project ? workflow.project.name : "Fixture setup fallback"}</p>
         <h1 className="mt-2 font-display text-[3rem] leading-[0.95] text-ink sm:text-[4rem]">Activity</h1>
         <p className="mt-4 max-w-2xl text-[0.98rem] leading-7 text-ink-secondary">A quiet view of the current run: who owns the plan, what changed, and where human approval is required before implementation proceeds.</p>
       </header>
@@ -277,9 +275,10 @@ export function ActivityWorkspace() {
               <StatusBadge status={state.status} label={state.label} />
             </div>
 
-            <div className="mt-8 grid gap-5 border-t border-border/40 pt-5 text-[0.82rem] text-ink-muted sm:grid-cols-3">
+            <div className="mt-8 grid gap-5 border-t border-border/40 pt-5 text-[0.82rem] text-ink-muted sm:grid-cols-2 lg:grid-cols-4">
               <div><span className="font-mono text-[0.7rem] text-ink-muted">MODEL</span><p className="mt-1 text-ink-secondary">{selectedAgent.model}</p></div>
-              <div><span className="font-mono text-[0.7rem] text-ink-muted">WORKSPACE</span><p className="mt-1 text-ink-secondary">{workflow.project?.name ?? "Creating project"}</p></div>
+              <div><span className="font-mono text-[0.7rem] text-ink-muted">WORKSPACE</span><p className="mt-1 break-words text-ink-secondary">{workflow.project?.name ?? "Creating backend project"}</p></div>
+              <div><span className="font-mono text-[0.7rem] text-ink-muted">PROJECT ID</span><p className="mt-1 truncate font-mono text-ink-secondary">{workflow.project?.id ?? "Pending"}</p></div>
               <div><span className="font-mono text-[0.7rem] text-ink-muted">BOUNDARY</span><p className="mt-1 text-ink-secondary">Backend authoritative</p></div>
             </div>
           </div>
