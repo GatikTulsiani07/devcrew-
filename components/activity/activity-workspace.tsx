@@ -1,55 +1,14 @@
 "use client";
 
-import { useMemo } from "react";
-import { AlertCircle, Check, Clock3, Radio, Send, Sparkles, UserCheck } from "lucide-react";
+import { Radio, Send, UserCheck } from "lucide-react";
 import { useProjectActivity } from "@/hooks/use-project-activity";
-import type { ActivityEvent, ActivityEventType, TaskSnapshot, TaskStatus } from "@/lib/api-types";
+import type { TaskSnapshot, TaskStatus } from "@/lib/api-types";
 import { agents, type Agent, type AgentStatus } from "@/lib/mock-data";
 import { AgentAvatar } from "@/components/ui/agent-avatar";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkshopRail } from "@/components/shell/workshop-rail";
 import { useWorkspaceState } from "@/components/shell/workspace-state";
-
-type TimelineKind = "progress" | "success" | "warning" | "error" | "queued";
-
-type TimelineEvent = {
-  id: string;
-  time: string;
-  title: string;
-  detail: string;
-  kind: TimelineKind;
-  output?: string;
-};
-
-const eventStyles: Record<TimelineKind, { className: string; icon: typeof Check }> = {
-  progress: { className: "bg-panel-strong text-accent", icon: Sparkles },
-  success: { className: "bg-panel-strong text-success", icon: Check },
-  warning: { className: "bg-panel-strong text-warning", icon: AlertCircle },
-  error: { className: "bg-panel-strong text-error", icon: AlertCircle },
-  queued: { className: "bg-panel-strong text-ink-muted", icon: Clock3 },
-};
-
-const activityLabels: Record<ActivityEventType, string> = {
-  PROJECT_CREATED: "Project connected",
-  TASK_CREATED: "Task created",
-  PLAN_CREATED: "Manager plan created",
-  PLAN_APPROVED: "Plan approved",
-  PLAN_REJECTED: "Plan rejected",
-  IMPLEMENTATION_COMPLETED: "Implementation completed",
-  VALIDATION_COMPLETED: "Validation completed",
-  REVIEW_COMPLETED: "Review completed",
-};
-
-const activityKinds: Record<ActivityEventType, TimelineKind> = {
-  PROJECT_CREATED: "success",
-  TASK_CREATED: "queued",
-  PLAN_CREATED: "progress",
-  PLAN_APPROVED: "success",
-  PLAN_REJECTED: "warning",
-  IMPLEMENTATION_COMPLETED: "success",
-  VALIDATION_COMPLETED: "success",
-  REVIEW_COMPLETED: "success",
-};
+import { ActivityTimeline } from "@/components/activity/activity-timeline";
 
 function visibleStatus(agent: Agent, online: boolean, task?: TaskSnapshot) {
   if (!online) return { status: "idle" as const, label: "Offline" };
@@ -119,27 +78,6 @@ function AgentSwitcher({ selectedId, onSelect, online, task }: { selectedId: Age
         })}
       </div>
     </section>
-  );
-}
-
-function TimelineEntry({ event, last }: { event: TimelineEvent; last: boolean }) {
-  const style = eventStyles[event.kind];
-  const Icon = style.icon;
-  return (
-    <li className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-4 py-6">
-      <div className="relative flex justify-center">
-        {!last && <span aria-hidden="true" className="absolute bottom-[-1.5rem] top-9 w-px bg-border/45" />}
-        <span className={`relative grid size-8 place-items-center rounded-full ${style.className}`}><Icon aria-hidden="true" className="size-4" /></span>
-      </div>
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          <h3 className="text-[0.98rem] font-medium text-ink">{event.title}</h3>
-          <time className="font-mono text-[0.68rem] text-ink-muted">{event.time}</time>
-        </div>
-        <p className="mt-2 max-w-3xl text-[0.88rem] leading-6 text-ink-secondary">{event.detail}</p>
-        {event.output && <p className="mt-4 rounded-[var(--radius-small)] bg-canvas/70 px-4 py-3 font-mono text-[0.76rem] leading-5 text-ink-secondary shadow-[inset_0_1px_0_rgb(255_255_255/0.025)]">{event.output}</p>}
-      </div>
-    </li>
   );
 }
 
@@ -247,7 +185,6 @@ export function ActivityWorkspace() {
   const { crewOnline, selectedAgentId, setSelectedAgentId, workflow } = useWorkspaceState();
   const activity = useProjectActivity(workflow.project?.id);
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0];
-  const events = useMemo(() => activity.events.map(toTimelineEvent), [activity.events]);
   const state = visibleStatus(selectedAgent, crewOnline, workflow.task);
 
   return (
@@ -296,7 +233,7 @@ export function ActivityWorkspace() {
               </div>
               {!crewOnline && <div className="mt-5 rounded-[var(--radius-small)] bg-panel/70 px-4 py-3"><p className="text-[0.9rem] font-medium text-ink">All agents are offline</p><p className="mt-1 text-[0.82rem] leading-5 text-ink-muted">Use the power control beside Settings to restore the crew. Backend history remains visible.</p></div>}
               {activity.error && <p role="alert" className="mt-5 rounded-[var(--radius-small)] bg-error/10 px-4 py-3 text-[0.82rem] leading-5 text-error">{activity.error}</p>}
-              {events.length > 0 ? <ol className="mt-3">{events.map((event, index) => <TimelineEntry key={event.id} event={event} last={index === events.length - 1} />)}</ol> : <div className="mt-6 rounded-[var(--radius-standard)] bg-panel px-6 py-10 text-center"><p className="font-display text-[1.6rem] text-ink">No recent activity</p><p className="mx-auto mt-2 max-w-sm text-[0.9rem] leading-6 text-ink-muted">{workflow.initializing ? "Creating the project and task." : "The backend has not returned activity for this project."}</p></div>}
+              {workflow.project ? <ActivityTimeline events={activity.events} /> : <div className="mt-6 rounded-[var(--radius-standard)] bg-panel px-6 py-10 text-center"><p className="font-display text-[1.6rem] text-ink">Fixture setup fallback</p><p className="mx-auto mt-2 max-w-sm text-[0.9rem] leading-6 text-ink-muted">Backend activity will appear after a real project is created.</p></div>}
             </section>
 
             <WorkflowActions task={workflow.task} pendingAction={workflow.pendingAction} onExecute={workflow.execute} onValidate={workflow.validate} onReview={workflow.review} />
@@ -307,24 +244,6 @@ export function ActivityWorkspace() {
       <section aria-label="Workshop summary" className="mt-8 xl:hidden"><WorkshopRail compact /></section>
     </div>
   );
-}
-
-function toTimelineEvent(event: ActivityEvent): TimelineEvent {
-  return {
-    id: event.id,
-    time: formatTime(event.createdAt),
-    title: activityLabels[event.type],
-    detail: event.summary,
-    kind: activityKinds[event.type],
-    output: `sequence ${event.sequence}${event.taskId ? ` · ${event.taskId}` : ""}`,
-  };
-}
-
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
 }
 
 function statusLabel(status: TaskStatus): string {

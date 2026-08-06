@@ -11,6 +11,22 @@ export interface ProjectActivityState {
   lastSequence: number;
 }
 
+export function mergeActivityEvents(
+  existing: readonly ActivityEvent[],
+  incoming: readonly ActivityEvent[],
+): ActivityEvent[] {
+  const byIdentity = new Map<string, ActivityEvent>();
+  const bySequence = new Map<number, string>();
+
+  for (const event of [...existing, ...incoming]) {
+    if (byIdentity.has(event.id) || bySequence.has(event.sequence)) continue;
+    byIdentity.set(event.id, event);
+    bySequence.set(event.sequence, event.id);
+  }
+
+  return [...byIdentity.values()].sort((first, second) => first.sequence - second.sequence);
+}
+
 interface ParsedSseEvent {
   id?: string;
   data?: string;
@@ -30,6 +46,12 @@ export function useProjectActivity(
   const lastSequenceRef = useRef(0);
 
   useEffect(() => {
+    setEvents([]);
+    setConnection("idle");
+    setError(undefined);
+    setLastSequence(0);
+    lastSequenceRef.current = 0;
+
     if (!projectId) {
       return;
     }
@@ -41,23 +63,7 @@ export function useProjectActivity(
 
     const applyEvents = (incoming: readonly ActivityEvent[]) => {
       setEvents((current) => {
-        const bySequence = new Map<number, ActivityEvent>();
-        const ids = new Set<string>();
-
-        for (const event of current) {
-          bySequence.set(event.sequence, event);
-          ids.add(event.id);
-        }
-
-        for (const event of incoming) {
-          if (ids.has(event.id) || bySequence.has(event.sequence)) continue;
-          bySequence.set(event.sequence, event);
-          ids.add(event.id);
-        }
-
-        const ordered = [...bySequence.values()].sort(
-          (first, second) => first.sequence - second.sequence,
-        );
+        const ordered = mergeActivityEvents(current, incoming);
         const nextLastSequence = ordered.at(-1)?.sequence ?? 0;
         lastSequenceRef.current = nextLastSequence;
         setLastSequence(nextLastSequence);
