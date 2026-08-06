@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { secureHeaders } from "hono/secure-headers";
 
 import {
   createActivityReadService,
@@ -8,6 +10,11 @@ import {
 } from "./activity/activity-service.js";
 import { InMemoryActivityStore } from "./activity/in-memory-activity-store.js";
 import { createActivityRoutes } from "./activity/routes.js";
+import {
+  MAX_REQUEST_BODY_BYTES,
+  readAllowedOrigins,
+  resolveAllowedOrigin,
+} from "./config/security.js";
 import type { DatabaseHealth } from "./db/health.js";
 import { ApplicationError, jsonError } from "./errors.js";
 import { describeError, logger as defaultLogger, type Logger } from "./observability/logger.js";
@@ -52,6 +59,8 @@ export interface AppDependencies {
   preparedRepositories?: readonly PreparedRepository[];
   controlledCommandRunner?: ControlledCommandRunner;
   logger?: Logger;
+  allowedOrigins?: readonly string[];
+  maxRequestBodyBytes?: number;
 }
 
 export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
@@ -95,7 +104,38 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       projectService,
       activityService,
     });
+  const allowedOrigins = dependencies.allowedOrigins ?? readAllowedOrigins();
+  const maxRequestBodyBytes =
+    dependencies.maxRequestBodyBytes ?? MAX_REQUEST_BODY_BYTES;
   const app = new Hono<AppEnv>();
+
+  app.use("*", secureHeaders());
+
+  app.use("*", async (c, next) => {
+    const requestOrigin = c.req.header("Origin");
+
+    if (requestOrigin !== undefined) {
+      const allowedOrigin = resolveAllowedOrigin(requestOrigin, allowedOrigins);
+
+      if (allowedOrigin !== null) {
+        c.header("Access-Control-Allow-Origin", allowedOrigin);
+        c.header("Vary", "Origin", { append: true });
+        c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        c.header(
+          "Access-Control-Allow-Headers",
+          "Content-Type, Accept, Last-Event-ID, X-Request-Id",
+        );
+        c.header("Access-Control-Expose-Headers", "X-Request-Id");
+        c.header("Access-Control-Max-Age", "600");
+      }
+
+      if (c.req.method === "OPTIONS") {
+        return c.body(null, 204);
+      }
+    }
+
+    await next();
+  });
 
   app.use("*", async (c, next) => {
     const requestId = resolveRequestId(
@@ -107,6 +147,20 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
     c.header("X-Request-Id", requestId);
     await next();
   });
+
+  app.use(
+    "*",
+    bodyLimit({
+      maxSize: maxRequestBodyBytes,
+      onError: () => {
+        throw new ApplicationError(
+          "REQUEST_BODY_TOO_LARGE",
+          413,
+          "Request body is too large",
+        );
+      },
+    }),
+  );
 
   app.get("/health", (c) =>
     c.json({

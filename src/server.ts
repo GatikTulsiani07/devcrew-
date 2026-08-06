@@ -11,9 +11,12 @@ const server = serve(
   {
     fetch: app.fetch,
     port: runtimeEnv.PORT,
+    hostname: runtimeEnv.HOST,
   },
   (info) => {
-    console.log(`devcrew-backend listening on port ${info.port}`);
+    console.log(
+      `devcrew-backend listening on ${runtimeEnv.HOST}:${info.port}`,
+    );
   },
 );
 
