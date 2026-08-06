@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiClient, ApiClientError } from "@/lib/api-client";
+import {
+  ApiClient,
+  ApiClientError,
+  projectPath,
+  taskPath,
+} from "@/lib/api-client";
 
 const backendUrl = "http://backend.test";
 
@@ -12,6 +17,15 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
 }
 
 describe("Devcrew API client", () => {
+  it("encodes project and task ids in shared API paths", () => {
+    expect(projectPath("proj 1/with/slash")).toBe(
+      "/api/v1/projects/proj%201%2Fwith%2Fslash",
+    );
+    expect(taskPath("proj 1/with/slash", "task 2/child")).toBe(
+      "/api/v1/projects/proj%201%2Fwith%2Fslash/tasks/task%202%2Fchild",
+    );
+  });
+
   it("creates projects through NEXT_PUBLIC_BACKEND_URL", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       jsonResponse({ project: { id: "proj_1", name: "Devcrew" } }),
