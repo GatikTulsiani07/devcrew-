@@ -9,6 +9,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkshopRail } from "@/components/shell/workshop-rail";
 import { useWorkspaceState } from "@/components/shell/workspace-state";
 import { ActivityTimeline } from "@/components/activity/activity-timeline";
+import { OrchestrationProgress } from "@/components/activity/orchestration-progress";
 
 function visibleStatus(agent: Agent, online: boolean, task?: TaskSnapshot) {
   if (!online) return { status: "idle" as const, label: "Offline" };
@@ -194,6 +195,8 @@ export function ActivityWorkspace() {
         <h1 className="mt-2 font-display text-[3rem] leading-[0.95] text-ink sm:text-[4rem]">Activity</h1>
         <p className="mt-4 max-w-2xl text-[0.98rem] leading-7 text-ink-secondary">A quiet view of the current run: who owns the plan, what changed, and where human approval is required before implementation proceeds.</p>
       </header>
+
+      <OrchestrationProgress task={workflow.task} fixtureFallback={!workflow.project} />
 
       <div className="space-y-7">
         <AgentSwitcher selectedId={selectedAgentId} onSelect={setSelectedAgentId} online={crewOnline} task={workflow.task} />
