@@ -55,9 +55,11 @@ describe("Devcrew API client", () => {
   });
 
   it("creates tasks and posts lifecycle commands", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
-      jsonResponse({ task: { id: "task_1", status: "WAITING_FOR_APPROVAL" } }),
-    );
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () =>
+        jsonResponse({ task: { id: "task_1", status: "WAITING_FOR_APPROVAL" } }),
+      );
     const client = new ApiClient({ backendUrl, fetcher });
 
     await client.createTask("proj_1", { title: "Task", description: "Details" });
