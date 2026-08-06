@@ -17,7 +17,7 @@ import {
   Ticket,
   X,
 } from "lucide-react";
-import { agents, project } from "@/lib/mock-data";
+import { agents } from "@/lib/mock-data";
 import { ProjectSelector } from "@/components/shell/project-selector";
 import { WorkshopRail } from "@/components/shell/workshop-rail";
 import { WorkspaceStateProvider, useWorkspaceState } from "@/components/shell/workspace-state";
@@ -90,7 +90,8 @@ function CrewSummary({ online }: { online: boolean }) {
 }
 
 function Sidebar({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
-  const { crewOnline, setCrewOnline } = useWorkspaceState();
+  const { crewOnline, setCrewOnline, workflow } = useWorkspaceState();
+  const repositoryLabel = workflow.project?.repository.publicRepositoryUrl ?? "Fixture setup fallback";
 
   return (
     <div
@@ -141,8 +142,8 @@ function Sidebar({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
             </button>
           </div>
           <div className="mt-3 flex items-center justify-between px-2 text-[0.68rem] text-ink-muted">
-            <span>{project.repository}</span>
-            <span className={crewOnline ? "text-accent" : "text-ink-muted"}>{crewOnline ? "Online" : "Offline"}</span>
+            <span title={repositoryLabel} className="min-w-0 truncate">{repositoryLabel}</span>
+            <span className={`ml-3 shrink-0 ${crewOnline ? "text-accent" : "text-ink-muted"}`}>{crewOnline ? "Online" : "Offline"}</span>
           </div>
         </div>
       </div>
