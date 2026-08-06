@@ -5,6 +5,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 
 import { ApplicationError } from "../errors.js";
+import { describeError, logger } from "../observability/logger.js";
 import type { ProjectSnapshot } from "../projects/types.js";
 import { createDeterministicReviewer } from "./deterministic-reviewer.js";
 import type {
@@ -94,13 +95,22 @@ export function createOpenAIReviewer({
         });
 
         output = response.output_parsed;
-      } catch {
+      } catch (error) {
+        logger.error("Reviewer request failed", {
+          model,
+          cause: describeError(error),
+        });
         throw sanitizedReviewerError();
       }
 
       const parsed = reviewerResponseSchema.safeParse(output);
 
       if (!parsed.success || containsUnsafeOutput(parsed.data)) {
+        logger.error("Reviewer returned an invalid or unsafe response", {
+          model,
+          reason: parsed.success ? "unsafe_output" : "schema_validation_failed",
+          ...(parsed.success ? {} : { issues: parsed.error.issues }),
+        });
         throw sanitizedReviewerError();
       }
 

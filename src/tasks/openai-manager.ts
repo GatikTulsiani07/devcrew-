@@ -3,6 +3,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 
 import { ApplicationError } from "../errors.js";
+import { describeError, logger } from "../observability/logger.js";
 import { createDeterministicPlanner } from "./deterministic-planner.js";
 import type { ManagerPlanInput, ManagerPlanner, TaskPlan } from "./types.js";
 
@@ -72,7 +73,11 @@ export function createOpenAIManagerPlanner({
         });
 
         output = response.output_parsed;
-      } catch {
+      } catch (error) {
+        logger.error("Manager planning request failed", {
+          model,
+          cause: describeError(error),
+        });
         throw new ApplicationError(
           "MANAGER_PLANNING_FAILED",
           502,
@@ -83,6 +88,10 @@ export function createOpenAIManagerPlanner({
       const parsed = managerResponseSchema.safeParse(output);
 
       if (!parsed.success) {
+        logger.error("Manager planning returned an invalid response", {
+          model,
+          issues: parsed.error.issues,
+        });
         throw new ApplicationError(
           "MANAGER_PLAN_INVALID",
           502,

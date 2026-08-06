@@ -14,7 +14,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:ui": "vitest run",
-    "test:backend": "node --import tsx --test test/*.test.ts",
+    "test:backend": "NODE_ENV=test node --import tsx --test test/*.test.ts",
     "test": "npm run test:backend && npm run test:ui",
     "db:generate": "node --env-file-if-exists=.env.local node_modules/drizzle-kit/bin.cjs generate",
     "db:check": "node --env-file-if-exists=.env.local node_modules/drizzle-kit/bin.cjs check"

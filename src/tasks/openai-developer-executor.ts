@@ -5,6 +5,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 
 import { ApplicationError } from "../errors.js";
+import { describeError, logger } from "../observability/logger.js";
 import { createDeterministicDeveloperExecutor } from "./deterministic-developer-executor.js";
 import type {
   DeveloperExecutionInput,
@@ -99,21 +100,35 @@ export function createOpenAIDeveloperExecutor({
         });
 
         output = response.output_parsed;
-      } catch {
+      } catch (error) {
+        logger.error("Developer execution request failed", {
+          model,
+          cause: describeError(error),
+        });
         throw sanitizedDeveloperError();
       }
 
       const parsed = developerResponseSchema.safeParse(output);
 
       if (!parsed.success) {
+        logger.error("Developer execution returned an invalid response", {
+          model,
+          issues: parsed.error.issues,
+        });
         throw sanitizedDeveloperError();
       }
 
       if (parsed.data.changedFiles.some((file) => isLocalPath(file.path))) {
+        logger.error("Developer execution proposed an unsafe local path", {
+          model,
+        });
         throw sanitizedDeveloperError();
       }
 
       if (containsUnsafeOutput(parsed.data)) {
+        logger.error("Developer execution returned unsafe output", {
+          model,
+        });
         throw sanitizedDeveloperError();
       }
 
