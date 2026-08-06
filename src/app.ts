@@ -17,7 +17,11 @@ import {
 } from "./projects/project-service.js";
 import { createProjectRoutes } from "./projects/routes.js";
 import { resolveRequestId, type RequestIdGenerator } from "./request-id.js";
-import { preparedRepositories } from "./repositories/prepared-repositories.js";
+import {
+  preparedRepositories as defaultPreparedRepositories,
+  type PreparedRepository,
+} from "./repositories/prepared-repositories.js";
+import { createControlledDevOpsValidator } from "./tasks/controlled-devops-validator.js";
 import { createDeterministicDevOpsValidator } from "./tasks/deterministic-devops-validator.js";
 import { InMemoryTaskStore } from "./tasks/in-memory-task-store.js";
 import { createDeveloperExecutorFromEnv } from "./tasks/openai-developer-executor.js";
@@ -28,6 +32,7 @@ import {
   createTaskService,
   type TaskService,
 } from "./tasks/task-service.js";
+import type { ControlledCommandRunner } from "./validation/types.js";
 
 type AppEnv = {
   Variables: {
@@ -43,10 +48,14 @@ export interface AppDependencies {
   activityService?: ActivityService;
   activityReadService?: ActivityReadService;
   activityHeartbeatIntervalMs?: number;
+  preparedRepositories?: readonly PreparedRepository[];
+  controlledCommandRunner?: ControlledCommandRunner;
 }
 
 export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
   const { databaseHealth, generateRequestId } = dependencies;
+  const preparedRepositories =
+    dependencies.preparedRepositories ?? defaultPreparedRepositories;
   const activityService =
     dependencies.activityService ??
     createActivityService({
@@ -65,7 +74,14 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       projectService,
       planner: createManagerPlannerFromEnv(),
       developerExecutor: createDeveloperExecutorFromEnv(),
-      devOpsValidator: createDeterministicDevOpsValidator(),
+      devOpsValidator:
+        process.env.DEVCREW_VALIDATION_MODE === "controlled"
+          ? createControlledDevOpsValidator({
+              projectService,
+              preparedRepositories,
+              runner: dependencies.controlledCommandRunner,
+            })
+          : createDeterministicDevOpsValidator(),
       taskReviewer: createReviewerFromEnv(),
       store: new InMemoryTaskStore(),
       activityService,

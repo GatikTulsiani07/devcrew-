@@ -1,0 +1,144 @@
+import { randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
+
+import { ApplicationError } from "../errors.js";
+import {
+  findPreparedRepository,
+  type PreparedRepository,
+} from "../repositories/prepared-repositories.js";
+import type { ProjectService } from "../projects/project-service.js";
+import {
+  findValidationProfile,
+  validationProfiles,
+} from "../validation/validation-profiles.js";
+import {
+  createControlledCommandRunner,
+  type ControlledCommandRunnerOptions,
+} from "../validation/controlled-command-runner.js";
+import type {
+  ControlledCommandRunner,
+  ValidationProfile,
+} from "../validation/types.js";
+import type {
+  DevOpsValidator,
+  TaskValidation,
+  ValidationCheckName,
+} from "./types.js";
+
+export interface ControlledDevOpsValidatorDependencies {
+  projectService: ProjectService;
+  preparedRepositories: readonly PreparedRepository[];
+  runner?: ControlledCommandRunner;
+  profiles?: readonly ValidationProfile[];
+  generateValidationId?: () => string;
+  now?: () => Date;
+  runnerOptions?: ControlledCommandRunnerOptions;
+}
+
+export function createControlledDevOpsValidator({
+  projectService,
+  preparedRepositories,
+  runner: injectedRunner,
+  profiles = validationProfiles,
+  generateValidationId = () => `val_${randomUUID()}`,
+  now = () => new Date(),
+  runnerOptions,
+}: ControlledDevOpsValidatorDependencies): DevOpsValidator {
+  const runner = injectedRunner ?? createControlledCommandRunner(runnerOptions);
+
+  return {
+    async validate(task): Promise<TaskValidation> {
+      const project = await projectService.getProject(task.projectId);
+      const repository = findPreparedRepository(
+        preparedRepositories,
+        project.repository.preparedRepositoryId,
+      );
+      const profileId = repository?.validationProfileId;
+      const profile =
+        profileId === undefined
+          ? undefined
+          : findValidationProfile(profiles, profileId);
+
+      if (!repository || !profile || !isValidRepository(repository) || !isValidProfile(profile)) {
+        throw validationFailure();
+      }
+
+      const startedAt = now().toISOString();
+      const checks = [];
+      for (const check of profile.checks) {
+        let result;
+        try {
+          result = await runner.run(check, repository.localCheckoutPath);
+        } catch {
+          throw validationFailure();
+        }
+        if (result.status !== "PASSED") {
+          throw validationFailure();
+        }
+        checks.push({
+          name: check.name as ValidationCheckName,
+          status: "PASSED" as const,
+          summary: checkSummary(check.name),
+        });
+      }
+
+      return {
+        id: generateValidationId(),
+        role: "DEVOPS_ENGINEER",
+        status: "PASSED",
+        attempt: 1,
+        startedAt,
+        completedAt: now().toISOString(),
+        checks,
+        summary: "Controlled validation completed successfully.",
+      };
+    },
+  };
+}
+
+function isValidRepository(repository: PreparedRepository): repository is PreparedRepository & {
+  localCheckoutPath: string;
+  validationProfileId: string;
+} {
+  return (
+    typeof repository.localCheckoutPath === "string" &&
+    isAbsolute(repository.localCheckoutPath) &&
+    typeof repository.validationProfileId === "string" &&
+    repository.validationProfileId.length > 0
+  );
+}
+
+function isValidProfile(profile: ValidationProfile): boolean {
+  const expectedNames = ["typecheck", "tests", "build"];
+  return (
+    Array.isArray(profile.checks) &&
+    profile.checks.length === 3 &&
+    profile.checks.every((check, index) => check.name === expectedNames[index]) &&
+    profile.checks.every(
+      (check) =>
+        typeof check.executable === "string" &&
+        check.executable.length > 0 &&
+        Array.isArray(check.args) &&
+        check.args.every((arg: unknown) => typeof arg === "string") &&
+        Number.isInteger(check.timeoutMs) &&
+        check.timeoutMs > 0,
+    )
+  );
+}
+
+function checkSummary(name: string): string {
+  switch (name) {
+    case "typecheck":
+      return "Type checking completed successfully.";
+    case "tests":
+      return "Automated tests completed successfully.";
+    case "build":
+      return "Production build completed successfully.";
+    default:
+      return "Validation check completed successfully.";
+  }
+}
+
+function validationFailure(): ApplicationError {
+  return new ApplicationError("INTERNAL_ERROR", 500, "Validation failed");
+}
