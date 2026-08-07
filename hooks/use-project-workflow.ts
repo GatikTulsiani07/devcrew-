@@ -1,8 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ApiClientError, createApiClient, type ApiClient } from "@/lib/api-client";
+import { createApiClient, type ApiClient } from "@/lib/api-client";
 import type { ProjectSnapshot, TaskSnapshot } from "@/lib/api-types";
+import { errorMessage } from "@/lib/error-message";
+
+const requestFailureFallback = "Backend request failed";
 
 const DEFAULT_PROJECT = {
   name: "Devcrew MVP",
@@ -46,7 +49,7 @@ export function useProjectWorkflow(apiClient?: ApiClient): ProjectWorkflowState 
       setError(undefined);
       setTask(await client.getTask(project.id, task.id));
     } catch (requestError) {
-      setError(errorMessage(requestError));
+      setError(errorMessage(requestError, requestFailureFallback));
     }
   }, [client, project, task]);
 
@@ -62,7 +65,7 @@ export function useProjectWorkflow(apiClient?: ApiClient): ProjectWorkflowState 
         setError(undefined);
         setTask(await request(project.id, task.id));
       } catch (requestError) {
-        setError(errorMessage(requestError));
+        setError(errorMessage(requestError, requestFailureFallback));
       } finally {
         setPendingAction(undefined);
       }
@@ -86,7 +89,7 @@ export function useProjectWorkflow(apiClient?: ApiClient): ProjectWorkflowState 
         if (cancelled) return;
         setTask(createdTask);
       } catch (requestError) {
-        if (!cancelled) setError(errorMessage(requestError));
+        if (!cancelled) setError(errorMessage(requestError, requestFailureFallback));
       } finally {
         if (!cancelled) setInitializing(false);
       }
@@ -127,16 +130,4 @@ export function useProjectWorkflow(apiClient?: ApiClient): ProjectWorkflowState 
       ),
     fetchTask,
   };
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiClientError) {
-    return `${error.code}: ${error.message}`;
-  }
-
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "Backend request failed";
 }

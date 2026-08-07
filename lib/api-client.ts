@@ -8,6 +8,14 @@ import type {
   TaskSnapshot,
 } from "@/lib/api-types";
 
+export function projectPath(projectId: string): string {
+  return `/api/v1/projects/${encodeURIComponent(projectId)}`;
+}
+
+export function taskPath(projectId: string, taskId: string): string {
+  return `${projectPath(projectId)}/tasks/${encodeURIComponent(taskId)}`;
+}
+
 export class ApiClientError extends Error {
   constructor(
     readonly code: string,
@@ -43,16 +51,13 @@ export class ApiClient {
   }
 
   getProject(projectId: string): Promise<ProjectSnapshot> {
-    return this.requestWrapped<ProjectSnapshot>(
-      "project",
-      `/api/v1/projects/${encodeURIComponent(projectId)}`,
-    );
+    return this.requestWrapped<ProjectSnapshot>("project", projectPath(projectId));
   }
 
   createTask(projectId: string, request: CreateTaskRequest): Promise<TaskSnapshot> {
     return this.requestWrapped<TaskSnapshot>(
       "task",
-      `/api/v1/projects/${encodeURIComponent(projectId)}/tasks`,
+      `${projectPath(projectId)}/tasks`,
       {
         method: "POST",
         body: JSON.stringify(request),
@@ -61,10 +66,7 @@ export class ApiClient {
   }
 
   getTask(projectId: string, taskId: string): Promise<TaskSnapshot> {
-    return this.requestWrapped<TaskSnapshot>(
-      "task",
-      `/api/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`,
-    );
+    return this.requestWrapped<TaskSnapshot>("task", taskPath(projectId, taskId));
   }
 
   approvePlan(projectId: string, taskId: string, reason?: string): Promise<TaskSnapshot> {
@@ -79,33 +81,21 @@ export class ApiClient {
   }
 
   executeTask(projectId: string, taskId: string): Promise<TaskSnapshot> {
-    return this.requestWrapped<TaskSnapshot>(
-      "task",
-      `/api/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/execute`,
-      { method: "POST", body: JSON.stringify({}) },
-    );
+    return this.taskAction(projectId, taskId, "execute");
   }
 
   validateTask(projectId: string, taskId: string): Promise<TaskSnapshot> {
-    return this.requestWrapped<TaskSnapshot>(
-      "task",
-      `/api/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/validate`,
-      { method: "POST", body: JSON.stringify({}) },
-    );
+    return this.taskAction(projectId, taskId, "validate");
   }
 
   reviewTask(projectId: string, taskId: string): Promise<TaskSnapshot> {
-    return this.requestWrapped<TaskSnapshot>(
-      "task",
-      `/api/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/review`,
-      { method: "POST", body: JSON.stringify({}) },
-    );
+    return this.taskAction(projectId, taskId, "review");
   }
 
   getActivitySnapshot(projectId: string, after?: number): Promise<ActivitySnapshot> {
     const search = after === undefined ? "" : `?after=${encodeURIComponent(String(after))}`;
     return this.requestJson<ActivitySnapshot>(
-      `/api/v1/projects/${encodeURIComponent(projectId)}/activity${search}`,
+      `${projectPath(projectId)}/activity${search}`,
     );
   }
 
@@ -115,7 +105,7 @@ export class ApiClient {
     signal: AbortSignal,
   ): Promise<Response> {
     return this.rawRequest(
-      `/api/v1/projects/${encodeURIComponent(projectId)}/activity/stream`,
+      `${projectPath(projectId)}/activity/stream`,
       {
         headers: {
           Accept: "text/event-stream",
@@ -133,11 +123,23 @@ export class ApiClient {
   ): Promise<TaskSnapshot> {
     return this.requestWrapped<TaskSnapshot>(
       "task",
-      `/api/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/plan-decision`,
+      `${taskPath(projectId, taskId)}/plan-decision`,
       {
         method: "POST",
         body: JSON.stringify(request),
       },
+    );
+  }
+
+  private taskAction(
+    projectId: string,
+    taskId: string,
+    action: "execute" | "validate" | "review",
+  ): Promise<TaskSnapshot> {
+    return this.requestWrapped<TaskSnapshot>(
+      "task",
+      `${taskPath(projectId, taskId)}/${action}`,
+      { method: "POST", body: JSON.stringify({}) },
     );
   }
 
@@ -161,7 +163,7 @@ export class ApiClient {
     });
 
     if (!response.ok) {
-      throw await toApiClientError(response);
+      throw await apiClientErrorFromResponse(response, "BACKEND_ERROR");
     }
 
     return (await response.json()) as T;
@@ -183,19 +185,25 @@ export class ApiClient {
   }
 }
 
-async function toApiClientError(response: Response): Promise<ApiClientError> {
-  const fallbackMessage = `Backend request failed with status ${response.status}`;
-
+/**
+ * Builds an ApiClientError from a failed response, preferring the backend error
+ * body and falling back to `fallbackCode` with a status-based message.
+ */
+export async function apiClientErrorFromResponse(
+  response: Response,
+  fallbackCode: string,
+  fallbackMessage = `Backend request failed with status ${response.status}`,
+): Promise<ApiClientError> {
   try {
     const body = (await response.json()) as ApiErrorBody;
     return new ApiClientError(
-      body.error?.code ?? "BACKEND_ERROR",
+      body.error?.code ?? fallbackCode,
       body.error?.message ?? fallbackMessage,
       response.status,
       body.requestId,
     );
   } catch {
-    return new ApiClientError("BACKEND_ERROR", fallbackMessage, response.status);
+    return new ApiClientError(fallbackCode, fallbackMessage, response.status);
   }
 }
 

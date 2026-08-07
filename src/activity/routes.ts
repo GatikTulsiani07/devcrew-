@@ -1,17 +1,14 @@
 import { Hono } from "hono";
 import { z } from "zod";
 
-import { ApplicationError } from "../errors.js";
+import {
+  validationError,
+  type RequestIdEnv,
+} from "../http/route-support.js";
 import { describeError, logger } from "../observability/logger.js";
 import { projectIdSchema } from "../projects/contracts.js";
 import type { ActivityReadService } from "./activity-service.js";
 import type { ActivityEvent, ActivitySequence } from "./types.js";
-
-type ActivityRoutesEnv = {
-  Variables: {
-    requestId: string;
-  };
-};
 
 export interface ActivityRoutesOptions {
   heartbeatIntervalMs?: number;
@@ -29,8 +26,8 @@ const afterSchema = z
 export function createActivityRoutes(
   activityReadService: ActivityReadService,
   { heartbeatIntervalMs = 15_000 }: ActivityRoutesOptions = {},
-): Hono<ActivityRoutesEnv> {
-  const routes = new Hono<ActivityRoutesEnv>();
+): Hono<RequestIdEnv> {
+  const routes = new Hono<RequestIdEnv>();
 
   routes.get("/:projectId/activity", async (c) => {
     const params = activityPathParamsSchema.safeParse({
@@ -148,12 +145,4 @@ function formatSseEvent(event: ActivityEvent): string {
     "",
     "",
   ].join("\n");
-}
-
-function validationError(): ApplicationError {
-  return new ApplicationError(
-    "VALIDATION_FAILED",
-    400,
-    "Request validation failed",
-  );
 }

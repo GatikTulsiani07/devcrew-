@@ -1,8 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useReducer, useRef } from "react";
-import { ApiClientError, createApiClient, type ApiClient } from "@/lib/api-client";
+import {
+  apiClientErrorFromResponse,
+  createApiClient,
+  type ApiClient,
+} from "@/lib/api-client";
 import type { ActivityEvent } from "@/lib/api-types";
+import { errorMessage } from "@/lib/error-message";
 
 export interface ProjectActivityState {
   events: readonly ActivityEvent[];
@@ -33,6 +38,7 @@ interface ParsedSseEvent {
 }
 
 const RECONNECT_DELAY_MS = 1_000;
+const streamFailureFallback = "Activity stream failed";
 
 interface ActivityReducerState extends ProjectActivityState {
   projectId: string | undefined;
@@ -127,7 +133,11 @@ export function useProjectActivity(
         );
 
         if (!response.ok) {
-          throw await streamError(response);
+          throw await apiClientErrorFromResponse(
+            response,
+            "ACTIVITY_STREAM_ERROR",
+            `Activity stream failed with status ${response.status}`,
+          );
         }
 
         dispatch({ type: "connection", connection: "connected" });
@@ -142,7 +152,10 @@ export function useProjectActivity(
       } catch (streamFailure) {
         if (cancelled || controller.signal.aborted) return;
         dispatch({ type: "connection", connection: "error" });
-        dispatch({ type: "error", error: errorMessage(streamFailure) });
+        dispatch({
+          type: "error",
+          error: errorMessage(streamFailure, streamFailureFallback),
+        });
         scheduleReconnect();
       }
     }
@@ -168,7 +181,10 @@ export function useProjectActivity(
       } catch (snapshotFailure) {
         if (cancelled) return;
         dispatch({ type: "connection", connection: "error" });
-        dispatch({ type: "error", error: errorMessage(snapshotFailure) });
+        dispatch({
+          type: "error",
+          error: errorMessage(snapshotFailure, streamFailureFallback),
+        });
       }
     }
 
@@ -227,37 +243,4 @@ function parseSseChunk(chunk: string): ParsedSseEvent | undefined {
   }
 
   return event.data === undefined ? undefined : event;
-}
-
-async function streamError(response: Response): Promise<ApiClientError> {
-  try {
-    const body = (await response.json()) as {
-      requestId?: string;
-      error?: { code?: string; message?: string };
-    };
-    return new ApiClientError(
-      body.error?.code ?? "ACTIVITY_STREAM_ERROR",
-      body.error?.message ?? `Activity stream failed with status ${response.status}`,
-      response.status,
-      body.requestId,
-    );
-  } catch {
-    return new ApiClientError(
-      "ACTIVITY_STREAM_ERROR",
-      `Activity stream failed with status ${response.status}`,
-      response.status,
-    );
-  }
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiClientError) {
-    return `${error.code}: ${error.message}`;
-  }
-
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return "Activity stream failed";
 }

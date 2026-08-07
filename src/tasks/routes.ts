@@ -1,6 +1,11 @@
 import { Hono } from "hono";
 
-import { ApplicationError } from "../errors.js";
+import {
+  readJsonBody,
+  readOptionalJsonBody,
+  validationError,
+  type RequestIdEnv,
+} from "../http/route-support.js";
 import {
   createTaskPathParamsSchema,
   createTaskRequestSchema,
@@ -16,14 +21,8 @@ import {
 } from "./contracts.js";
 import type { TaskService } from "./task-service.js";
 
-type TaskRoutesEnv = {
-  Variables: {
-    requestId: string;
-  };
-};
-
-export function createTaskRoutes(taskService: TaskService): Hono<TaskRoutesEnv> {
-  const routes = new Hono<TaskRoutesEnv>();
+export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
+  const routes = new Hono<RequestIdEnv>();
 
   routes.post("/:projectId/tasks", async (c) => {
     const params = createTaskPathParamsSchema.safeParse({
@@ -135,42 +134,4 @@ export function createTaskRoutes(taskService: TaskService): Hono<TaskRoutesEnv> 
   });
 
   return routes;
-}
-
-async function readJsonBody(parseJson: () => Promise<unknown>): Promise<unknown> {
-  try {
-    return await parseJson();
-  } catch {
-    throw validationError();
-  }
-}
-
-async function readOptionalJsonBody(
-  readText: () => Promise<string>,
-): Promise<unknown> {
-  let text: string;
-
-  try {
-    text = await readText();
-  } catch {
-    throw validationError();
-  }
-
-  if (text.trim() === "") {
-    return {};
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw validationError();
-  }
-}
-
-function validationError(): ApplicationError {
-  return new ApplicationError(
-    "VALIDATION_FAILED",
-    400,
-    "Request validation failed",
-  );
 }
