@@ -9,7 +9,10 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkshopRail } from "@/components/shell/workshop-rail";
 import { useWorkspaceState } from "@/components/shell/workspace-state";
 import { ActivityTimeline } from "@/components/activity/activity-timeline";
+import { DeveloperEvidencePanel } from "@/components/activity/developer-evidence-panel";
+import { DevopsEvidencePanel } from "@/components/activity/devops-evidence-panel";
 import { OrchestrationProgress } from "@/components/activity/orchestration-progress";
+import { ReviewerEvidencePanel } from "@/components/activity/reviewer-evidence-panel";
 
 function visibleStatus(agent: Agent, online: boolean, task?: TaskSnapshot) {
   if (!online) return { status: "idle" as const, label: "Offline" };
@@ -225,6 +228,20 @@ export function ActivityWorkspace() {
 
           <div className="space-y-6 bg-canvas/28 px-5 pb-5 pt-2 sm:px-7 sm:pb-7 lg:px-8 lg:pb-8">
             <ApprovalGate task={workflow.task} error={workflow.error} pendingAction={workflow.pendingAction} onApprove={workflow.approve} onReject={workflow.reject} />
+
+            <section aria-labelledby="evidence-heading" className="min-w-0 rounded-[var(--radius-standard)] bg-canvas/55 px-5 py-5 sm:px-6">
+              <div className="min-w-0">
+                <h2 id="evidence-heading" className="text-[1.08rem] font-medium text-ink">Structured evidence</h2>
+                <p className="mt-1 break-words text-[0.82rem] text-ink-muted">
+                  {workflow.project ? "Authoritative stage output from the backend task snapshot." : "Fixture setup fallback: evidence panels are waiting for a backend task snapshot."}
+                </p>
+              </div>
+              <div className="mt-5 grid min-w-0 gap-4 lg:grid-cols-3">
+                <DeveloperEvidencePanel task={workflow.task} />
+                <DevopsEvidencePanel task={workflow.task} />
+                <ReviewerEvidencePanel task={workflow.task} />
+              </div>
+            </section>
 
             <section aria-labelledby="timeline-heading" className="rounded-[var(--radius-standard)] bg-canvas/55 px-5 py-5 sm:px-6">
               <div className="flex flex-wrap items-center justify-between gap-3">

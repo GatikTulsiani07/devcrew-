@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 import { ApiClientError, createApiClient, type ApiClient } from "@/lib/api-client";
 import type { ActivityEvent } from "@/lib/api-types";
 
@@ -34,22 +34,68 @@ interface ParsedSseEvent {
 
 const RECONNECT_DELAY_MS = 1_000;
 
+interface ActivityReducerState extends ProjectActivityState {
+  projectId: string | undefined;
+}
+
+type ActivityReducerAction =
+  | { type: "reset"; projectId: string | undefined }
+  | { type: "begin-connection" }
+  | { type: "connection"; connection: ProjectActivityState["connection"] }
+  | { type: "error"; error?: string }
+  | { type: "events"; incoming: readonly ActivityEvent[] }
+  | { type: "last-sequence"; lastSequence: number };
+
+function activityReducer(
+  state: ActivityReducerState,
+  action: ActivityReducerAction,
+): ActivityReducerState {
+  switch (action.type) {
+    case "reset":
+      return {
+        projectId: action.projectId,
+        events: [],
+        connection: "idle",
+        error: undefined,
+        lastSequence: 0,
+      };
+    case "connection":
+      return { ...state, connection: action.connection };
+    case "begin-connection":
+      return {
+        ...state,
+        connection:
+          state.connection === "idle" || state.connection === "connecting"
+            ? "connecting"
+            : "reconnecting",
+      };
+    case "error":
+      return { ...state, error: action.error };
+    case "events": {
+      const events = mergeActivityEvents(state.events, action.incoming);
+      return { ...state, events, lastSequence: events.at(-1)?.sequence ?? 0 };
+    }
+    case "last-sequence":
+      return { ...state, lastSequence: action.lastSequence };
+  }
+}
+
 export function useProjectActivity(
   projectId: string | undefined,
   apiClient?: ApiClient,
 ): ProjectActivityState {
   const client = useMemo(() => apiClient ?? createApiClient(), [apiClient]);
-  const [events, setEvents] = useState<readonly ActivityEvent[]>([]);
-  const [connection, setConnection] = useState<ProjectActivityState["connection"]>("idle");
-  const [error, setError] = useState<string>();
-  const [lastSequence, setLastSequence] = useState(0);
+  const [state, dispatch] = useReducer(activityReducer, {
+    projectId,
+    events: [],
+    connection: "idle",
+    error: undefined,
+    lastSequence: 0,
+  });
   const lastSequenceRef = useRef(0);
 
   useEffect(() => {
-    setEvents([]);
-    setConnection("idle");
-    setError(undefined);
-    setLastSequence(0);
+    dispatch({ type: "reset", projectId });
     lastSequenceRef.current = 0;
 
     if (!projectId) {
@@ -62,22 +108,18 @@ export function useProjectActivity(
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
     const applyEvents = (incoming: readonly ActivityEvent[]) => {
-      setEvents((current) => {
-        const ordered = mergeActivityEvents(current, incoming);
-        const nextLastSequence = ordered.at(-1)?.sequence ?? 0;
-        lastSequenceRef.current = nextLastSequence;
-        setLastSequence(nextLastSequence);
-        return ordered;
-      });
+      dispatch({ type: "events", incoming });
+      lastSequenceRef.current = Math.max(
+        lastSequenceRef.current,
+        ...incoming.map((event) => event.sequence),
+      );
     };
 
     async function connect() {
       if (cancelled) return;
 
       try {
-        setConnection((current) =>
-          current === "idle" || current === "connecting" ? "connecting" : "reconnecting",
-        );
+        dispatch({ type: "begin-connection" });
         const response = await client.openActivityStream(
           activeProjectId,
           lastSequenceRef.current,
@@ -88,8 +130,8 @@ export function useProjectActivity(
           throw await streamError(response);
         }
 
-        setConnection("connected");
-        setError(undefined);
+        dispatch({ type: "connection", connection: "connected" });
+        dispatch({ type: "error", error: undefined });
         await readSseStream(response, (event) => {
           if (event.data) {
             applyEvents([JSON.parse(event.data) as ActivityEvent]);
@@ -99,15 +141,15 @@ export function useProjectActivity(
         if (!cancelled) scheduleReconnect();
       } catch (streamFailure) {
         if (cancelled || controller.signal.aborted) return;
-        setConnection("error");
-        setError(errorMessage(streamFailure));
+        dispatch({ type: "connection", connection: "error" });
+        dispatch({ type: "error", error: errorMessage(streamFailure) });
         scheduleReconnect();
       }
     }
 
     function scheduleReconnect() {
       if (cancelled) return;
-      setConnection("reconnecting");
+      dispatch({ type: "connection", connection: "reconnecting" });
       reconnectTimer = setTimeout(() => {
         void connect();
       }, RECONNECT_DELAY_MS);
@@ -115,18 +157,18 @@ export function useProjectActivity(
 
     async function start() {
       try {
-        setConnection("connecting");
-        setError(undefined);
+        dispatch({ type: "connection", connection: "connecting" });
+        dispatch({ type: "error", error: undefined });
         const snapshot = await client.getActivitySnapshot(activeProjectId);
         if (cancelled) return;
         applyEvents(snapshot.events);
         lastSequenceRef.current = snapshot.lastSequence;
-        setLastSequence(snapshot.lastSequence);
+        dispatch({ type: "last-sequence", lastSequence: snapshot.lastSequence });
         await connect();
       } catch (snapshotFailure) {
         if (cancelled) return;
-        setConnection("error");
-        setError(errorMessage(snapshotFailure));
+        dispatch({ type: "connection", connection: "error" });
+        dispatch({ type: "error", error: errorMessage(snapshotFailure) });
       }
     }
 
@@ -141,7 +183,12 @@ export function useProjectActivity(
     };
   }, [client, projectId]);
 
-  return { events, connection, error, lastSequence };
+  return {
+    events: state.events,
+    connection: state.connection,
+    error: state.error,
+    lastSequence: state.lastSequence,
+  };
 }
 
 async function readSseStream(
