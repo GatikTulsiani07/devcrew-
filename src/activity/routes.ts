@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { ApplicationError } from "../errors.js";
+import { describeError, logger } from "../observability/logger.js";
 import { projectIdSchema } from "../projects/contracts.js";
 import type { ActivityReadService } from "./activity-service.js";
 import type { ActivityEvent, ActivitySequence } from "./types.js";
@@ -69,17 +70,30 @@ export function createActivityRoutes(
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
-        for (const event of missed.events) {
-          controller.enqueue(encoder.encode(formatSseEvent(event)));
+        try {
+          for (const event of missed.events) {
+            controller.enqueue(encoder.encode(formatSseEvent(event)));
+          }
+
+          subscription = await activityReadService.subscribe(projectId, (event) => {
+            controller.enqueue(encoder.encode(formatSseEvent(event)));
+          });
+
+          heartbeat = setInterval(() => {
+            controller.enqueue(encoder.encode(": heartbeat\n\n"));
+          }, heartbeatIntervalMs);
+        } catch (error) {
+          logger.error("Failed to start activity stream", {
+            requestId: c.get("requestId"),
+            projectId,
+            cause: describeError(error),
+          });
+          subscription?.unsubscribe();
+          if (heartbeat !== undefined) {
+            clearInterval(heartbeat);
+          }
+          controller.error(error);
         }
-
-        subscription = await activityReadService.subscribe(projectId, (event) => {
-          controller.enqueue(encoder.encode(formatSseEvent(event)));
-        });
-
-        heartbeat = setInterval(() => {
-          controller.enqueue(encoder.encode(": heartbeat\n\n"));
-        }, heartbeatIntervalMs);
       },
       cancel() {
         subscription?.unsubscribe();

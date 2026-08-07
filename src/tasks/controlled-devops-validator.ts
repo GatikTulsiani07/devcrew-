@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 
 import { ApplicationError } from "../errors.js";
+import { describeError, logger } from "../observability/logger.js";
 import {
   findPreparedRepository,
   type PreparedRepository,
@@ -69,7 +70,11 @@ export function createControlledDevOpsValidator({
         let result;
         try {
           result = await runner.run(check, repository.localCheckoutPath);
-        } catch {
+        } catch (error) {
+          logger.error("Validation check runner threw", {
+            check: check.name,
+            cause: describeError(error),
+          });
           throw validationFailure();
         }
         if (result.status !== "PASSED") {

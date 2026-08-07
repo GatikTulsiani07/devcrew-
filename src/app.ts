@@ -17,6 +17,7 @@ import {
 } from "./config/security.js";
 import type { DatabaseHealth } from "./db/health.js";
 import { ApplicationError, jsonError } from "./errors.js";
+import { describeError, logger as defaultLogger, type Logger } from "./observability/logger.js";
 import { InMemoryProjectStore } from "./projects/in-memory-project-store.js";
 import {
   createProjectService,
@@ -57,12 +58,14 @@ export interface AppDependencies {
   activityHeartbeatIntervalMs?: number;
   preparedRepositories?: readonly PreparedRepository[];
   controlledCommandRunner?: ControlledCommandRunner;
+  logger?: Logger;
   allowedOrigins?: readonly string[];
   maxRequestBodyBytes?: number;
 }
 
 export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
   const { databaseHealth, generateRequestId } = dependencies;
+  const logger = dependencies.logger ?? defaultLogger;
   const preparedRepositories =
     dependencies.preparedRepositories ?? defaultPreparedRepositories;
   const activityService =
@@ -169,7 +172,11 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
   app.get("/health/database", async (c) => {
     try {
       await databaseHealth.checkConnection();
-    } catch {
+    } catch (error) {
+      logger.error("Database health check failed", {
+        requestId: c.get("requestId"),
+        cause: describeError(error),
+      });
       throw new ApplicationError(
         "DATABASE_UNAVAILABLE",
         503,
@@ -200,6 +207,13 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
     if (error instanceof ApplicationError) {
       return jsonError(c, error);
     }
+
+    logger.error("Unhandled request error", {
+      requestId: c.get("requestId"),
+      method: c.req.method,
+      path: c.req.path,
+      cause: describeError(error),
+    });
 
     return jsonError(
       c,

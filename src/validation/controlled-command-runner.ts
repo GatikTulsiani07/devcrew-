@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
 
+import { describeError, logger } from "../observability/logger.js";
 import type {
   CommandRunResult,
   ControlledCommandRunner,
@@ -58,7 +59,11 @@ function runCommand(
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });
-    } catch {
+    } catch (error) {
+      logger.error("Failed to spawn validation command", {
+        executable: check.executable,
+        cause: describeError(error),
+      });
       resolve(failedResult(false, false, false));
       return;
     }
