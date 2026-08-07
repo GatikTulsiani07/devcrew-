@@ -29,10 +29,12 @@ import {
   preparedRepositories as defaultPreparedRepositories,
   type PreparedRepository,
 } from "./repositories/prepared-repositories.js";
+import { createControlledDeveloperExecutor } from "./tasks/controlled-developer-executor.js";
 import { createControlledDevOpsValidator } from "./tasks/controlled-devops-validator.js";
 import { createDeterministicDevOpsValidator } from "./tasks/deterministic-devops-validator.js";
 import { InMemoryTaskStore } from "./tasks/in-memory-task-store.js";
 import { createDeveloperExecutorFromEnv } from "./tasks/openai-developer-executor.js";
+import { createImplementationPlannerFromEnv } from "./tasks/openai-implementation-planner.js";
 import { createManagerPlannerFromEnv } from "./tasks/openai-manager.js";
 import { createReviewerFromEnv } from "./tasks/openai-reviewer.js";
 import { createTaskRoutes } from "./tasks/routes.js";
@@ -40,6 +42,7 @@ import {
   createTaskService,
   type TaskService,
 } from "./tasks/task-service.js";
+import type { DeveloperExecutor } from "./tasks/types.js";
 import type { ControlledCommandRunner } from "./validation/types.js";
 
 type AppEnv = {
@@ -85,7 +88,10 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
     createTaskService({
       projectService,
       planner: createManagerPlannerFromEnv(),
-      developerExecutor: createDeveloperExecutorFromEnv(),
+      developerExecutor: resolveDeveloperExecutor(
+        projectService,
+        preparedRepositories,
+      ),
       devOpsValidator:
         process.env.DEVCREW_VALIDATION_MODE === "controlled"
           ? createControlledDevOpsValidator({
@@ -226,4 +232,25 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
   });
 
   return app;
+}
+
+function resolveDeveloperExecutor(
+  projectService: ProjectService,
+  preparedRepositories: readonly PreparedRepository[],
+): DeveloperExecutor {
+  if (process.env.DEVCREW_DEVELOPER_MODE !== "controlled") {
+    return createDeveloperExecutorFromEnv();
+  }
+
+  const planner = createImplementationPlannerFromEnv();
+
+  if (planner === undefined) {
+    return createDeveloperExecutorFromEnv();
+  }
+
+  return createControlledDeveloperExecutor({
+    projectService,
+    preparedRepositories,
+    planner,
+  });
 }
