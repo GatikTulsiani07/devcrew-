@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -283,6 +291,57 @@ describe("controlled developer executor", () => {
     assert.equal(
       await readFile(join(repositoryRoot, "restore.ts"), "utf8"),
       "original",
+    );
+  });
+
+  it("treats a missing target as absent and fails closed for unreadable targets", async () => {
+    const missingTarget = await executor({
+      summary: "ENOENT targets are created",
+      operations: [
+        { type: "create", path: "enoent/created.ts", content: "created" },
+      ],
+      verification: ["Run tests"],
+    }).execute(developerInput());
+
+    assert.deepEqual(missingTarget.result.changedFiles, [
+      "CREATE: enoent/created.ts",
+    ]);
+
+    const unreadablePath = join(repositoryRoot, "unreadable.ts");
+    await writeFile(unreadablePath, "protected", "utf8");
+    await chmod(unreadablePath, 0o000);
+
+    try {
+      await assert.rejects(
+        executor({
+          summary: "Unreadable target",
+          operations: [
+            { type: "update", path: "unreadable.ts", content: "mutated" },
+          ],
+          verification: ["Run tests"],
+        }).execute(developerInput()),
+        (error: unknown) =>
+          error instanceof ApplicationError &&
+          error.code === "INTERNAL_ERROR" &&
+          error.message === "An unexpected error occurred",
+      );
+    } finally {
+      await chmod(unreadablePath, 0o600);
+    }
+
+    assert.equal(await readFile(unreadablePath, "utf8"), "protected");
+
+    await mkdir(join(repositoryRoot, "directory-target"), { recursive: true });
+
+    await assert.rejects(
+      executor({
+        summary: "Directory target",
+        operations: [
+          { type: "update", path: "directory-target", content: "mutated" },
+        ],
+        verification: ["Run tests"],
+      }).execute(developerInput()),
+      ApplicationError,
     );
   });
 

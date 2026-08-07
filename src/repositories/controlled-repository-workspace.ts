@@ -276,9 +276,20 @@ async function readExistingFile(
 ): Promise<string | undefined> {
   try {
     return await readFile(absolutePath, "utf8");
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (isFileNotFoundError(error)) {
+      return undefined;
+    }
+
+    logger.error("Failed to read controlled repository target", {
+      cause: describeError(error),
+    });
+    throw new RepositoryWorkspaceError("target file is unreadable");
   }
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 async function restore(restorePoints: readonly RestorePoint[]): Promise<void> {
