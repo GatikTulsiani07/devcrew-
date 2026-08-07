@@ -14,6 +14,11 @@ import {
   type RepositoryWorkspace,
 } from "../repositories/controlled-repository-workspace.js";
 import {
+  createControlledGitInspector,
+  type GitChangedFile,
+  type GitInspector,
+} from "../repositories/git-inspector.js";
+import {
   findPreparedRepository,
   type PreparedRepository,
 } from "../repositories/prepared-repositories.js";
@@ -52,6 +57,7 @@ export interface ControlledDeveloperExecutorDependencies {
   preparedRepositories: readonly PreparedRepository[];
   planner: DeveloperImplementationPlanner;
   workspace?: RepositoryWorkspace;
+  gitInspector?: GitInspector;
   generateExecutionId?: () => ExecutionId;
   now?: () => Date;
 }
@@ -72,6 +78,7 @@ export function createControlledDeveloperExecutor({
   preparedRepositories,
   planner,
   workspace = createControlledRepositoryWorkspace(),
+  gitInspector = createControlledGitInspector(),
   generateExecutionId = () => `exec_${randomUUID()}`,
   now = () => new Date(),
 }: ControlledDeveloperExecutorDependencies): DeveloperExecutor {
@@ -82,6 +89,16 @@ export function createControlledDeveloperExecutor({
         preparedRepositories,
         input,
       );
+      try {
+        await gitInspector.assertCleanBaseline(repositoryRoot);
+      } catch (error) {
+        logger.error("Prepared repository baseline is unusable", {
+          taskId: input.task.id,
+          cause: describeError(error),
+        });
+        throw executionFailure();
+      }
+
       const startedAt = now().toISOString();
 
       let output: unknown;
@@ -113,15 +130,28 @@ export function createControlledDeveloperExecutor({
         throw executionFailure();
       }
 
-      let applied;
+      let mutation;
 
       try {
-        applied = await workspace.apply(repositoryRoot, parsed.data.operations);
+        mutation = await workspace.apply(repositoryRoot, parsed.data.operations);
       } catch (error) {
         logger.error("Controlled repository mutation was rejected", {
           taskId: input.task.id,
           cause: describeError(error),
         });
+        throw executionFailure();
+      }
+
+      let evidence;
+
+      try {
+        evidence = await gitInspector.captureEvidence(repositoryRoot);
+      } catch (error) {
+        logger.error("Git evidence capture failed after mutation", {
+          taskId: input.task.id,
+          cause: describeError(error),
+        });
+        await mutation.rollback();
         throw executionFailure();
       }
 
@@ -134,10 +164,13 @@ export function createControlledDeveloperExecutor({
         completedAt: now().toISOString(),
         result: {
           summary: parsed.data.summary,
-          changedFiles: applied.map(
-            (operation) => `${operation.type.toUpperCase()}: ${operation.path}`,
-          ),
+          changedFiles: evidence.files.map(describeChangedFile),
           verification: [...parsed.data.verification],
+          changeEvidence: {
+            files: evidence.files.map((file) => ({ ...file })),
+            summary: { ...evidence.summary },
+            ...(evidence.diff === undefined ? {} : { diff: evidence.diff }),
+          },
         },
       };
     },
@@ -177,6 +210,15 @@ async function resolveRepositoryRoot(
   }
 
   return repository.localCheckoutPath;
+}
+
+function describeChangedFile(file: GitChangedFile): string {
+  const stats =
+    file.additions === undefined || file.deletions === undefined
+      ? ""
+      : ` (+${file.additions}/-${file.deletions})`;
+
+  return `${file.status}: ${file.path}${stats}`;
 }
 
 function containsUnsafeEvidence(plan: DeveloperImplementationPlan): boolean {
