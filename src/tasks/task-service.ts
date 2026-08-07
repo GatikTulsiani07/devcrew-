@@ -6,6 +6,7 @@ import {
 } from "../activity/activity-service.js";
 import { ApplicationError } from "../errors.js";
 import type { ProjectService } from "../projects/project-service.js";
+import type { GitChangeEvidence } from "../repositories/git-inspector.js";
 import type {
   CreateTaskInput,
   DeveloperExecutor,
@@ -275,6 +276,14 @@ export function createTaskService({
   };
 }
 
+function copyChangeEvidence(evidence: GitChangeEvidence): GitChangeEvidence {
+  return {
+    files: evidence.files.map((file) => ({ ...file })),
+    summary: { ...evidence.summary },
+    ...(evidence.diff === undefined ? {} : { diff: evidence.diff }),
+  };
+}
+
 function copyTask(task: TaskSnapshot): TaskSnapshot {
   return {
     id: task.id,
@@ -311,6 +320,13 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               summary: task.execution.result.summary,
               changedFiles: [...task.execution.result.changedFiles],
               verification: [...task.execution.result.verification],
+              ...(task.execution.result.changeEvidence === undefined
+                ? {}
+                : {
+                    changeEvidence: copyChangeEvidence(
+                      task.execution.result.changeEvidence,
+                    ),
+                  }),
             },
           },
         }),

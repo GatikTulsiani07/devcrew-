@@ -1,3 +1,4 @@
+import type { GitChangeEvidence } from "../repositories/git-inspector.js";
 import type { ProjectSnapshot } from "../projects/types.js";
 
 export type TaskStatus =
@@ -38,6 +39,7 @@ export interface ImplementationResult {
   summary: string;
   changedFiles: readonly string[];
   verification: readonly string[];
+  changeEvidence?: GitChangeEvidence;
 }
 
 export interface TaskExecution {

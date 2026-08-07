@@ -16,11 +16,16 @@ export interface AppliedRepositoryOperation {
   path: string;
 }
 
+export interface AppliedRepositoryMutation {
+  operations: readonly AppliedRepositoryOperation[];
+  rollback(): Promise<void>;
+}
+
 export interface RepositoryWorkspace {
   apply(
     repositoryRoot: string,
     operations: readonly RepositoryFileOperation[],
-  ): Promise<readonly AppliedRepositoryOperation[]>;
+  ): Promise<AppliedRepositoryMutation>;
 }
 
 export const MAX_OPERATIONS = 12;
@@ -188,10 +193,13 @@ export function createControlledRepositoryWorkspace(): RepositoryWorkspace {
         throw new RepositoryWorkspaceError("repository mutation failed");
       }
 
-      return targets.map((target) => ({
-        type: target.operation.type,
-        path: target.operation.path,
-      }));
+      return {
+        operations: targets.map((target) => ({
+          type: target.operation.type,
+          path: target.operation.path,
+        })),
+        rollback: () => restore(restorePoints),
+      };
     },
   };
 }

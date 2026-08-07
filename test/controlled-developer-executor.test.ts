@@ -14,6 +14,7 @@ import { after, before, describe, it } from "node:test";
 
 import { ApplicationError } from "../src/errors.js";
 import type { ProjectService } from "../src/projects/project-service.js";
+import type { GitInspector } from "../src/repositories/git-inspector.js";
 import type { PreparedRepository } from "../src/repositories/prepared-repositories.js";
 import {
   createControlledDeveloperExecutor,
@@ -88,18 +89,40 @@ function planner(plan: unknown): DeveloperImplementationPlanner {
   };
 }
 
+function stubGitInspector(): GitInspector {
+  return {
+    async assertCleanBaseline() {},
+    async captureEvidence() {
+      return {
+        files: [
+          {
+            path: "observed.ts",
+            status: "MODIFIED" as const,
+            additions: 2,
+            deletions: 1,
+          },
+        ],
+        summary: { filesChanged: 1, additions: 2, deletions: 1 },
+        diff: "--- a/observed.ts\n+++ b/observed.ts\n",
+      };
+    },
+  };
+}
+
 function executor(
   plan: unknown,
   overrides: {
     projectService?: ProjectService;
     preparedRepositories?: readonly PreparedRepository[];
     planner?: DeveloperImplementationPlanner;
+    gitInspector?: GitInspector;
   } = {},
 ) {
   return createControlledDeveloperExecutor({
     projectService: overrides.projectService ?? projectService(),
     preparedRepositories: overrides.preparedRepositories ?? [repository()],
     planner: overrides.planner ?? planner(plan),
+    gitInspector: overrides.gitInspector ?? stubGitInspector(),
     generateExecutionId: () => "exec_000001",
     now: () => new Date("2026-08-03T02:00:00.000Z"),
   });
@@ -142,8 +165,20 @@ describe("controlled developer executor", () => {
       completedAt: "2026-08-03T02:00:00.000Z",
       result: {
         summary: "Implemented the approved authentication change.",
-        changedFiles: ["CREATE: src/auth/middleware.ts", "UPDATE: existing.ts"],
+        changedFiles: ["MODIFIED: observed.ts (+2/-1)"],
         verification: ["Run typecheck", "Run tests"],
+        changeEvidence: {
+          files: [
+            {
+              path: "observed.ts",
+              status: "MODIFIED",
+              additions: 2,
+              deletions: 1,
+            },
+          ],
+          summary: { filesChanged: 1, additions: 2, deletions: 1 },
+          diff: "--- a/observed.ts\n+++ b/observed.ts\n",
+        },
       },
     });
     assert.equal(
@@ -303,9 +338,11 @@ describe("controlled developer executor", () => {
       verification: ["Run tests"],
     }).execute(developerInput());
 
-    assert.deepEqual(missingTarget.result.changedFiles, [
-      "CREATE: enoent/created.ts",
-    ]);
+    assert.equal(missingTarget.status, "COMPLETED");
+    assert.equal(
+      await readFile(join(repositoryRoot, "enoent/created.ts"), "utf8"),
+      "created",
+    );
 
     const unreadablePath = join(repositoryRoot, "unreadable.ts");
     await writeFile(unreadablePath, "protected", "utf8");
