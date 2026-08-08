@@ -8,6 +8,8 @@ import {
 } from "../http/route-support.js";
 import {
   createTaskPathParamsSchema,
+  createPullRequestPathParamsSchema,
+  createPullRequestRequestSchema,
   createTaskRequestSchema,
   executeTaskPathParamsSchema,
   executeTaskRequestSchema,
@@ -127,6 +129,25 @@ export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
     }
 
     const task = await taskService.reviewTask(
+      params.data.projectId,
+      params.data.taskId,
+    );
+    return c.json({ task });
+  });
+
+  routes.post("/:projectId/tasks/:taskId/pull-request", async (c) => {
+    const params = createPullRequestPathParamsSchema.safeParse({
+      projectId: c.req.param("projectId"),
+      taskId: c.req.param("taskId"),
+    });
+    const body = await readOptionalJsonBody(c.req.text.bind(c.req));
+    const request = createPullRequestRequestSchema.safeParse(body);
+
+    if (!params.success || !request.success) {
+      throw validationError();
+    }
+
+    const task = await taskService.createPullRequest(
       params.data.projectId,
       params.data.taskId,
     );

@@ -13,6 +13,7 @@ import type {
   DevOpsValidator,
   ManagerPlanner,
   PlanDecisionInput,
+  TaskPullRequestCreator,
   TaskReviewer,
   TaskSnapshot,
   TaskStore,
@@ -27,6 +28,7 @@ export interface TaskServiceDependencies {
   developerExecutor: DeveloperExecutor;
   devOpsValidator: DevOpsValidator;
   taskReviewer: TaskReviewer;
+  pullRequestCreator?: TaskPullRequestCreator;
   store: TaskStore;
   generateTaskId?: TaskIdGenerator;
   now?: TaskClock;
@@ -47,6 +49,7 @@ export interface TaskService {
   executeTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   validateTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   reviewTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
+  createPullRequest(projectId: string, taskId: string): Promise<TaskSnapshot>;
 }
 
 export function createTaskService({
@@ -55,6 +58,7 @@ export function createTaskService({
   developerExecutor,
   devOpsValidator,
   taskReviewer,
+  pullRequestCreator = unavailablePullRequestCreator(),
   store,
   generateTaskId = () => `task_${randomUUID()}`,
   now = () => new Date(),
@@ -273,6 +277,66 @@ export function createTaskService({
 
       return reviewedTask;
     },
+
+    async createPullRequest(projectId, taskId) {
+      const project = await projectService.getProject(projectId);
+
+      const task = await store.findByProjectAndId(projectId, taskId);
+
+      if (task === undefined) {
+        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
+      }
+
+      const result = await pullRequestCreator.createPullRequest({
+        project,
+        task: copyTask(task),
+      });
+
+      if (task.pullRequest !== undefined) {
+        return copyTask(task);
+      }
+
+      const timestamp = now().toISOString();
+      const updatedTask: TaskSnapshot = {
+        ...copyTask(task),
+        pullRequest: {
+          number: result.evidence.number,
+          url: result.evidence.url,
+          state: result.evidence.state,
+          headBranch: result.evidence.headBranch,
+          baseBranch: result.evidence.baseBranch,
+          commitSha: result.evidence.commitSha,
+          createdAt: result.evidence.createdAt,
+        },
+        updatedAt: timestamp,
+      };
+
+      const taskWithPullRequest = copyTask(await store.update(updatedTask));
+
+      if (result.created) {
+        await activityService.append({
+          projectId,
+          taskId,
+          type: "PULL_REQUEST_CREATED",
+          actor: { kind: "SYSTEM" },
+          summary: `Pull request #${result.evidence.number} created.`,
+        });
+      }
+
+      return taskWithPullRequest;
+    },
+  };
+}
+
+function unavailablePullRequestCreator(): TaskPullRequestCreator {
+  return {
+    async createPullRequest() {
+      throw new ApplicationError(
+        "PULL_REQUEST_UNAVAILABLE",
+        503,
+        "Pull request creation is not configured",
+      );
+    },
   };
 }
 
@@ -386,6 +450,19 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               title: finding.title,
               description: finding.description,
             })),
+          },
+        }),
+    ...(task.pullRequest === undefined
+      ? {}
+      : {
+          pullRequest: {
+            number: task.pullRequest.number,
+            url: task.pullRequest.url,
+            state: task.pullRequest.state,
+            headBranch: task.pullRequest.headBranch,
+            baseBranch: task.pullRequest.baseBranch,
+            commitSha: task.pullRequest.commitSha,
+            createdAt: task.pullRequest.createdAt,
           },
         }),
     createdAt: task.createdAt,

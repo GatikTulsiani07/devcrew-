@@ -9,7 +9,8 @@ export type ActivityEventType =
   | "PLAN_REJECTED"
   | "IMPLEMENTATION_COMPLETED"
   | "VALIDATION_COMPLETED"
-  | "REVIEW_COMPLETED";
+  | "REVIEW_COMPLETED"
+  | "PULL_REQUEST_CREATED";
 
 export type ActivityActor =
   | { kind: "HUMAN" }

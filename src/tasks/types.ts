@@ -25,6 +25,7 @@ export type ReviewRole = "REVIEWER";
 export type ReviewStatus = "COMPLETED";
 export type ReviewVerdict = "APPROVED";
 export type ReviewFindingSeverity = "INFO";
+export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
 
 export interface TaskPlan {
   summary: string;
@@ -91,6 +92,16 @@ export interface TaskReview {
   findings: readonly ReviewFinding[];
 }
 
+export interface TaskPullRequestEvidence {
+  number: number;
+  url: string;
+  state: PullRequestState;
+  headBranch: string;
+  baseBranch: string;
+  commitSha: string;
+  createdAt: string;
+}
+
 export interface TaskSnapshot {
   id: string;
   projectId: string;
@@ -102,6 +113,7 @@ export interface TaskSnapshot {
   execution?: TaskExecution;
   validation?: TaskValidation;
   review?: TaskReview;
+  pullRequest?: TaskPullRequestEvidence;
   createdAt: string;
   updatedAt: string;
 }
@@ -148,4 +160,20 @@ export interface DevOpsValidator {
 
 export interface TaskReviewer {
   review(task: TaskSnapshot, project?: ProjectSnapshot): Promise<TaskReview>;
+}
+
+export interface TaskPullRequestCreatorInput {
+  project: ProjectSnapshot;
+  task: TaskSnapshot;
+}
+
+export interface TaskPullRequestCreatorResult {
+  evidence: TaskPullRequestEvidence;
+  created: boolean;
+}
+
+export interface TaskPullRequestCreator {
+  createPullRequest(
+    input: TaskPullRequestCreatorInput,
+  ): Promise<TaskPullRequestCreatorResult>;
 }
