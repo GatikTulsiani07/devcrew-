@@ -16,6 +16,30 @@ const task: TaskSnapshot = {
   description: "Run approved checks.",
   status: "IMPLEMENTATION_COMPLETED",
   plan: { summary: "Plan", steps: [] },
+  execution: {
+    id: "exec_000001",
+    role: "FULL_STACK_DEVELOPER",
+    status: "COMPLETED",
+    attempt: 1,
+    startedAt: "2026-08-03T01:00:00.000Z",
+    completedAt: "2026-08-03T02:00:00.000Z",
+    result: {
+      summary: "Changed files.",
+      changedFiles: ["MODIFIED: src/app.ts (+1/-0)"],
+      verification: ["Run tests"],
+      changeEvidence: {
+        files: [
+          {
+            path: "src/app.ts",
+            status: "MODIFIED",
+            additions: 1,
+            deletions: 0,
+          },
+        ],
+        summary: { filesChanged: 1, additions: 1, deletions: 0 },
+      },
+    },
+  },
   createdAt: "2026-08-03T00:00:00.000Z",
   updatedAt: "2026-08-03T00:00:00.000Z",
 };
@@ -72,6 +96,20 @@ describe("controlled DevOps validator", () => {
       projectService: projectService(),
       preparedRepositories: [repository],
       runner,
+      checkpointService: {
+        async createCheckpoint(input) {
+          assert.equal(input.repositoryRoot, repository.localCheckoutPath);
+          assert.equal(input.taskId, task.id);
+          assert.deepEqual(input.changeEvidence, task.execution?.result.changeEvidence);
+          return {
+            sha: "0123456789abcdef0123456789abcdef01234567",
+            shortSha: "0123456789ab",
+            message: "devcrew: implement task task_000001",
+            createdAt: "2026-08-03T04:00:00.000Z",
+            filesChanged: ["src/app.ts"],
+          };
+        },
+      },
       generateValidationId: () => "val_000001",
       now: () => new Date("2026-08-03T04:00:00.000Z"),
     }).validate(task);
@@ -94,6 +132,13 @@ describe("controlled DevOps validator", () => {
         { name: "build", status: "PASSED", summary: "Production build completed successfully." },
       ],
       summary: "Controlled validation completed successfully.",
+      checkpoint: {
+        sha: "0123456789abcdef0123456789abcdef01234567",
+        shortSha: "0123456789ab",
+        message: "devcrew: implement task task_000001",
+        createdAt: "2026-08-03T04:00:00.000Z",
+        filesChanged: ["src/app.ts"],
+      },
     });
   });
 
@@ -120,6 +165,11 @@ describe("controlled DevOps validator", () => {
         projectService: projectService(),
         preparedRepositories: [repository],
         runner,
+        checkpointService: {
+          async createCheckpoint() {
+            throw new Error("checkpoint should not run after failed checks");
+          },
+        },
       }).validate(task),
       (error: unknown) =>
         error instanceof ApplicationError &&
@@ -133,8 +183,86 @@ describe("controlled DevOps validator", () => {
         projectService: projectService(),
         preparedRepositories: [{ ...repository, localCheckoutPath: undefined }],
         runner,
+        checkpointService: {
+          async createCheckpoint() {
+            throw new Error("unused");
+          },
+        },
       }).validate(task),
       (error: unknown) => error instanceof ApplicationError && error.code === "INTERNAL_ERROR",
+    );
+  });
+
+  it("sanitizes checkpoint failures after successful validation", async () => {
+    const runner: ControlledCommandRunner = {
+      async run() {
+        return {
+          status: "PASSED",
+          exitCode: 0,
+          timedOut: false,
+          started: true,
+          outputLimitExceeded: false,
+          unsafeEvidence: false,
+          stdout: "",
+          stderr: "",
+        };
+      },
+    };
+
+    await assert.rejects(
+      createControlledDevOpsValidator({
+        projectService: projectService(),
+        preparedRepositories: [repository],
+        runner,
+        checkpointService: {
+          async createCheckpoint() {
+            throw new Error("secret failure at /Users/example/checkout");
+          },
+        },
+      }).validate(task),
+      (error: unknown) =>
+        error instanceof ApplicationError &&
+        error.code === "INTERNAL_ERROR" &&
+        error.message === "Validation failed",
+    );
+  });
+
+  it("fails closed when Developer Git evidence is missing", async () => {
+    const runner: ControlledCommandRunner = {
+      async run() {
+        return {
+          status: "PASSED",
+          exitCode: 0,
+          timedOut: false,
+          started: true,
+          outputLimitExceeded: false,
+          unsafeEvidence: false,
+          stdout: "",
+          stderr: "",
+        };
+      },
+    };
+    const taskWithoutEvidence: TaskSnapshot = {
+      ...task,
+      execution: {
+        ...task.execution!,
+        result: {
+          ...task.execution!.result,
+          changeEvidence: undefined,
+        },
+      },
+    };
+
+    await assert.rejects(
+      createControlledDevOpsValidator({
+        projectService: projectService(),
+        preparedRepositories: [repository],
+        runner,
+      }).validate(taskWithoutEvidence),
+      (error: unknown) =>
+        error instanceof ApplicationError &&
+        error.code === "INTERNAL_ERROR" &&
+        error.message === "Validation failed",
     );
   });
 });

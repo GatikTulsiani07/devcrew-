@@ -346,6 +346,17 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               summary: check.summary,
             })),
             summary: task.validation.summary,
+            ...(task.validation.checkpoint === undefined
+              ? {}
+              : {
+                  checkpoint: {
+                    sha: task.validation.checkpoint.sha,
+                    shortSha: task.validation.checkpoint.shortSha,
+                    message: task.validation.checkpoint.message,
+                    createdAt: task.validation.checkpoint.createdAt,
+                    filesChanged: [...task.validation.checkpoint.filesChanged],
+                  },
+                }),
           },
         }),
     ...(task.review === undefined

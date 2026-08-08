@@ -1383,6 +1383,69 @@ describe("task manager planning API", () => {
     assert.deepEqual(await read.json(), await validated.json());
   });
 
+  it("persists checkpoint evidence on validation snapshots", async () => {
+    const app = createTestApp({
+      devOpsValidator: {
+        async validate() {
+          return {
+            id: "val_checkpoint",
+            role: "DEVOPS_ENGINEER",
+            status: "PASSED",
+            attempt: 1,
+            startedAt: "2026-08-03T06:00:00.000Z",
+            completedAt: "2026-08-03T07:00:00.000Z",
+            checks: [
+              {
+                name: "typecheck",
+                status: "PASSED",
+                summary: "Type checking completed successfully.",
+              },
+              {
+                name: "tests",
+                status: "PASSED",
+                summary: "Automated tests completed successfully.",
+              },
+              {
+                name: "build",
+                status: "PASSED",
+                summary: "Production build completed successfully.",
+              },
+            ],
+            summary: "Controlled validation completed successfully.",
+            checkpoint: {
+              sha: "0123456789abcdef0123456789abcdef01234567",
+              shortSha: "0123456789ab",
+              message: "devcrew: implement task task_000001",
+              createdAt: "2026-08-03T07:00:00.000Z",
+              filesChanged: ["src/app.ts"],
+            },
+          };
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const validated = await validateTask(app);
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const validatedBody = await validated.json();
+
+    assert.equal(validated.status, 200);
+    assert.equal(read.status, 200);
+    assert.deepEqual(validatedBody.task.validation.checkpoint, {
+      sha: "0123456789abcdef0123456789abcdef01234567",
+      shortSha: "0123456789ab",
+      message: "devcrew: implement task task_000001",
+      createdAt: "2026-08-03T07:00:00.000Z",
+      filesChanged: ["src/app.ts"],
+    });
+    assert.deepEqual(await read.json(), validatedBody);
+  });
+
   it("rejects validation while waiting for approval", async () => {
     const app = createTestApp();
     assert.equal((await createProject(app)).status, 201);
