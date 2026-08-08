@@ -17,7 +17,12 @@ import {
 } from "./config/security.js";
 import type { DatabaseHealth } from "./db/health.js";
 import { ApplicationError, jsonError } from "./errors.js";
-import { describeError, logger as defaultLogger, type Logger } from "./observability/logger.js";
+import { createGitHubPullRequestClient } from "./github/github-pull-request-client.js";
+import {
+  describeError,
+  logger as defaultLogger,
+  type Logger,
+} from "./observability/logger.js";
 import { InMemoryProjectStore } from "./projects/in-memory-project-store.js";
 import {
   createProjectService,
@@ -37,6 +42,7 @@ import { createDeveloperExecutorFromEnv } from "./tasks/openai-developer-executo
 import { createImplementationPlannerFromEnv } from "./tasks/openai-implementation-planner.js";
 import { createManagerPlannerFromEnv } from "./tasks/openai-manager.js";
 import { createReviewerFromEnv } from "./tasks/openai-reviewer.js";
+import { createPullRequestService } from "./tasks/pull-request-service.js";
 import { createTaskRoutes } from "./tasks/routes.js";
 import {
   createTaskService,
@@ -101,6 +107,10 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
             })
           : createDeterministicDevOpsValidator(),
       taskReviewer: createReviewerFromEnv(),
+      pullRequestCreator: createPullRequestService({
+        githubClient: createGitHubPullRequestClient(),
+        preparedRepositories,
+      }),
       store: new InMemoryTaskStore(),
       activityService,
     });

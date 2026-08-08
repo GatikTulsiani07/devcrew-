@@ -3,6 +3,7 @@ export interface PreparedRepository {
   publicRepositoryUrl: string;
   localCheckoutPath?: string;
   validationProfileId?: string;
+  defaultBranch?: string;
 }
 
 export const preparedRepositories: readonly PreparedRepository[] = [
@@ -12,6 +13,7 @@ export const preparedRepositories: readonly PreparedRepository[] = [
     localCheckoutPath:
       process.env.DEVCREW_PREPARED_DEVCREW_LOCAL_CHECKOUT_PATH,
     validationProfileId: "node_standard",
+    defaultBranch: "main",
   },
 ];
 

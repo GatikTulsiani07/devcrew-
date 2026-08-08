@@ -63,6 +63,18 @@ export interface GitRemotePushEvidence {
   pushedAt: string;
 }
 
+export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
+
+export interface TaskPullRequestEvidence {
+  number: number;
+  url: string;
+  state: PullRequestState;
+  headBranch: string;
+  baseBranch: string;
+  commitSha: string;
+  createdAt: string;
+}
+
 export interface TaskExecution {
   id: string;
   role: "FULL_STACK_DEVELOPER";
@@ -121,6 +133,7 @@ export interface TaskSnapshot {
   execution?: TaskExecution;
   validation?: TaskValidation;
   review?: TaskReview;
+  pullRequest?: TaskPullRequestEvidence;
   createdAt: string;
   updatedAt: string;
 }
@@ -143,7 +156,8 @@ export type ActivityEventType =
   | "PLAN_REJECTED"
   | "IMPLEMENTATION_COMPLETED"
   | "VALIDATION_COMPLETED"
-  | "REVIEW_COMPLETED";
+  | "REVIEW_COMPLETED"
+  | "PULL_REQUEST_CREATED";
 
 export type ActivityActor =
   | { kind: "HUMAN" }
