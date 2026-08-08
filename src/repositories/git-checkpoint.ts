@@ -42,6 +42,7 @@ export const CHECKPOINT_AUTHOR_NAME = "Devcrew Agent";
 export const CHECKPOINT_AUTHOR_EMAIL = "devcrew@localhost";
 export const GIT_CHECKPOINT_TIMEOUT_MS = 20_000;
 export const MAX_CHECKPOINT_FILES = 24;
+export const DEFAULT_BRANCH_NAMES = new Set(["main", "master"]);
 
 const statusArgs: readonly string[] = [
   "status",
@@ -63,12 +64,19 @@ export function createGitCheckpointService({
   return {
     async createCheckpoint(input) {
       const expectedPaths = expectedChangedPaths(input.changeEvidence);
+      const taskBranch = taskBranchName(input.taskId);
 
       if (input.existingCheckpoint !== undefined) {
-        return verifyExistingCheckpoint(runner, input.repositoryRoot, input.existingCheckpoint);
+        return verifyExistingCheckpoint(
+          runner,
+          input.repositoryRoot,
+          input.existingCheckpoint,
+          taskBranch,
+        );
       }
 
       await verifyPreCommitStatus(runner, input.repositoryRoot, expectedPaths);
+      await ensureTaskBranch(runner, input.repositoryRoot, taskBranch);
 
       const hooksPath = await mkdtemp(join(tmpdir(), "devcrew-git-hooks-"));
       const message = checkpointMessage(input.taskId);
@@ -179,6 +187,7 @@ async function verifyExistingCheckpoint(
   runner: GitCommandRunner,
   repositoryRoot: string,
   checkpoint: GitCheckpointEvidence,
+  taskBranch: string,
 ): Promise<GitCheckpointEvidence> {
   const head = parseSha(
     (await runGit(runner, ["rev-parse", "HEAD"], repositoryRoot, [0])).stdout,
@@ -189,6 +198,7 @@ async function verifyExistingCheckpoint(
   }
 
   await verifyPostCommitStatus(runner, repositoryRoot);
+  await verifyCurrentBranch(runner, repositoryRoot, taskBranch);
 
   return {
     sha: checkpoint.sha,
@@ -197,6 +207,64 @@ async function verifyExistingCheckpoint(
     createdAt: checkpoint.createdAt,
     filesChanged: [...checkpoint.filesChanged],
   };
+}
+
+async function ensureTaskBranch(
+  runner: GitCommandRunner,
+  repositoryRoot: string,
+  taskBranch: string,
+): Promise<void> {
+  const currentBranch = await currentBranchName(runner, repositoryRoot);
+
+  if (currentBranch === taskBranch) {
+    return;
+  }
+
+  if (DEFAULT_BRANCH_NAMES.has(taskBranch)) {
+    throw new GitCheckpointError("task branch is a default branch");
+  }
+
+  const branchExists = await runGit(
+    runner,
+    ["show-ref", "--verify", "--quiet", `refs/heads/${taskBranch}`],
+    repositoryRoot,
+    [0, 1],
+  );
+
+  if (branchExists.exitCode === 0) {
+    await runGit(runner, ["switch", taskBranch], repositoryRoot, [0]);
+  } else {
+    await runGit(runner, ["switch", "-c", taskBranch], repositoryRoot, [0]);
+  }
+
+  await verifyCurrentBranch(runner, repositoryRoot, taskBranch);
+}
+
+async function verifyCurrentBranch(
+  runner: GitCommandRunner,
+  repositoryRoot: string,
+  taskBranch: string,
+): Promise<void> {
+  const currentBranch = await currentBranchName(runner, repositoryRoot);
+
+  if (currentBranch !== taskBranch) {
+    throw new GitCheckpointError("current branch is not the task branch");
+  }
+}
+
+async function currentBranchName(
+  runner: GitCommandRunner,
+  repositoryRoot: string,
+): Promise<string> {
+  const branch = (
+    await runGit(runner, ["branch", "--show-current"], repositoryRoot, [0])
+  ).stdout.trim();
+
+  if (!isSafeBranchName(branch)) {
+    throw new GitCheckpointError("current branch is unsafe");
+  }
+
+  return branch;
 }
 
 async function readDirtyPaths(
@@ -241,12 +309,52 @@ async function runGit(
 }
 
 function checkpointMessage(taskId: string): string {
-  const safeTaskId = taskId
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .replace(/[^A-Za-z0-9._:-]/g, "")
-    .slice(0, 128);
+  const safeTaskId = safeTaskIdSegment(taskId);
 
   return `devcrew: implement task ${safeTaskId || "unknown"}`;
+}
+
+export function taskBranchName(taskId: string): string {
+  const branch = `devcrew/task-${safeTaskIdSegment(taskId) || "unknown"}`;
+
+  if (!isSafeTaskBranchName(branch) || DEFAULT_BRANCH_NAMES.has(branch)) {
+    throw new GitCheckpointError("unsafe task branch");
+  }
+
+  return branch;
+}
+
+export function isSafeTaskBranchName(branch: string): boolean {
+  return (
+    isSafeBranchName(branch) &&
+    /^devcrew\/task-[A-Za-z0-9._:-]{1,128}$/.test(branch) &&
+    !DEFAULT_BRANCH_NAMES.has(branch)
+  );
+}
+
+export function isSafeBranchName(branch: string): boolean {
+  return (
+    branch !== "" &&
+    branch.length <= 160 &&
+    !branch.startsWith("-") &&
+    !branch.startsWith("/") &&
+    !branch.includes("..") &&
+    !branch.includes("//") &&
+    !branch.includes("@{") &&
+    !branch.includes("\\") &&
+    !branch.includes("\0") &&
+    !/[\u0000-\u001f\u007f ~^:?*[\]\\]/.test(branch) &&
+    !branch.endsWith("/") &&
+    !branch.endsWith(".") &&
+    !branch.endsWith(".lock")
+  );
+}
+
+function safeTaskIdSegment(taskId: string): string {
+  return taskId
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[^A-Za-z0-9._-]/g, "")
+    .slice(0, 128);
 }
 
 function parseSha(stdout: string): string {

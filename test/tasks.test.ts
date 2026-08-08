@@ -1419,6 +1419,12 @@ describe("task manager planning API", () => {
               createdAt: "2026-08-03T07:00:00.000Z",
               filesChanged: ["src/app.ts"],
             },
+            remoteBranch: {
+              remote: "origin",
+              branch: "devcrew/task-task_000001",
+              commitSha: "0123456789abcdef0123456789abcdef01234567",
+              pushedAt: "2026-08-03T07:01:00.000Z",
+            },
           };
         },
       },
@@ -1442,6 +1448,12 @@ describe("task manager planning API", () => {
       message: "devcrew: implement task task_000001",
       createdAt: "2026-08-03T07:00:00.000Z",
       filesChanged: ["src/app.ts"],
+    });
+    assert.deepEqual(validatedBody.task.validation.remoteBranch, {
+      remote: "origin",
+      branch: "devcrew/task-task_000001",
+      commitSha: "0123456789abcdef0123456789abcdef01234567",
+      pushedAt: "2026-08-03T07:01:00.000Z",
     });
     assert.deepEqual(await read.json(), validatedBody);
   });

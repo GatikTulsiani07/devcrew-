@@ -357,6 +357,16 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                     filesChanged: [...task.validation.checkpoint.filesChanged],
                   },
                 }),
+            ...(task.validation.remoteBranch === undefined
+              ? {}
+              : {
+                  remoteBranch: {
+                    remote: task.validation.remoteBranch.remote,
+                    branch: task.validation.remoteBranch.branch,
+                    commitSha: task.validation.remoteBranch.commitSha,
+                    pushedAt: task.validation.remoteBranch.pushedAt,
+                  },
+                }),
           },
         }),
     ...(task.review === undefined

@@ -110,6 +110,23 @@ describe("controlled DevOps validator", () => {
           };
         },
       },
+      remotePushService: {
+        async pushValidatedBranch(input) {
+          assert.equal(input.repositoryRoot, repository.localCheckoutPath);
+          assert.equal(input.taskId, task.id);
+          assert.equal(input.projectRepositoryUrl, repository.publicRepositoryUrl);
+          assert.equal(
+            input.checkpoint?.sha,
+            "0123456789abcdef0123456789abcdef01234567",
+          );
+          return {
+            remote: "origin",
+            branch: "devcrew/task-task_000001",
+            commitSha: "0123456789abcdef0123456789abcdef01234567",
+            pushedAt: "2026-08-03T04:00:00.000Z",
+          };
+        },
+      },
       generateValidationId: () => "val_000001",
       now: () => new Date("2026-08-03T04:00:00.000Z"),
     }).validate(task);
@@ -138,6 +155,12 @@ describe("controlled DevOps validator", () => {
         message: "devcrew: implement task task_000001",
         createdAt: "2026-08-03T04:00:00.000Z",
         filesChanged: ["src/app.ts"],
+      },
+      remoteBranch: {
+        remote: "origin",
+        branch: "devcrew/task-task_000001",
+        commitSha: "0123456789abcdef0123456789abcdef01234567",
+        pushedAt: "2026-08-03T04:00:00.000Z",
       },
     });
   });
@@ -217,6 +240,51 @@ describe("controlled DevOps validator", () => {
         checkpointService: {
           async createCheckpoint() {
             throw new Error("secret failure at /Users/example/checkout");
+          },
+        },
+      }).validate(task),
+      (error: unknown) =>
+        error instanceof ApplicationError &&
+        error.code === "INTERNAL_ERROR" &&
+        error.message === "Validation failed",
+    );
+  });
+
+  it("sanitizes remote push failures after successful checkpointing", async () => {
+    const runner: ControlledCommandRunner = {
+      async run() {
+        return {
+          status: "PASSED",
+          exitCode: 0,
+          timedOut: false,
+          started: true,
+          outputLimitExceeded: false,
+          unsafeEvidence: false,
+          stdout: "",
+          stderr: "",
+        };
+      },
+    };
+
+    await assert.rejects(
+      createControlledDevOpsValidator({
+        projectService: projectService(),
+        preparedRepositories: [repository],
+        runner,
+        checkpointService: {
+          async createCheckpoint() {
+            return {
+              sha: "0123456789abcdef0123456789abcdef01234567",
+              shortSha: "0123456789ab",
+              message: "devcrew: implement task task_000001",
+              createdAt: "2026-08-03T04:00:00.000Z",
+              filesChanged: ["src/app.ts"],
+            };
+          },
+        },
+        remotePushService: {
+          async pushValidatedBranch() {
+            throw new Error("auth token failed at https://token@example.invalid");
           },
         },
       }).validate(task),
