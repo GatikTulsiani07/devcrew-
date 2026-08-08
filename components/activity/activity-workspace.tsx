@@ -12,6 +12,7 @@ import { ActivityTimeline } from "@/components/activity/activity-timeline";
 import { DeveloperEvidencePanel } from "@/components/activity/developer-evidence-panel";
 import { DevopsEvidencePanel } from "@/components/activity/devops-evidence-panel";
 import { OrchestrationProgress } from "@/components/activity/orchestration-progress";
+import { PullRequestEvidencePanel } from "@/components/activity/pull-request-evidence-panel";
 import { ReviewerEvidencePanel } from "@/components/activity/reviewer-evidence-panel";
 
 function visibleStatus(agent: Agent, online: boolean, task?: TaskSnapshot) {
@@ -236,10 +237,11 @@ export function ActivityWorkspace() {
                   {workflow.project ? "Authoritative stage output from the backend task snapshot." : "Fixture setup fallback: evidence panels are waiting for a backend task snapshot."}
                 </p>
               </div>
-              <div className="mt-5 grid min-w-0 gap-4 lg:grid-cols-3">
+              <div className="mt-5 grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <DeveloperEvidencePanel task={workflow.task} />
                 <DevopsEvidencePanel task={workflow.task} />
                 <ReviewerEvidencePanel task={workflow.task} />
+                <PullRequestEvidencePanel task={workflow.task} />
               </div>
             </section>
 

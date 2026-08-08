@@ -33,6 +33,21 @@ function task(status: TaskStatus | string, reason?: string): TaskSnapshot {
   };
 }
 
+function taskWithPullRequest(): TaskSnapshot {
+  return {
+    ...task("REVIEW_COMPLETED"),
+    pullRequest: {
+      number: 42,
+      url: "https://github.com/acme/backend-project/pull/42",
+      state: "OPEN",
+      headBranch: "devcrew/task-task_123",
+      baseBranch: "main",
+      commitSha: "a84f72c",
+      createdAt: "2026-08-03T12:25:00.000Z",
+    },
+  };
+}
+
 async function render(taskSnapshot?: TaskSnapshot, fixtureFallback = false) {
   if (root) await act(async () => root?.unmount());
   container?.remove();
@@ -66,7 +81,7 @@ describe("orchestration progress model", () => {
     ["PLAN_REJECTED", ["completed", "stopped", "upcoming", "upcoming", "upcoming", "upcoming"]],
     ["IMPLEMENTATION_COMPLETED", ["completed", "completed", "completed", "current", "upcoming", "upcoming"]],
     ["VALIDATION_COMPLETED", ["completed", "completed", "completed", "completed", "current", "upcoming"]],
-    ["REVIEW_COMPLETED", ["completed", "completed", "completed", "completed", "completed", "completed"]],
+    ["REVIEW_COMPLETED", ["completed", "completed", "completed", "completed", "completed", "current"]],
   ] as const)("maps %s to the exact stage states", (status, states) => {
     const model = getOrchestrationProgress(task(status));
     expect(model.stages.map((stage) => stage.state)).toEqual(states);
@@ -87,7 +102,7 @@ describe("orchestration progress model", () => {
     expect(view.textContent).toContain("Stopped at Human Approval");
     expect(view.textContent).toContain(reason);
     expect(view.textContent).not.toContain("Developer: current");
-    expect(view.textContent).not.toContain("Complete: current");
+    expect(view.textContent).not.toContain("Pull Request: current");
   });
 
   it("handles a missing rejection reason safely", async () => {
@@ -122,5 +137,18 @@ describe("orchestration progress model", () => {
     const view = await render(task("PLAN_REJECTED", reason));
     expect(view.textContent).toContain(reason);
     expect([...view.querySelectorAll("p")].find((item) => item.textContent?.includes(reason))?.className).toMatch(/break-words/);
+  });
+
+  it("represents the final workflow stage as Pull Request and completes it only from pull request evidence", async () => {
+    const withoutPullRequest = getOrchestrationProgress(task("REVIEW_COMPLETED"));
+    expect(withoutPullRequest.stages.at(-1)?.label).toBe("Pull Request");
+    expect(withoutPullRequest.stages.at(-1)?.state).toBe("current");
+
+    const withPullRequest = getOrchestrationProgress(taskWithPullRequest());
+    expect(withPullRequest.stages.at(-1)?.state).toBe("completed");
+
+    const view = await render(taskWithPullRequest());
+    expect(view.textContent).toContain("Workflow complete");
+    expect(view.querySelector('[aria-label="Pull Request: Completed"]')).not.toBeNull();
   });
 });

@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { DeveloperEvidencePanel } from "@/components/activity/developer-evidence-panel";
 import { DevopsEvidencePanel } from "@/components/activity/devops-evidence-panel";
+import { PullRequestEvidencePanel } from "@/components/activity/pull-request-evidence-panel";
 import { ReviewerEvidencePanel } from "@/components/activity/reviewer-evidence-panel";
 import { ActivityWorkspace } from "@/components/activity/activity-workspace";
 import { WorkspaceStateProvider } from "@/components/shell/workspace-state";
@@ -120,6 +121,15 @@ function taskWithAllEvidence(): TaskSnapshot {
           description: "The panels consume the task snapshot and do not introduce backend mutations.",
         },
       ],
+    },
+    pullRequest: {
+      number: 42,
+      url: "https://github.com/acme/backend-project/pull/42",
+      state: "OPEN",
+      headBranch: "devcrew/task-task_123",
+      baseBranch: "main",
+      commitSha: "a84f72c",
+      createdAt: "2026-08-03T12:25:00.000Z",
     },
   });
 }
@@ -278,6 +288,100 @@ describe("Reviewer evidence panel", () => {
   });
 });
 
+describe("Pull Request evidence panel", () => {
+  it("renders authoritative pull request evidence, visible state text, branches, commit, timestamp, and a safe GitHub link", async () => {
+    const view = await render(<PullRequestEvidencePanel task={taskWithAllEvidence()} />);
+
+    expect(view.querySelector("h2")?.textContent).toBe("Pull Request");
+    expect(view.textContent).toContain("#42");
+    expect(view.textContent).toContain("OPEN");
+    expect(view.textContent).toContain("devcrew/task-task_123");
+    expect(view.textContent).toContain("main");
+    expect(view.textContent).toContain("a84f72c");
+    expect(view.textContent).toContain("PR created");
+    expect(view.textContent).toContain("Aug 3, 2026, 12:25 PM");
+
+    const link = view.querySelector('a[aria-label="View pull request #42 on GitHub"]');
+    expect(link?.getAttribute("href")).toBe("https://github.com/acme/backend-project/pull/42");
+    expect(link?.getAttribute("target")).toBe("_blank");
+    expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("renders an optional backend title when the current contract provides one", async () => {
+    const titledTask = taskWithAllEvidence();
+    titledTask.pullRequest = {
+      ...titledTask.pullRequest!,
+      title: "A long pull request title that should wrap safely instead of forcing horizontal overflow",
+    } as never;
+
+    const view = await render(<PullRequestEvidencePanel task={titledTask} />);
+    expect(view.textContent).toContain("A long pull request title");
+    expect([...view.querySelectorAll("p")].find((item) => item.textContent?.includes("A long pull request title"))?.className).toMatch(/break-words/);
+  });
+
+  it("renders a deliberate no-PR state without fixture pull request data", async () => {
+    const view = await render(<PullRequestEvidencePanel task={task()} />);
+    expect(view.textContent).toContain("Pull request has not been created yet.");
+    expect(view.textContent).not.toContain("#42");
+    expect(view.textContent).not.toContain("devcrew/task-task_123");
+    expect(view.querySelector("a")).toBeNull();
+  });
+
+  it("handles missing optional fields without crashing", async () => {
+    const missingFields = taskWithAllEvidence();
+    missingFields.pullRequest = {
+      number: 7,
+      url: "https://github.com/acme/backend-project/pull/7",
+      state: "OPEN",
+      headBranch: "",
+      baseBranch: "",
+      commitSha: "",
+      createdAt: "",
+    };
+
+    const view = await render(<PullRequestEvidencePanel task={missingFields} />);
+    expect(view.textContent).toContain("#7");
+    expect(view.textContent).toContain("OPEN");
+    expect(view.textContent).toContain("Timestamp unavailable");
+    expect(view.textContent).not.toContain("undefined");
+  });
+
+  it("does not render malformed or unsupported pull request URLs as clickable links", async () => {
+    const malformed = taskWithAllEvidence();
+    malformed.pullRequest = { ...malformed.pullRequest!, url: "not a url" };
+    const malformedView = await render(<PullRequestEvidencePanel task={malformed} />);
+    expect(malformedView.textContent).toContain("#42");
+    expect(malformedView.querySelector("a")).toBeNull();
+
+    await act(async () => root?.unmount());
+    root = undefined;
+    container?.remove();
+    container = undefined;
+
+    const unsupported = taskWithAllEvidence();
+    unsupported.pullRequest = { ...unsupported.pullRequest!, url: "javascript:alert(1)" };
+    const unsupportedView = await render(<PullRequestEvidencePanel task={unsupported} />);
+    expect(unsupportedView.textContent).toContain("#42");
+    expect(unsupportedView.querySelector("a")).toBeNull();
+  });
+
+  it("wraps long branch names and uses a neutral fallback for unknown pull request states", async () => {
+    const longBranchTask = taskWithAllEvidence();
+    longBranchTask.pullRequest = {
+      ...longBranchTask.pullRequest!,
+      state: "DRAFT",
+      headBranch: "devcrew/task-with-a-very-long-source-branch-name-that-must-wrap-safely-at-mobile-width",
+      baseBranch: "main-with-a-very-long-target-branch-name-that-must-wrap-safely",
+    } as never;
+
+    const view = await render(<PullRequestEvidencePanel task={longBranchTask} />);
+    expect(view.textContent).toContain("STATE UNKNOWN");
+    expect(view.textContent).toContain("very-long-source-branch-name");
+    expect(view.textContent).toContain("very-long-target-branch-name");
+    expect([...view.querySelectorAll("span")].find((item) => item.textContent?.includes("very-long-source-branch-name"))?.className).toMatch(/break-all/);
+  });
+});
+
 describe("Activity structured evidence placement", () => {
   it("renders semantic panel headings and does not mix fixture evidence into an active backend task", async () => {
     const backendProject = project();
@@ -304,11 +408,13 @@ describe("Activity structured evidence placement", () => {
     expect(view.textContent).toContain("Authoritative stage output from the backend task snapshot.");
     expect(view.textContent).not.toContain("Fixture setup fallback: evidence panels");
     expect([...view.querySelectorAll("h2")].map((heading) => heading.textContent)).toEqual(
-      expect.arrayContaining(["Developer evidence", "DevOps evidence", "Reviewer evidence"]),
+      expect.arrayContaining(["Developer evidence", "DevOps evidence", "Reviewer evidence", "Pull Request"]),
     );
     expect(view.querySelector('ul[aria-label="Proposed files"]')).not.toBeNull();
     expect(view.querySelector('ul[aria-label="Validation checks"]')).not.toBeNull();
     expect(view.querySelector('ul[aria-label="Reviewer findings"]')).not.toBeNull();
+    expect(view.textContent).toContain("#42");
+    expect(view.textContent).toContain("devcrew/task-task_123");
   });
 
   it("clearly labels fixture setup mode without fabricating stage evidence", async () => {
@@ -333,6 +439,8 @@ describe("Activity structured evidence placement", () => {
     expect(view.textContent).toContain("Developer has not run yet.");
     expect(view.textContent).toContain("Validation has not run yet.");
     expect(view.textContent).toContain("Review has not run yet.");
+    expect(view.textContent).toContain("Pull request has not been created yet.");
     expect(view.textContent).not.toContain("Prepared an implementation proposal");
+    expect(view.textContent).not.toContain("#42");
   });
 });

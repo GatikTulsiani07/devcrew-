@@ -60,6 +60,7 @@ describe("activity event presentation", () => {
       "IMPLEMENTATION_COMPLETED",
       "VALIDATION_COMPLETED",
       "REVIEW_COMPLETED",
+      "PULL_REQUEST_CREATED",
     ];
 
     for (const type of knownTypes) {
