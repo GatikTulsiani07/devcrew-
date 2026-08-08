@@ -6,7 +6,7 @@ export type OrchestrationStageId =
   | "developer"
   | "devops"
   | "reviewer"
-  | "complete";
+  | "pullRequest";
 
 export type OrchestrationStageState = "completed" | "current" | "upcoming" | "stopped";
 
@@ -32,7 +32,7 @@ const stageLabels: Readonly<Record<OrchestrationStageId, string>> = {
   developer: "Developer",
   devops: "DevOps",
   reviewer: "Reviewer",
-  complete: "Complete",
+  pullRequest: "Pull Request",
 };
 
 const stageIds: readonly OrchestrationStageId[] = [
@@ -41,7 +41,7 @@ const stageIds: readonly OrchestrationStageId[] = [
   "developer",
   "devops",
   "reviewer",
-  "complete",
+  "pullRequest",
 ];
 
 type StageStateMap = Readonly<Record<OrchestrationStageId, OrchestrationStageState>>;
@@ -53,7 +53,7 @@ const statusMappings: Readonly<Partial<Record<TaskStatus, StageStateMap>>> = {
     developer: "upcoming",
     devops: "upcoming",
     reviewer: "upcoming",
-    complete: "upcoming",
+    pullRequest: "upcoming",
   },
   PLAN_APPROVED: {
     manager: "completed",
@@ -61,7 +61,7 @@ const statusMappings: Readonly<Partial<Record<TaskStatus, StageStateMap>>> = {
     developer: "current",
     devops: "upcoming",
     reviewer: "upcoming",
-    complete: "upcoming",
+    pullRequest: "upcoming",
   },
   PLAN_REJECTED: {
     manager: "completed",
@@ -69,7 +69,7 @@ const statusMappings: Readonly<Partial<Record<TaskStatus, StageStateMap>>> = {
     developer: "upcoming",
     devops: "upcoming",
     reviewer: "upcoming",
-    complete: "upcoming",
+    pullRequest: "upcoming",
   },
   IMPLEMENTATION_COMPLETED: {
     manager: "completed",
@@ -77,7 +77,7 @@ const statusMappings: Readonly<Partial<Record<TaskStatus, StageStateMap>>> = {
     developer: "completed",
     devops: "current",
     reviewer: "upcoming",
-    complete: "upcoming",
+    pullRequest: "upcoming",
   },
   VALIDATION_COMPLETED: {
     manager: "completed",
@@ -85,7 +85,7 @@ const statusMappings: Readonly<Partial<Record<TaskStatus, StageStateMap>>> = {
     developer: "completed",
     devops: "completed",
     reviewer: "current",
-    complete: "upcoming",
+    pullRequest: "upcoming",
   },
   REVIEW_COMPLETED: {
     manager: "completed",
@@ -93,12 +93,12 @@ const statusMappings: Readonly<Partial<Record<TaskStatus, StageStateMap>>> = {
     developer: "completed",
     devops: "completed",
     reviewer: "completed",
-    complete: "completed",
+    pullRequest: "current",
   },
 };
 
 export function getOrchestrationProgress(
-  task?: Pick<TaskSnapshot, "status" | "planDecision">,
+  task?: Pick<TaskSnapshot, "status" | "planDecision" | "pullRequest">,
 ): OrchestrationProgressModel {
   if (!task) {
     return {
@@ -119,7 +119,7 @@ export function getOrchestrationProgress(
   }
 
   const stages = stageIds.map((id) => {
-    const state = mapping[id];
+    const state = id === "pullRequest" && task.status === "REVIEW_COMPLETED" && task.pullRequest ? "completed" : mapping[id];
     return {
       id,
       label: stageLabels[id],

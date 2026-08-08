@@ -57,7 +57,7 @@ export function OrchestrationProgress({
   }
 
   const currentLabel = model.currentStageId ? model.stages.find((stage) => stage.id === model.currentStageId)?.label : undefined;
-  const completed = model.status === "REVIEW_COMPLETED";
+  const completed = model.stages.length > 0 && model.stages.every((stage) => stage.state === "completed");
   const headingLabel = completed ? "Workflow complete" : currentLabel ? `Current stage: ${currentLabel}` : "Workflow stopped at Human Approval";
 
   return (
