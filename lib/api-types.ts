@@ -48,6 +48,14 @@ export interface ImplementationResult {
   verification: readonly string[];
 }
 
+export interface GitCheckpointEvidence {
+  sha: string;
+  shortSha: string;
+  message: string;
+  createdAt: string;
+  filesChanged: readonly string[];
+}
+
 export interface TaskExecution {
   id: string;
   role: "FULL_STACK_DEVELOPER";
@@ -73,6 +81,7 @@ export interface TaskValidation {
   completedAt: string;
   checks: readonly ValidationCheck[];
   summary: string;
+  checkpoint?: GitCheckpointEvidence;
 }
 
 export interface ReviewFinding {

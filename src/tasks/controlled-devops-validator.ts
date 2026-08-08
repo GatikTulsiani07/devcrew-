@@ -7,6 +7,10 @@ import {
   findPreparedRepository,
   type PreparedRepository,
 } from "../repositories/prepared-repositories.js";
+import {
+  createGitCheckpointService,
+  type GitCheckpointService,
+} from "../repositories/git-checkpoint.js";
 import type { ProjectService } from "../projects/project-service.js";
 import {
   findValidationProfile,
@@ -34,6 +38,7 @@ export interface ControlledDevOpsValidatorDependencies {
   generateValidationId?: () => string;
   now?: () => Date;
   runnerOptions?: ControlledCommandRunnerOptions;
+  checkpointService?: GitCheckpointService;
 }
 
 export function createControlledDevOpsValidator({
@@ -44,6 +49,7 @@ export function createControlledDevOpsValidator({
   generateValidationId = () => `val_${randomUUID()}`,
   now = () => new Date(),
   runnerOptions,
+  checkpointService = createGitCheckpointService(),
 }: ControlledDevOpsValidatorDependencies): DevOpsValidator {
   const runner = injectedRunner ?? createControlledCommandRunner(runnerOptions);
 
@@ -87,6 +93,32 @@ export function createControlledDevOpsValidator({
         });
       }
 
+      const changeEvidence = task.execution?.result.changeEvidence;
+
+      if (changeEvidence === undefined) {
+        logger.error("Controlled validation cannot checkpoint without Git evidence", {
+          taskId: task.id,
+        });
+        throw validationFailure();
+      }
+
+      let checkpoint;
+
+      try {
+        checkpoint = await checkpointService.createCheckpoint({
+          repositoryRoot: repository.localCheckoutPath,
+          taskId: task.id,
+          changeEvidence,
+          existingCheckpoint: task.validation?.checkpoint,
+        });
+      } catch (error) {
+        logger.error("Controlled Git checkpoint failed after validation", {
+          taskId: task.id,
+          cause: describeError(error),
+        });
+        throw validationFailure();
+      }
+
       return {
         id: generateValidationId(),
         role: "DEVOPS_ENGINEER",
@@ -96,6 +128,7 @@ export function createControlledDevOpsValidator({
         completedAt: now().toISOString(),
         checks,
         summary: "Controlled validation completed successfully.",
+        checkpoint,
       };
     },
   };
