@@ -11,6 +11,10 @@ import {
   createGitCheckpointService,
   type GitCheckpointService,
 } from "../repositories/git-checkpoint.js";
+import {
+  createGitRemotePushService,
+  type GitRemotePushService,
+} from "../repositories/git-remote-push.js";
 import type { ProjectService } from "../projects/project-service.js";
 import {
   findValidationProfile,
@@ -39,6 +43,7 @@ export interface ControlledDevOpsValidatorDependencies {
   now?: () => Date;
   runnerOptions?: ControlledCommandRunnerOptions;
   checkpointService?: GitCheckpointService;
+  remotePushService?: GitRemotePushService;
 }
 
 export function createControlledDevOpsValidator({
@@ -50,6 +55,7 @@ export function createControlledDevOpsValidator({
   now = () => new Date(),
   runnerOptions,
   checkpointService = createGitCheckpointService(),
+  remotePushService = createGitRemotePushService(),
 }: ControlledDevOpsValidatorDependencies): DevOpsValidator {
   const runner = injectedRunner ?? createControlledCommandRunner(runnerOptions);
 
@@ -66,7 +72,13 @@ export function createControlledDevOpsValidator({
           ? undefined
           : findValidationProfile(profiles, profileId);
 
-      if (!repository || !profile || !isValidRepository(repository) || !isValidProfile(profile)) {
+      if (
+        !repository ||
+        repository.publicRepositoryUrl !== project.repository.publicRepositoryUrl ||
+        !profile ||
+        !isValidRepository(repository) ||
+        !isValidProfile(profile)
+      ) {
         throw validationFailure();
       }
 
@@ -119,6 +131,24 @@ export function createControlledDevOpsValidator({
         throw validationFailure();
       }
 
+      let remoteBranch;
+
+      try {
+        remoteBranch = await remotePushService.pushValidatedBranch({
+          repositoryRoot: repository.localCheckoutPath,
+          taskId: task.id,
+          projectRepositoryUrl: project.repository.publicRepositoryUrl,
+          checkpoint,
+          existingRemoteBranch: task.validation?.remoteBranch,
+        });
+      } catch (error) {
+        logger.error("Controlled Git remote push failed after checkpoint", {
+          taskId: task.id,
+          cause: describeError(error),
+        });
+        throw validationFailure();
+      }
+
       return {
         id: generateValidationId(),
         role: "DEVOPS_ENGINEER",
@@ -129,6 +159,7 @@ export function createControlledDevOpsValidator({
         checks,
         summary: "Controlled validation completed successfully.",
         checkpoint,
+        remoteBranch,
       };
     },
   };

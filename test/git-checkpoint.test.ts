@@ -124,6 +124,7 @@ describe("controlled Git checkpoint", () => {
     assert.equal(checkpoint.createdAt, "2026-08-03T05:00:00.000Z");
     assert.deepEqual(checkpoint.filesChanged, ["created.ts", "existing.ts"]);
     assert.equal((await git(["rev-parse", "HEAD"])).trim(), checkpoint.sha);
+    assert.equal(await git(["branch", "--show-current"]), "devcrew/task-task_000001\n");
     assert.equal(await git(["status", "--porcelain"]), "");
     assert.equal(await git(["diff", "--cached", "--name-only"]), "");
   });
@@ -133,6 +134,10 @@ describe("controlled Git checkpoint", () => {
     const runner = scriptedRunner(
       [
         successfulResult(" M b.ts\0?? a.ts\0"),
+        successfulResult("main\n"),
+        failedResult(),
+        successfulResult(),
+        successfulResult("devcrew/task-task_000001\n"),
         successfulResult(),
         successfulResult(),
         successfulResult("0123456789abcdef0123456789abcdef01234567\n"),
@@ -147,7 +152,10 @@ describe("controlled Git checkpoint", () => {
       changeEvidence: evidenceFor(["b.ts", "a.ts"]),
     });
 
-    assert.deepEqual(calls[1]?.args, ["add", "--", "a.ts", "b.ts"]);
+    assert.deepEqual(
+      calls.find((call) => call.args[0] === "add")?.args,
+      ["add", "--", "a.ts", "b.ts"],
+    );
     assert.equal(calls.every((call) => call.cwd === repositoryRoot), true);
     assert.equal(calls.some((call) => call.args.includes("push")), false);
     assert.equal(calls.some((call) => call.args.includes("remote")), false);
@@ -166,7 +174,7 @@ describe("controlled Git checkpoint", () => {
     const author = await git(["show", "-s", "--format=%an <%ae>%n%B", "HEAD"]);
 
     assert.match(author, new RegExp(`${CHECKPOINT_AUTHOR_NAME} <${CHECKPOINT_AUTHOR_EMAIL}>`));
-    assert.match(author, /^Devcrew Agent <devcrew@localhost>\ndevcrew: implement task task_000001Co-authored-by:attackerxy/m);
+    assert.match(author, /^Devcrew Agent <devcrew@localhost>\ndevcrew: implement task task_000001Co-authored-byattackerxy/m);
     assert.equal(checkpoint.message.includes("\n"), false);
   });
 
@@ -297,6 +305,10 @@ describe("controlled Git checkpoint", () => {
       createGitCheckpointService({
         runner: scriptedRunner([
           successfulResult(" M existing.ts\0"),
+          successfulResult("main\n"),
+          failedResult(),
+          successfulResult(),
+          successfulResult("devcrew/task-task_000001\n"),
           successfulResult(),
           failedResult(),
         ]),
@@ -316,6 +328,10 @@ describe("controlled Git checkpoint", () => {
       createGitCheckpointService({
         runner: scriptedRunner([
           successfulResult(" M existing.ts\0"),
+          successfulResult("main\n"),
+          failedResult(),
+          successfulResult(),
+          successfulResult("devcrew/task-task_000001\n"),
           successfulResult(),
           successfulResult(),
           successfulResult("not-a-sha\n"),
@@ -334,6 +350,10 @@ describe("controlled Git checkpoint", () => {
       createGitCheckpointService({
         runner: scriptedRunner([
           successfulResult(" M existing.ts\0"),
+          successfulResult("main\n"),
+          failedResult(),
+          successfulResult(),
+          successfulResult("devcrew/task-task_000001\n"),
           successfulResult(),
           successfulResult(),
           successfulResult("0123456789abcdef0123456789abcdef01234567\n"),

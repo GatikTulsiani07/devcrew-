@@ -56,6 +56,13 @@ export interface GitCheckpointEvidence {
   filesChanged: readonly string[];
 }
 
+export interface GitRemotePushEvidence {
+  remote: "origin";
+  branch: string;
+  commitSha: string;
+  pushedAt: string;
+}
+
 export interface TaskExecution {
   id: string;
   role: "FULL_STACK_DEVELOPER";
@@ -82,6 +89,7 @@ export interface TaskValidation {
   checks: readonly ValidationCheck[];
   summary: string;
   checkpoint?: GitCheckpointEvidence;
+  remoteBranch?: GitRemotePushEvidence;
 }
 
 export interface ReviewFinding {

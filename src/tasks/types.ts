@@ -1,5 +1,6 @@
 import type { GitChangeEvidence } from "../repositories/git-inspector.js";
 import type { GitCheckpointEvidence } from "../repositories/git-checkpoint.js";
+import type { GitRemotePushEvidence } from "../repositories/git-remote-push.js";
 import type { ProjectSnapshot } from "../projects/types.js";
 
 export type TaskStatus =
@@ -69,6 +70,7 @@ export interface TaskValidation {
   checks: readonly ValidationCheck[];
   summary: string;
   checkpoint?: GitCheckpointEvidence;
+  remoteBranch?: GitRemotePushEvidence;
 }
 
 export interface ReviewFinding {
