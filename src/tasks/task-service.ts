@@ -237,6 +237,16 @@ export function createTaskService({
         summary: "DevOps Engineer completed validation.",
       });
 
+      if (validation.browserVerification !== undefined) {
+        await activityService.append({
+          projectId,
+          taskId,
+          type: "BROWSER_VERIFICATION_COMPLETED",
+          actor: { kind: "SYSTEM" },
+          summary: "Localhost application verified.",
+        });
+      }
+
       return validatedTask;
     },
 
@@ -429,6 +439,21 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                     branch: task.validation.remoteBranch.branch,
                     commitSha: task.validation.remoteBranch.commitSha,
                     pushedAt: task.validation.remoteBranch.pushedAt,
+                  },
+                }),
+            ...(task.validation.browserVerification === undefined
+              ? {}
+              : {
+                  browserVerification: {
+                    status: task.validation.browserVerification.status,
+                    url: task.validation.browserVerification.url,
+                    ...(task.validation.browserVerification.pageTitle === undefined
+                      ? {}
+                      : {
+                          pageTitle:
+                            task.validation.browserVerification.pageTitle,
+                        }),
+                    verifiedAt: task.validation.browserVerification.verifiedAt,
                   },
                 }),
           },

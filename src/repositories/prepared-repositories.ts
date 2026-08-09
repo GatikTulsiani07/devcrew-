@@ -4,6 +4,7 @@ export interface PreparedRepository {
   localCheckoutPath?: string;
   validationProfileId?: string;
   defaultBranch?: string;
+  browserVerificationProfileId?: string;
 }
 
 export const preparedRepositories: readonly PreparedRepository[] = [
@@ -14,6 +15,7 @@ export const preparedRepositories: readonly PreparedRepository[] = [
       process.env.DEVCREW_PREPARED_DEVCREW_LOCAL_CHECKOUT_PATH,
     validationProfileId: "node_standard",
     defaultBranch: "main",
+    browserVerificationProfileId: "next_localhost",
   },
 ];
 
