@@ -4,6 +4,19 @@ import { isAbsolute } from "node:path";
 import { ApplicationError } from "../errors.js";
 import { describeError, logger } from "../observability/logger.js";
 import {
+  browserVerificationProfiles,
+  createControlledDevServer,
+  type ControlledDevServerDependencies,
+} from "../browser/controlled-dev-server.js";
+import {
+  createControlledBrowserVerifier,
+  type ControlledBrowserVerifier,
+} from "../browser/controlled-browser-verifier.js";
+import type {
+  BrowserVerificationEvidence,
+  ControlledDevServer,
+} from "../browser/browser-types.js";
+import {
   findPreparedRepository,
   type PreparedRepository,
 } from "../repositories/prepared-repositories.js";
@@ -44,6 +57,9 @@ export interface ControlledDevOpsValidatorDependencies {
   runnerOptions?: ControlledCommandRunnerOptions;
   checkpointService?: GitCheckpointService;
   remotePushService?: GitRemotePushService;
+  devServer?: ControlledDevServer;
+  devServerOptions?: ControlledDevServerDependencies;
+  browserVerifier?: ControlledBrowserVerifier;
 }
 
 export function createControlledDevOpsValidator({
@@ -56,6 +72,9 @@ export function createControlledDevOpsValidator({
   runnerOptions,
   checkpointService = createGitCheckpointService(),
   remotePushService = createGitRemotePushService(),
+  devServerOptions,
+  devServer = createControlledDevServer(devServerOptions),
+  browserVerifier = createControlledBrowserVerifier(),
 }: ControlledDevOpsValidatorDependencies): DevOpsValidator {
   const runner = injectedRunner ?? createControlledCommandRunner(runnerOptions);
 
@@ -149,6 +168,50 @@ export function createControlledDevOpsValidator({
         throw validationFailure();
       }
 
+      let browserVerification: BrowserVerificationEvidence | undefined;
+      const browserProfileId = repository.browserVerificationProfileId;
+
+      if (browserProfileId !== undefined) {
+        const browserProfile = browserVerificationProfiles.find(
+          (profile) => profile.id === browserProfileId,
+        );
+
+        if (browserProfile === undefined) {
+          logger.error("Controlled browser verification profile is unsupported", {
+            taskId: task.id,
+          });
+          throw validationFailure();
+        }
+
+        let server;
+
+        try {
+          server = await devServer.start({
+            profileId: browserProfileId,
+            repositoryRoot: repository.localCheckoutPath,
+          });
+          browserVerification = await browserVerifier.verify({
+            profile: browserProfile,
+            url: server.url,
+          });
+        } catch (error) {
+          logger.error("Controlled browser verification failed after validation", {
+            taskId: task.id,
+            cause: describeError(error),
+          });
+          throw validationFailure();
+        } finally {
+          if (server !== undefined) {
+            await server.stop().catch((error: unknown) => {
+              logger.error("Controlled browser verification cleanup failed", {
+                taskId: task.id,
+                cause: describeError(error),
+              });
+            });
+          }
+        }
+      }
+
       return {
         id: generateValidationId(),
         role: "DEVOPS_ENGINEER",
@@ -160,6 +223,7 @@ export function createControlledDevOpsValidator({
         summary: "Controlled validation completed successfully.",
         checkpoint,
         remoteBranch,
+        ...(browserVerification === undefined ? {} : { browserVerification }),
       };
     },
   };

@@ -63,6 +63,13 @@ export interface GitRemotePushEvidence {
   pushedAt: string;
 }
 
+export interface BrowserVerificationEvidence {
+  status: "PASSED";
+  url: string;
+  pageTitle?: string;
+  verifiedAt: string;
+}
+
 export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
 
 export interface TaskPullRequestEvidence {
@@ -102,6 +109,7 @@ export interface TaskValidation {
   summary: string;
   checkpoint?: GitCheckpointEvidence;
   remoteBranch?: GitRemotePushEvidence;
+  browserVerification?: BrowserVerificationEvidence;
 }
 
 export interface ReviewFinding {
@@ -157,6 +165,7 @@ export type ActivityEventType =
   | "IMPLEMENTATION_COMPLETED"
   | "VALIDATION_COMPLETED"
   | "REVIEW_COMPLETED"
+  | "BROWSER_VERIFICATION_COMPLETED"
   | "PULL_REQUEST_CREATED";
 
 export type ActivityActor =

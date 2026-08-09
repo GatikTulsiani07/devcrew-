@@ -42,6 +42,7 @@ const eventPresentations: Record<ActivityEventType, EventPresentation> = {
   IMPLEMENTATION_COMPLETED: { title: "Implementation completed", tone: "success" },
   VALIDATION_COMPLETED: { title: "Validation completed", tone: "success" },
   REVIEW_COMPLETED: { title: "Review completed", tone: "success" },
+  BROWSER_VERIFICATION_COMPLETED: { title: "Browser verification completed", tone: "success" },
   PULL_REQUEST_CREATED: { title: "Pull request created", tone: "success" },
 };
 

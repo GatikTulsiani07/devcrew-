@@ -10,6 +10,7 @@ export type ActivityEventType =
   | "IMPLEMENTATION_COMPLETED"
   | "VALIDATION_COMPLETED"
   | "REVIEW_COMPLETED"
+  | "BROWSER_VERIFICATION_COMPLETED"
   | "PULL_REQUEST_CREATED";
 
 export type ActivityActor =
