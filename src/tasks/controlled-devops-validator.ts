@@ -12,7 +12,12 @@ import {
   createControlledBrowserVerifier,
   type ControlledBrowserVerifier,
 } from "../browser/controlled-browser-verifier.js";
+import {
+  createControlledScreenshotCapture,
+  type ControlledScreenshotCapture,
+} from "../browser/controlled-screenshot-capture.js";
 import type {
+  BrowserScreenshotEvidence,
   BrowserVerificationEvidence,
   ControlledDevServer,
 } from "../browser/browser-types.js";
@@ -60,6 +65,7 @@ export interface ControlledDevOpsValidatorDependencies {
   devServer?: ControlledDevServer;
   devServerOptions?: ControlledDevServerDependencies;
   browserVerifier?: ControlledBrowserVerifier;
+  screenshotCapture?: ControlledScreenshotCapture;
 }
 
 export function createControlledDevOpsValidator({
@@ -75,6 +81,7 @@ export function createControlledDevOpsValidator({
   devServerOptions,
   devServer = createControlledDevServer(devServerOptions),
   browserVerifier = createControlledBrowserVerifier(),
+  screenshotCapture = createControlledScreenshotCapture(),
 }: ControlledDevOpsValidatorDependencies): DevOpsValidator {
   const runner = injectedRunner ?? createControlledCommandRunner(runnerOptions);
 
@@ -169,6 +176,7 @@ export function createControlledDevOpsValidator({
       }
 
       let browserVerification: BrowserVerificationEvidence | undefined;
+      let browserScreenshot: BrowserScreenshotEvidence | undefined;
       const browserProfileId = repository.browserVerificationProfileId;
 
       if (browserProfileId !== undefined) {
@@ -193,6 +201,14 @@ export function createControlledDevOpsValidator({
           browserVerification = await browserVerifier.verify({
             profile: browserProfile,
             url: server.url,
+          });
+          browserScreenshot = await screenshotCapture.capture({
+            projectId: task.projectId,
+            taskId: task.id,
+            profile: browserProfile,
+            browserVerification,
+            repositoryRoot: repository.localCheckoutPath,
+            existingEvidence: task.validation?.browserScreenshot,
           });
         } catch (error) {
           logger.error("Controlled browser verification failed after validation", {
@@ -224,6 +240,7 @@ export function createControlledDevOpsValidator({
         checkpoint,
         remoteBranch,
         ...(browserVerification === undefined ? {} : { browserVerification }),
+        ...(browserScreenshot === undefined ? {} : { browserScreenshot }),
       };
     },
   };

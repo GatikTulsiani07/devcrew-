@@ -247,6 +247,16 @@ export function createTaskService({
         });
       }
 
+      if (validation.browserScreenshot !== undefined) {
+        await activityService.append({
+          projectId,
+          taskId,
+          type: "SCREENSHOT_CAPTURED",
+          actor: { kind: "SYSTEM" },
+          summary: "Frontend screenshot captured.",
+        });
+      }
+
       return validatedTask;
     },
 
@@ -454,6 +464,20 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                             task.validation.browserVerification.pageTitle,
                         }),
                     verifiedAt: task.validation.browserVerification.verifiedAt,
+                  },
+                }),
+            ...(task.validation.browserScreenshot === undefined
+              ? {}
+              : {
+                  browserScreenshot: {
+                    status: task.validation.browserScreenshot.status,
+                    id: task.validation.browserScreenshot.id,
+                    url: task.validation.browserScreenshot.url,
+                    viewport: {
+                      width: task.validation.browserScreenshot.viewport.width,
+                      height: task.validation.browserScreenshot.viewport.height,
+                    },
+                    capturedAt: task.validation.browserScreenshot.capturedAt,
                   },
                 }),
           },

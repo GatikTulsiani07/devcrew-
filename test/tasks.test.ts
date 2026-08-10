@@ -1383,6 +1383,71 @@ describe("task manager planning API", () => {
     assert.deepEqual(await read.json(), await validated.json());
   });
 
+  it("persists public screenshot evidence without leaking internal artifact storage", async () => {
+    const devOpsValidator: DevOpsValidator = {
+      async validate() {
+        return {
+          id: "val_screenshot",
+          role: "DEVOPS_ENGINEER",
+          status: "PASSED",
+          attempt: 1,
+          startedAt: "2026-08-03T06:00:00.000Z",
+          completedAt: "2026-08-03T07:00:00.000Z",
+          checks: [
+            {
+              name: "typecheck",
+              status: "PASSED",
+              summary: "Type checking completed successfully.",
+            },
+            {
+              name: "tests",
+              status: "PASSED",
+              summary: "Automated tests completed successfully.",
+            },
+            {
+              name: "build",
+              status: "PASSED",
+              summary: "Production build completed successfully.",
+            },
+          ],
+          summary: "Controlled validation completed successfully.",
+          browserVerification: {
+            status: "PASSED",
+            url: "http://127.0.0.1:43117/",
+            pageTitle: "Devcrew",
+            verifiedAt: "2026-08-03T06:30:00.000Z",
+          },
+          browserScreenshot: {
+            status: "CAPTURED",
+            id: "shot_123e4567-e89b-42d3-a456-426614174000",
+            url: "http://127.0.0.1:43117/",
+            viewport: { width: 1440, height: 900 },
+            capturedAt: "2026-08-03T06:31:00.000Z",
+          },
+        };
+      },
+    };
+    const app = createTestApp({ devOpsValidator });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const validated = await validateTask(app);
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const body = JSON.stringify(await validated.clone().json());
+
+    assert.equal(validated.status, 200);
+    assert.equal(read.status, 200);
+    assert.deepEqual(await read.json(), await validated.json());
+    assert.equal(body.includes("absolutePath"), false);
+    assert.equal(body.includes("/private/tmp"), false);
+    assert.equal(body.includes("cookie"), false);
+    assert.equal(body.includes("token"), false);
+  });
+
   it("persists checkpoint evidence on validation snapshots", async () => {
     const app = createTestApp({
       devOpsValidator: {

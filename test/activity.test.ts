@@ -22,7 +22,11 @@ import { createDeterministicPlanner } from "../src/tasks/deterministic-planner.j
 import { createDeterministicReviewer } from "../src/tasks/deterministic-reviewer.js";
 import { InMemoryTaskStore } from "../src/tasks/in-memory-task-store.js";
 import { createTaskService } from "../src/tasks/task-service.js";
-import type { DeveloperExecutor, TaskReviewer } from "../src/tasks/types.js";
+import type {
+  DeveloperExecutor,
+  DevOpsValidator,
+  TaskReviewer,
+} from "../src/tasks/types.js";
 
 const preparedRepositories: readonly PreparedRepository[] = [
   {
@@ -86,9 +90,11 @@ function createDeterministicProjectService(
 
 function createTestApp({
   developerExecutor,
+  devOpsValidator,
   taskReviewer,
 }: {
   developerExecutor?: DeveloperExecutor;
+  devOpsValidator?: DevOpsValidator;
   taskReviewer?: TaskReviewer;
 } = {}) {
   const store = new InMemoryActivityStore();
@@ -105,10 +111,12 @@ function createTestApp({
         generateExecutionId: () => "exec_000001",
         now: () => new Date("2026-08-03T03:00:00.000Z"),
       }),
-    devOpsValidator: createDeterministicDevOpsValidator({
-      generateValidationId: () => "val_000001",
-      now: () => new Date("2026-08-03T04:00:00.000Z"),
-    }),
+    devOpsValidator:
+      devOpsValidator ??
+      createDeterministicDevOpsValidator({
+        generateValidationId: () => "val_000001",
+        now: () => new Date("2026-08-03T04:00:00.000Z"),
+      }),
     taskReviewer:
       taskReviewer ??
       createDeterministicReviewer({
@@ -469,6 +477,123 @@ describe("activity API", () => {
       ],
     );
     assert.equal((await taskResponse.json()).task.status, "VALIDATION_COMPLETED");
+  });
+
+  it("appends SCREENSHOT_CAPTURED once when validation includes screenshot evidence", async () => {
+    const devOpsValidator: DevOpsValidator = {
+      async validate() {
+        return {
+          id: "val_screenshot",
+          role: "DEVOPS_ENGINEER",
+          status: "PASSED",
+          attempt: 1,
+          startedAt: "2026-08-03T04:00:00.000Z",
+          completedAt: "2026-08-03T04:00:00.000Z",
+          checks: [
+            {
+              name: "typecheck",
+              status: "PASSED",
+              summary: "Type checking completed successfully.",
+            },
+            {
+              name: "tests",
+              status: "PASSED",
+              summary: "Automated tests completed successfully.",
+            },
+            {
+              name: "build",
+              status: "PASSED",
+              summary: "Production build completed successfully.",
+            },
+          ],
+          summary: "Controlled validation completed successfully.",
+          browserVerification: {
+            status: "PASSED",
+            url: "http://127.0.0.1:43117/",
+            verifiedAt: "2026-08-03T04:00:00.000Z",
+          },
+          browserScreenshot: {
+            status: "CAPTURED",
+            id: "shot_123e4567-e89b-42d3-a456-426614174000",
+            url: "http://127.0.0.1:43117/",
+            viewport: { width: 1440, height: 900 },
+            capturedAt: "2026-08-03T04:00:00.000Z",
+          },
+        };
+      },
+    };
+    const { app } = createTestApp({ devOpsValidator });
+
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await approvePlan(app)).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const snapshot = await activitySnapshot(app);
+
+    assert.deepEqual(
+      snapshot.events.map((event) => event.type),
+      [
+        "PROJECT_CREATED",
+        "TASK_CREATED",
+        "PLAN_CREATED",
+        "PLAN_APPROVED",
+        "IMPLEMENTATION_COMPLETED",
+        "VALIDATION_COMPLETED",
+        "BROWSER_VERIFICATION_COMPLETED",
+        "SCREENSHOT_CAPTURED",
+      ],
+    );
+    assert.equal(
+      snapshot.events.filter((event) => event.type === "SCREENSHOT_CAPTURED").length,
+      1,
+    );
+    assert.deepEqual(snapshot.events.at(-1), {
+      id: "evt_000008",
+      sequence: 8,
+      projectId: "proj_000001",
+      taskId: "task_000001",
+      type: "SCREENSHOT_CAPTURED",
+      actor: { kind: "SYSTEM" },
+      summary: "Frontend screenshot captured.",
+      createdAt: "2026-08-03T12:08:00.000Z",
+    });
+    assert.equal(JSON.stringify(snapshot).includes("/private/tmp"), false);
+    assert.equal(JSON.stringify(snapshot).includes("shot_123e4567"), false);
+  });
+
+  it("does not append screenshot success activity when capture validation fails", async () => {
+    const devOpsValidator: DevOpsValidator = {
+      async validate() {
+        throw new Error("SENSITIVE_SCREENSHOT_FAILURE");
+      },
+    };
+    const { app } = createTestApp({ devOpsValidator });
+
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await approvePlan(app)).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app);
+    const snapshot = await activitySnapshot(app);
+
+    assert.equal(response.status, 500);
+    assert.equal(
+      snapshot.events.some((event) => event.type === "SCREENSHOT_CAPTURED"),
+      false,
+    );
+    assert.deepEqual(
+      snapshot.events.map((event) => event.type),
+      [
+        "PROJECT_CREATED",
+        "TASK_CREATED",
+        "PLAN_CREATED",
+        "PLAN_APPROVED",
+        "IMPLEMENTATION_COMPLETED",
+      ],
+    );
   });
 
   it("sanitizes unexpected activity store failures", async () => {

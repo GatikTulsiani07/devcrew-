@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import type { BrowserVerificationProfile } from "../src/browser/browser-types.js";
 import { ApplicationError } from "../src/errors.js";
 import type { ProjectService } from "../src/projects/project-service.js";
 import type { PreparedRepository } from "../src/repositories/prepared-repositories.js";
@@ -50,6 +51,52 @@ const repository: PreparedRepository = {
   localCheckoutPath: "/private/tmp/devcrew-fixture",
   validationProfileId: "node_standard",
 };
+
+function passingRunner(): ControlledCommandRunner {
+  return {
+    async run() {
+      return {
+        status: "PASSED",
+        exitCode: 0,
+        timedOut: false,
+        started: true,
+        outputLimitExceeded: false,
+        unsafeEvidence: false,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  };
+}
+
+const checkpoint = {
+  sha: "0123456789abcdef0123456789abcdef01234567",
+  shortSha: "0123456789ab",
+  message: "devcrew: implement task task_000001",
+  createdAt: "2026-08-03T04:00:00.000Z",
+  filesChanged: ["src/app.ts"],
+};
+
+function checkpointService() {
+  return {
+    async createCheckpoint() {
+      return checkpoint;
+    },
+  };
+}
+
+function remotePushService() {
+  return {
+    async pushValidatedBranch() {
+      return {
+        remote: "origin" as const,
+        branch: "devcrew/task-task_000001",
+        commitSha: "0123456789abcdef0123456789abcdef01234567",
+        pushedAt: "2026-08-03T04:00:00.000Z",
+      };
+    },
+  };
+}
 
 function projectService(): ProjectService {
   return {
@@ -331,6 +378,167 @@ describe("controlled DevOps validator", () => {
         error instanceof ApplicationError &&
         error.code === "INTERNAL_ERROR" &&
         error.message === "Validation failed",
+    );
+  });
+
+  it("captures screenshot evidence after passed browser verification and stops the owned server", async () => {
+    const events: string[] = [];
+    const browserRepository: PreparedRepository = {
+      ...repository,
+      browserVerificationProfileId: "next_localhost",
+    };
+
+    const validation = await createControlledDevOpsValidator({
+      projectService: projectService(),
+      preparedRepositories: [browserRepository],
+      runner: passingRunner(),
+      checkpointService: checkpointService(),
+      remotePushService: remotePushService(),
+      devServer: {
+        async start(input) {
+          events.push(`server:${input.profileId}:${input.repositoryRoot}`);
+          return {
+            url: "http://127.0.0.1:43117/",
+            async stop() {
+              events.push("server:stop");
+            },
+          };
+        },
+      },
+      browserVerifier: {
+        async verify(input) {
+          events.push(`verify:${input.url}`);
+          assert.equal(input.profile.id, "next_localhost");
+          return {
+            status: "PASSED",
+            url: input.url,
+            verifiedAt: "2026-08-03T08:00:00.000Z",
+          };
+        },
+      },
+      screenshotCapture: {
+        async capture(input) {
+          events.push(`screenshot:${input.browserVerification.status}`);
+          assert.equal(input.projectId, "proj_000001");
+          assert.equal(input.taskId, "task_000001");
+          assert.equal(input.repositoryRoot, repository.localCheckoutPath);
+          assert.equal(input.existingEvidence, undefined);
+          assert.equal((input.profile as BrowserVerificationProfile).id, "next_localhost");
+          return {
+            status: "CAPTURED",
+            id: "shot_123e4567-e89b-42d3-a456-426614174000",
+            url: input.browserVerification.url,
+            viewport: { width: 1440, height: 900 },
+            capturedAt: "2026-08-03T09:00:00.000Z",
+          };
+        },
+      },
+      generateValidationId: () => "val_000001",
+      now: () => new Date("2026-08-03T10:00:00.000Z"),
+    }).validate(task);
+
+    assert.deepEqual(events, [
+      "server:next_localhost:/private/tmp/devcrew-fixture",
+      "verify:http://127.0.0.1:43117/",
+      "screenshot:PASSED",
+      "server:stop",
+    ]);
+    assert.deepEqual(validation.browserVerification, {
+      status: "PASSED",
+      url: "http://127.0.0.1:43117/",
+      verifiedAt: "2026-08-03T08:00:00.000Z",
+    });
+    assert.deepEqual(validation.browserScreenshot, {
+      status: "CAPTURED",
+      id: "shot_123e4567-e89b-42d3-a456-426614174000",
+      url: "http://127.0.0.1:43117/",
+      viewport: { width: 1440, height: 900 },
+      capturedAt: "2026-08-03T09:00:00.000Z",
+    });
+  });
+
+  it("does not run screenshot capture when browser verification fails and still stops the server", async () => {
+    const events: string[] = [];
+
+    await assert.rejects(
+      createControlledDevOpsValidator({
+        projectService: projectService(),
+        preparedRepositories: [
+          { ...repository, browserVerificationProfileId: "next_localhost" },
+        ],
+        runner: passingRunner(),
+        checkpointService: checkpointService(),
+        remotePushService: remotePushService(),
+        devServer: {
+          async start() {
+            return {
+              url: "http://127.0.0.1:43117/",
+              async stop() {
+                events.push("server:stop");
+              },
+            };
+          },
+        },
+        browserVerifier: {
+          async verify() {
+            events.push("verify");
+            throw new Error("browser failed at /Users/example/repo");
+          },
+        },
+        screenshotCapture: {
+          async capture() {
+            events.push("screenshot");
+            throw new Error("unused");
+          },
+        },
+      }).validate(task),
+      (error: unknown) =>
+        error instanceof ApplicationError &&
+        error.code === "INTERNAL_ERROR" &&
+        error.message === "Validation failed",
+    );
+
+    assert.deepEqual(events, ["verify", "server:stop"]);
+  });
+
+  it("sanitizes screenshot capture failures and returns no partial validation", async () => {
+    await assert.rejects(
+      createControlledDevOpsValidator({
+        projectService: projectService(),
+        preparedRepositories: [
+          { ...repository, browserVerificationProfileId: "next_localhost" },
+        ],
+        runner: passingRunner(),
+        checkpointService: checkpointService(),
+        remotePushService: remotePushService(),
+        devServer: {
+          async start() {
+            return {
+              url: "http://127.0.0.1:43117/",
+              async stop() {},
+            };
+          },
+        },
+        browserVerifier: {
+          async verify(input) {
+            return {
+              status: "PASSED",
+              url: input.url,
+              verifiedAt: "2026-08-03T08:00:00.000Z",
+            };
+          },
+        },
+        screenshotCapture: {
+          async capture() {
+            throw new Error("secret token at /Users/example/screenshots");
+          },
+        },
+      }).validate(task),
+      (error: unknown) =>
+        error instanceof ApplicationError &&
+        error.code === "INTERNAL_ERROR" &&
+        error.message === "Validation failed" &&
+        !String(error).includes("/Users/"),
     );
   });
 });
