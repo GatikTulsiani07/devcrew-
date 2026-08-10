@@ -7,6 +7,19 @@ export interface BrowserVerificationEvidence {
   verifiedAt: string;
 }
 
+export interface ScreenshotViewport {
+  width: number;
+  height: number;
+}
+
+export interface BrowserScreenshotEvidence {
+  status: "CAPTURED";
+  id: string;
+  url: string;
+  viewport: ScreenshotViewport;
+  capturedAt: string;
+}
+
 export interface BrowserVerificationProfile {
   id: string;
   executable: string;
@@ -43,6 +56,36 @@ export interface BrowserAdapter {
     expectedOrigin: string;
     timeoutMs: number;
   }): Promise<BrowserPageMetadata>;
+}
+
+export interface BrowserScreenshotResult {
+  url: string;
+  pngBytes: Uint8Array;
+}
+
+export interface BrowserRenderer {
+  captureScreenshot(input: {
+    url: string;
+    expectedOrigin: string;
+    viewport: ScreenshotViewport;
+    timeoutMs: number;
+    maxBytes: number;
+  }): Promise<BrowserScreenshotResult>;
+}
+
+export interface StoredScreenshotArtifact {
+  artifactId: string;
+  absolutePath: string;
+  byteCount: number;
+}
+
+export interface ScreenshotArtifactStore {
+  store(input: {
+    projectId: string;
+    taskId: string;
+    pngBytes: Uint8Array;
+    repositoryRoot?: string;
+  }): Promise<StoredScreenshotArtifact>;
 }
 
 export interface DevServerChildProcess {

@@ -70,6 +70,17 @@ export interface BrowserVerificationEvidence {
   verifiedAt: string;
 }
 
+export interface BrowserScreenshotEvidence {
+  status: "CAPTURED";
+  id: string;
+  url: string;
+  viewport: {
+    width: number;
+    height: number;
+  };
+  capturedAt: string;
+}
+
 export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
 
 export interface TaskPullRequestEvidence {
@@ -110,6 +121,7 @@ export interface TaskValidation {
   checkpoint?: GitCheckpointEvidence;
   remoteBranch?: GitRemotePushEvidence;
   browserVerification?: BrowserVerificationEvidence;
+  browserScreenshot?: BrowserScreenshotEvidence;
 }
 
 export interface ReviewFinding {
@@ -166,6 +178,7 @@ export type ActivityEventType =
   | "VALIDATION_COMPLETED"
   | "REVIEW_COMPLETED"
   | "BROWSER_VERIFICATION_COMPLETED"
+  | "SCREENSHOT_CAPTURED"
   | "PULL_REQUEST_CREATED";
 
 export type ActivityActor =
