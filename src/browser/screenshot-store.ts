@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { link, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 import type {
+  LoadedScreenshotArtifact,
   ScreenshotArtifactStore,
   StoredScreenshotArtifact,
 } from "./browser-types.js";
@@ -81,6 +82,35 @@ export function createScreenshotArtifactStore({
         absolutePath,
         byteCount: input.pngBytes.byteLength,
       };
+    },
+
+    async load(input): Promise<LoadedScreenshotArtifact> {
+      const root = resolveArtifactRoot(artifactRoot);
+      const projectSegment = safePathSegment(input.projectId, "project id");
+      const taskSegment = safePathSegment(input.taskId, "task id");
+      const artifactId = safeArtifactId(input.artifactId);
+      const absolutePath = resolve(root, projectSegment, taskSegment, `${artifactId}.png`);
+      assertWithinRoot(absolutePath, root);
+
+      try {
+        const realRoot = await realpath(root);
+        const realArtifact = await realpath(absolutePath);
+        assertWithinRoot(realArtifact, realRoot);
+
+        const pngBytes = new Uint8Array(await readFile(realArtifact));
+        validatePngBytes(pngBytes, maxBytes);
+
+        return {
+          artifactId,
+          pngBytes,
+          byteCount: pngBytes.byteLength,
+        };
+      } catch (error) {
+        if (error instanceof ScreenshotArtifactStoreError) {
+          throw error;
+        }
+        throw new ScreenshotArtifactStoreError("artifact read failed");
+      }
     },
   };
 }

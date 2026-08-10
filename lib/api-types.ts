@@ -81,6 +81,30 @@ export interface BrowserScreenshotEvidence {
   capturedAt: string;
 }
 
+export interface VisualReviewFinding {
+  title: string;
+  description: string;
+  severity: "INFO" | "WARNING" | "ERROR";
+  category:
+    | "layout"
+    | "spacing"
+    | "typography"
+    | "missing-element"
+    | "incorrect-component"
+    | "responsive"
+    | "accessibility"
+    | "requirement-mismatch"
+    | "other";
+}
+
+export interface VisualReviewEvidence {
+  status: "PASSED" | "FAILED";
+  summary: string;
+  findings: readonly VisualReviewFinding[];
+  screenshotId: string;
+  reviewedAt: string;
+}
+
 export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
 
 export interface TaskPullRequestEvidence {
@@ -122,6 +146,7 @@ export interface TaskValidation {
   remoteBranch?: GitRemotePushEvidence;
   browserVerification?: BrowserVerificationEvidence;
   browserScreenshot?: BrowserScreenshotEvidence;
+  visualReview?: VisualReviewEvidence;
 }
 
 export interface ReviewFinding {
@@ -179,6 +204,7 @@ export type ActivityEventType =
   | "REVIEW_COMPLETED"
   | "BROWSER_VERIFICATION_COMPLETED"
   | "SCREENSHOT_CAPTURED"
+  | "VISUAL_REVIEW_COMPLETED"
   | "PULL_REQUEST_CREATED";
 
 export type ActivityActor =

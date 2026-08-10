@@ -12,6 +12,7 @@ export type ActivityEventType =
   | "REVIEW_COMPLETED"
   | "BROWSER_VERIFICATION_COMPLETED"
   | "SCREENSHOT_CAPTURED"
+  | "VISUAL_REVIEW_COMPLETED"
   | "PULL_REQUEST_CREATED";
 
 export type ActivityActor =

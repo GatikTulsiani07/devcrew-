@@ -1383,7 +1383,7 @@ describe("task manager planning API", () => {
     assert.deepEqual(await read.json(), await validated.json());
   });
 
-  it("persists public screenshot evidence without leaking internal artifact storage", async () => {
+  it("persists public screenshot and visual review evidence without leaking internals", async () => {
     const devOpsValidator: DevOpsValidator = {
       async validate() {
         return {
@@ -1424,6 +1424,20 @@ describe("task manager planning API", () => {
             viewport: { width: 1440, height: 900 },
             capturedAt: "2026-08-03T06:31:00.000Z",
           },
+          visualReview: {
+            status: "FAILED",
+            summary: "The requested sidebar is not visible.",
+            findings: [
+              {
+                severity: "ERROR",
+                category: "missing-element",
+                title: "Sidebar missing",
+                description: "The screenshot does not show the requested sidebar.",
+              },
+            ],
+            screenshotId: "shot_123e4567-e89b-42d3-a456-426614174000",
+            reviewedAt: "2026-08-03T06:32:00.000Z",
+          },
         };
       },
     };
@@ -1442,8 +1456,12 @@ describe("task manager planning API", () => {
     assert.equal(validated.status, 200);
     assert.equal(read.status, 200);
     assert.deepEqual(await read.json(), await validated.json());
+    assert.equal(body.includes("visualReview"), true);
+    assert.equal(body.includes("The requested sidebar is not visible."), true);
     assert.equal(body.includes("absolutePath"), false);
     assert.equal(body.includes("/private/tmp"), false);
+    assert.equal(body.includes("data:image"), false);
+    assert.equal(body.includes("base64"), false);
     assert.equal(body.includes("cookie"), false);
     assert.equal(body.includes("token"), false);
   });

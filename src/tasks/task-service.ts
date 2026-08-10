@@ -257,6 +257,19 @@ export function createTaskService({
         });
       }
 
+      if (validation.visualReview !== undefined) {
+        await activityService.append({
+          projectId,
+          taskId,
+          type: "VISUAL_REVIEW_COMPLETED",
+          actor: { kind: "SYSTEM" },
+          summary:
+            validation.visualReview.status === "PASSED"
+              ? "Visual review passed."
+              : `Visual review found ${validation.visualReview.findings.length} issues.`,
+        });
+      }
+
       return validatedTask;
     },
 
@@ -478,6 +491,19 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                       height: task.validation.browserScreenshot.viewport.height,
                     },
                     capturedAt: task.validation.browserScreenshot.capturedAt,
+                  },
+                }),
+            ...(task.validation.visualReview === undefined
+              ? {}
+              : {
+                  visualReview: {
+                    status: task.validation.visualReview.status,
+                    summary: task.validation.visualReview.summary,
+                    findings: task.validation.visualReview.findings.map(
+                      (finding) => ({ ...finding }),
+                    ),
+                    screenshotId: task.validation.visualReview.screenshotId,
+                    reviewedAt: task.validation.visualReview.reviewedAt,
                   },
                 }),
           },

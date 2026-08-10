@@ -33,6 +33,10 @@ import {
   createGitRemotePushService,
   type GitRemotePushService,
 } from "../repositories/git-remote-push.js";
+import {
+  createVisualReviewerFromEnv,
+} from "../review/openai-visual-reviewer.js";
+import type { VisualReviewEvidence, VisualReviewer } from "../review/visual-reviewer.js";
 import type { ProjectService } from "../projects/project-service.js";
 import {
   findValidationProfile,
@@ -66,6 +70,7 @@ export interface ControlledDevOpsValidatorDependencies {
   devServerOptions?: ControlledDevServerDependencies;
   browserVerifier?: ControlledBrowserVerifier;
   screenshotCapture?: ControlledScreenshotCapture;
+  visualReviewer?: VisualReviewer;
 }
 
 export function createControlledDevOpsValidator({
@@ -82,6 +87,7 @@ export function createControlledDevOpsValidator({
   devServer = createControlledDevServer(devServerOptions),
   browserVerifier = createControlledBrowserVerifier(),
   screenshotCapture = createControlledScreenshotCapture(),
+  visualReviewer = createVisualReviewerFromEnv(),
 }: ControlledDevOpsValidatorDependencies): DevOpsValidator {
   const runner = injectedRunner ?? createControlledCommandRunner(runnerOptions);
 
@@ -177,6 +183,7 @@ export function createControlledDevOpsValidator({
 
       let browserVerification: BrowserVerificationEvidence | undefined;
       let browserScreenshot: BrowserScreenshotEvidence | undefined;
+      let visualReview: VisualReviewEvidence | undefined;
       const browserProfileId = repository.browserVerificationProfileId;
 
       if (browserProfileId !== undefined) {
@@ -210,6 +217,12 @@ export function createControlledDevOpsValidator({
             repositoryRoot: repository.localCheckoutPath,
             existingEvidence: task.validation?.browserScreenshot,
           });
+          visualReview = await visualReviewer.review({
+            task,
+            browserVerification,
+            browserScreenshot,
+            existingEvidence: task.validation?.visualReview,
+          });
         } catch (error) {
           logger.error("Controlled browser verification failed after validation", {
             taskId: task.id,
@@ -241,6 +254,7 @@ export function createControlledDevOpsValidator({
         remoteBranch,
         ...(browserVerification === undefined ? {} : { browserVerification }),
         ...(browserScreenshot === undefined ? {} : { browserScreenshot }),
+        ...(visualReview === undefined ? {} : { visualReview }),
       };
     },
   };

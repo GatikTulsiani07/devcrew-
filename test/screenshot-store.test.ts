@@ -35,6 +35,18 @@ describe("screenshot artifact store", () => {
     assert.equal(artifact.byteCount, pngBytes.byteLength);
     assert.deepEqual(new Uint8Array(await readFile(artifact.absolutePath)), pngBytes);
     assert.match(relative(artifactRoot, artifact.absolutePath), /proj_000001[/\\]task_000001[/\\]shot_/);
+
+    const loaded = await createScreenshotArtifactStore({
+      artifactRoot,
+      generateArtifactId: () => "shot_223e4567-e89b-42d3-a456-426614174000",
+    }).load({
+      projectId: "proj_000001",
+      taskId: "task_000001",
+      artifactId: artifact.artifactId,
+    });
+    assert.equal(loaded.artifactId, artifact.artifactId);
+    assert.deepEqual(loaded.pngBytes, pngBytes);
+    assert.equal(loaded.byteCount, pngBytes.byteLength);
   });
 
   it("rejects traversal, unsafe generated ids, and repository-overlapping roots", async () => {
@@ -78,6 +90,17 @@ describe("screenshot artifact store", () => {
       (error: unknown) =>
         error instanceof ScreenshotArtifactStoreError &&
         error.reason === "artifact path overlaps repository",
+    );
+
+    await assert.rejects(
+      createScreenshotArtifactStore({ artifactRoot }).load({
+        projectId: "proj_000001",
+        taskId: "task_000001",
+        artifactId: "../secret",
+      }),
+      (error: unknown) =>
+        error instanceof ScreenshotArtifactStoreError &&
+        error.reason === "artifact id is unsafe",
     );
   });
 
@@ -152,6 +175,30 @@ describe("screenshot artifact store", () => {
       (error: unknown) =>
         error instanceof ScreenshotArtifactStoreError &&
         error.reason === "artifact write failed" &&
+        !String(error).includes(artifactRoot),
+    );
+  });
+
+  it("fails safely when loading a missing or wrong-task artifact", async () => {
+    const artifactRoot = await mkdtemp(join(tmpdir(), "devcrew-shot-store-"));
+    const artifact = await createScreenshotArtifactStore({
+      artifactRoot,
+      generateArtifactId: () => "shot_123e4567-e89b-42d3-a456-426614174000",
+    }).store({
+      projectId: "proj_000001",
+      taskId: "task_000001",
+      pngBytes,
+    });
+
+    await assert.rejects(
+      createScreenshotArtifactStore({ artifactRoot }).load({
+        projectId: "proj_000001",
+        taskId: "task_000002",
+        artifactId: artifact.artifactId,
+      }),
+      (error: unknown) =>
+        error instanceof ScreenshotArtifactStoreError &&
+        error.reason === "artifact read failed" &&
         !String(error).includes(artifactRoot),
     );
   });

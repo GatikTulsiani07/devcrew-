@@ -5,6 +5,7 @@ import type {
   BrowserScreenshotEvidence,
   BrowserVerificationEvidence,
 } from "../browser/browser-types.js";
+import type { VisualReviewEvidence } from "../review/visual-reviewer.js";
 import type { ProjectSnapshot } from "../projects/types.js";
 
 export type TaskStatus =
@@ -78,6 +79,7 @@ export interface TaskValidation {
   remoteBranch?: GitRemotePushEvidence;
   browserVerification?: BrowserVerificationEvidence;
   browserScreenshot?: BrowserScreenshotEvidence;
+  visualReview?: VisualReviewEvidence;
 }
 
 export interface ReviewFinding {
