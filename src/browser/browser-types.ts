@@ -79,6 +79,12 @@ export interface StoredScreenshotArtifact {
   byteCount: number;
 }
 
+export interface LoadedScreenshotArtifact {
+  artifactId: string;
+  pngBytes: Uint8Array;
+  byteCount: number;
+}
+
 export interface ScreenshotArtifactStore {
   store(input: {
     projectId: string;
@@ -86,6 +92,11 @@ export interface ScreenshotArtifactStore {
     pngBytes: Uint8Array;
     repositoryRoot?: string;
   }): Promise<StoredScreenshotArtifact>;
+  load(input: {
+    projectId: string;
+    taskId: string;
+    artifactId: string;
+  }): Promise<LoadedScreenshotArtifact>;
 }
 
 export interface DevServerChildProcess {

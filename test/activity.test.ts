@@ -563,6 +563,91 @@ describe("activity API", () => {
     assert.equal(JSON.stringify(snapshot).includes("shot_123e4567"), false);
   });
 
+  it("appends VISUAL_REVIEW_COMPLETED for passed and failed visual verdicts", async () => {
+    for (const status of ["PASSED", "FAILED"] as const) {
+      const devOpsValidator: DevOpsValidator = {
+        async validate() {
+          return {
+            id: `val_visual_${status.toLowerCase()}`,
+            role: "DEVOPS_ENGINEER",
+            status: "PASSED",
+            attempt: 1,
+            startedAt: "2026-08-03T04:00:00.000Z",
+            completedAt: "2026-08-03T04:00:00.000Z",
+            checks: [
+              {
+                name: "typecheck",
+                status: "PASSED",
+                summary: "Type checking completed successfully.",
+              },
+              {
+                name: "tests",
+                status: "PASSED",
+                summary: "Automated tests completed successfully.",
+              },
+              {
+                name: "build",
+                status: "PASSED",
+                summary: "Production build completed successfully.",
+              },
+            ],
+            summary: "Controlled validation completed successfully.",
+            browserVerification: {
+              status: "PASSED",
+              url: "http://127.0.0.1:43117/",
+              verifiedAt: "2026-08-03T04:00:00.000Z",
+            },
+            browserScreenshot: {
+              status: "CAPTURED",
+              id: "shot_123e4567-e89b-42d3-a456-426614174000",
+              url: "http://127.0.0.1:43117/",
+              viewport: { width: 1440, height: 900 },
+              capturedAt: "2026-08-03T04:00:00.000Z",
+            },
+            visualReview: {
+              status,
+              summary:
+                status === "PASSED"
+                  ? "Visible requirements look satisfied."
+                  : "A visible issue remains.",
+              findings:
+                status === "PASSED"
+                  ? []
+                  : [
+                      {
+                        severity: "ERROR",
+                        category: "layout",
+                        title: "Overlap",
+                        description: "Visible content overlaps.",
+                      },
+                    ],
+              screenshotId: "shot_123e4567-e89b-42d3-a456-426614174000",
+              reviewedAt: "2026-08-03T04:00:00.000Z",
+            },
+          };
+        },
+      };
+      const { app } = createTestApp({ devOpsValidator });
+
+      assert.equal((await createProject(app)).status, 201);
+      assert.equal((await createTask(app)).status, 201);
+      assert.equal((await approvePlan(app)).status, 200);
+      assert.equal((await executeTask(app)).status, 200);
+      assert.equal((await validateTask(app)).status, 200);
+
+      const snapshot = await activitySnapshot(app);
+      const visualEvent = snapshot.events.at(-1);
+      assert.equal(visualEvent?.type, "VISUAL_REVIEW_COMPLETED");
+      assert.equal(visualEvent?.summary, status === "PASSED" ? "Visual review passed." : "Visual review found 1 issues.");
+      assert.equal(
+        snapshot.events.filter((event) => event.type === "VISUAL_REVIEW_COMPLETED").length,
+        1,
+      );
+      assert.equal(JSON.stringify(snapshot).includes("Visible content overlaps"), false);
+      assert.equal(JSON.stringify(snapshot).includes("shot_123e4567"), false);
+    }
+  });
+
   it("does not append screenshot success activity when capture validation fails", async () => {
     const devOpsValidator: DevOpsValidator = {
       async validate() {

@@ -72,6 +72,9 @@ describe("controlled screenshot capture", () => {
           byteCount: input.pngBytes.byteLength,
         };
       },
+      async load() {
+        throw new Error("unused");
+      },
     };
 
     const evidence = await createControlledScreenshotCapture({
@@ -187,6 +190,9 @@ describe("controlled screenshot capture", () => {
         storeCalls += 1;
         throw new Error("unused");
       },
+      async load() {
+        throw new Error("unused");
+      },
     };
 
     await assert.rejects(
@@ -273,6 +279,9 @@ describe("controlled screenshot capture", () => {
           async store() {
             throw new Error("secret path /Users/example/screenshots");
           },
+          async load() {
+            throw new Error("unused");
+          },
         },
       }).capture({
         projectId: "proj_000001",
@@ -352,6 +361,9 @@ describe("controlled screenshot capture", () => {
             absolutePath: "/private/tmp/devcrew/screenshots/secret.png",
             byteCount: pngBytes.byteLength,
           };
+        },
+        async load() {
+          throw new Error("unused");
         },
       },
     }).capture({

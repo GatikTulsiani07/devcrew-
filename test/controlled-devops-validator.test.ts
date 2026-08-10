@@ -433,6 +433,20 @@ describe("controlled DevOps validator", () => {
           };
         },
       },
+      visualReviewer: {
+        async review(input) {
+          events.push(`visual:${input.browserScreenshot?.id}`);
+          assert.equal(input.browserVerification?.status, "PASSED");
+          assert.equal(input.browserScreenshot?.status, "CAPTURED");
+          return {
+            status: "PASSED",
+            summary: "No material visible issues detected.",
+            findings: [],
+            screenshotId: input.browserScreenshot!.id,
+            reviewedAt: "2026-08-03T09:30:00.000Z",
+          };
+        },
+      },
       generateValidationId: () => "val_000001",
       now: () => new Date("2026-08-03T10:00:00.000Z"),
     }).validate(task);
@@ -441,6 +455,7 @@ describe("controlled DevOps validator", () => {
       "server:next_localhost:/private/tmp/devcrew-fixture",
       "verify:http://127.0.0.1:43117/",
       "screenshot:PASSED",
+      "visual:shot_123e4567-e89b-42d3-a456-426614174000",
       "server:stop",
     ]);
     assert.deepEqual(validation.browserVerification, {
@@ -454,6 +469,13 @@ describe("controlled DevOps validator", () => {
       url: "http://127.0.0.1:43117/",
       viewport: { width: 1440, height: 900 },
       capturedAt: "2026-08-03T09:00:00.000Z",
+    });
+    assert.deepEqual(validation.visualReview, {
+      status: "PASSED",
+      summary: "No material visible issues detected.",
+      findings: [],
+      screenshotId: "shot_123e4567-e89b-42d3-a456-426614174000",
+      reviewedAt: "2026-08-03T09:30:00.000Z",
     });
   });
 
@@ -540,5 +562,64 @@ describe("controlled DevOps validator", () => {
         error.message === "Validation failed" &&
         !String(error).includes("/Users/"),
     );
+  });
+
+  it("sanitizes visual review failures and emits no fake visual evidence", async () => {
+    const events: string[] = [];
+    await assert.rejects(
+      createControlledDevOpsValidator({
+        projectService: projectService(),
+        preparedRepositories: [
+          { ...repository, browserVerificationProfileId: "next_localhost" },
+        ],
+        runner: passingRunner(),
+        checkpointService: checkpointService(),
+        remotePushService: remotePushService(),
+        devServer: {
+          async start() {
+            return {
+              url: "http://127.0.0.1:43117/",
+              async stop() {
+                events.push("server:stop");
+              },
+            };
+          },
+        },
+        browserVerifier: {
+          async verify(input) {
+            return {
+              status: "PASSED",
+              url: input.url,
+              verifiedAt: "2026-08-03T08:00:00.000Z",
+            };
+          },
+        },
+        screenshotCapture: {
+          async capture(input) {
+            return {
+              status: "CAPTURED",
+              id: "shot_123e4567-e89b-42d3-a456-426614174000",
+              url: input.browserVerification.url,
+              viewport: { width: 1440, height: 900 },
+              capturedAt: "2026-08-03T09:00:00.000Z",
+            };
+          },
+        },
+        visualReviewer: {
+          async review() {
+            events.push("visual");
+            throw new Error("visual provider failed sk-secret at /Users/example");
+          },
+        },
+      }).validate(task),
+      (error: unknown) =>
+        error instanceof ApplicationError &&
+        error.code === "INTERNAL_ERROR" &&
+        error.message === "Validation failed" &&
+        !String(error).includes("sk-secret") &&
+        !String(error).includes("/Users/"),
+    );
+
+    assert.deepEqual(events, ["visual", "server:stop"]);
   });
 });
