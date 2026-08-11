@@ -179,6 +179,20 @@ function buildReviewerPrompt(
     ...(task.validation?.checks ?? []).map(
       (check) => `- ${check.name}: ${check.status}; ${safeText(check.summary)}`,
     ),
+    ...(task.validation?.visualReview === undefined
+      ? []
+      : [
+          "",
+          "Visual review evidence:",
+          `- status: ${safeText(task.validation.visualReview.status)}`,
+          `- summary: ${safeText(task.validation.visualReview.summary)}`,
+          ...task.validation.visualReview.findings
+            .slice(0, 8)
+            .map(
+              (finding) =>
+                `- ${finding.severity}/${finding.category}: ${safeText(finding.title)} - ${safeText(finding.description)}`,
+            ),
+        ]),
     "",
     "Review the proposal against the approved plan and validation snapshot.",
     "All findings must be informational and must not claim actual file mutation or command execution.",
