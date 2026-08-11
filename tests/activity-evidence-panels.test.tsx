@@ -302,11 +302,30 @@ describe("Pull Request evidence panel", () => {
     expect(view.textContent).toContain("a84f72c");
     expect(view.textContent).toContain("PR created");
     expect(view.textContent).toContain("Aug 3, 2026, 12:25 PM");
+    expect(view.querySelector('button[aria-label="Copy commit SHA"]')).not.toBeNull();
 
     const link = view.querySelector('a[aria-label="View pull request #42 on GitHub"]');
     expect(link?.getAttribute("href")).toBe("https://github.com/acme/backend-project/pull/42");
     expect(link?.getAttribute("target")).toBe("_blank");
     expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("copies the exact authoritative pull request commit SHA", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const prTask = taskWithAllEvidence();
+    prTask.pullRequest = {
+      ...prTask.pullRequest!,
+      commitSha: "0123456789abcdef0123456789abcdef01234567",
+    };
+    const view = await render(<PullRequestEvidencePanel task={prTask} />);
+
+    view.querySelector<HTMLButtonElement>('button[aria-label="Copy commit SHA"]')?.click();
+
+    expect(writeText).toHaveBeenCalledWith("0123456789abcdef0123456789abcdef01234567");
   });
 
   it("renders an optional backend title when the current contract provides one", async () => {
@@ -346,6 +365,7 @@ describe("Pull Request evidence panel", () => {
     expect(view.textContent).toContain("OPEN");
     expect(view.textContent).toContain("Timestamp unavailable");
     expect(view.textContent).not.toContain("undefined");
+    expect(view.querySelector('button[aria-label="Copy commit SHA"]')).toBeNull();
   });
 
   it("does not render malformed or unsupported pull request URLs as clickable links", async () => {

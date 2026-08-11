@@ -1,4 +1,4 @@
-import { ExternalLink, GitPullRequest } from "lucide-react";
+import { Copy, ExternalLink, GitPullRequest } from "lucide-react";
 import type { TaskPullRequestEvidence, TaskSnapshot } from "@/lib/api-types";
 import {
   EmptyEvidenceState,
@@ -45,7 +45,19 @@ function PullRequestEvidenceContent({ pullRequest }: { pullRequest: TaskPullRequ
       </EvidenceSection>
 
       <EvidenceSection title="Commit">
-        <p className="mt-2 break-all font-mono text-[0.8rem] leading-5 text-ink-secondary">{pullRequest.commitSha}</p>
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
+          <p className="min-w-0 break-all font-mono text-[0.8rem] leading-5 text-ink-secondary">{pullRequest.commitSha}</p>
+          {pullRequest.commitSha && (
+            <button
+              type="button"
+              aria-label="Copy commit SHA"
+              onClick={() => void navigator.clipboard.writeText(pullRequest.commitSha)}
+              className="inline-grid size-7 shrink-0 place-items-center rounded-[var(--radius-small)] bg-panel-strong text-ink-muted outline-none transition-colors hover:bg-surface-hover hover:text-accent focus-visible:ring-2 focus-visible:ring-focus"
+            >
+              <Copy aria-hidden="true" className="size-3.5" />
+            </button>
+          )}
+        </div>
       </EvidenceSection>
 
       <EvidenceTimestamp label="PR created" value={pullRequest.createdAt} />
