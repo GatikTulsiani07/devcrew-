@@ -9,6 +9,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkshopRail } from "@/components/shell/workshop-rail";
 import { useWorkspaceState } from "@/components/shell/workspace-state";
 import { ActivityTimeline } from "@/components/activity/activity-timeline";
+import { CancellationEvidencePanel } from "@/components/activity/cancellation-evidence-panel";
 import { DeveloperEvidencePanel } from "@/components/activity/developer-evidence-panel";
 import { DevopsEvidencePanel } from "@/components/activity/devops-evidence-panel";
 import { OrchestrationProgress } from "@/components/activity/orchestration-progress";
@@ -238,6 +239,11 @@ export function ActivityWorkspace() {
                 </p>
               </div>
               <div className="mt-5 grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {workflow.task?.cancellation && (
+                  <div className="min-w-0 md:col-span-2 xl:col-span-4">
+                    <CancellationEvidencePanel task={workflow.task} />
+                  </div>
+                )}
                 <DeveloperEvidencePanel task={workflow.task} />
                 <DevopsEvidencePanel task={workflow.task} />
                 <ReviewerEvidencePanel task={workflow.task} />

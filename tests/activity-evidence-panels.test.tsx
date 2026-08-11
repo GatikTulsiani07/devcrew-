@@ -1,6 +1,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { CancellationEvidencePanel } from "@/components/activity/cancellation-evidence-panel";
 import { DeveloperEvidencePanel } from "@/components/activity/developer-evidence-panel";
 import { DevopsEvidencePanel } from "@/components/activity/devops-evidence-panel";
 import { PullRequestEvidencePanel } from "@/components/activity/pull-request-evidence-panel";
@@ -73,7 +74,7 @@ function task(overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
   };
 }
 
-function taskWithAllEvidence(): TaskSnapshot {
+function taskWithAllEvidence(overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
   return task({
     execution: {
       id: "exec_1",
@@ -131,6 +132,7 @@ function taskWithAllEvidence(): TaskSnapshot {
       commitSha: "a84f72c",
       createdAt: "2026-08-03T12:25:00.000Z",
     },
+    ...overrides,
   });
 }
 
@@ -382,6 +384,112 @@ describe("Pull Request evidence panel", () => {
   });
 });
 
+describe("Cancellation evidence panel", () => {
+  it("renders CANCELLED as Task cancelled with cancelledAt and safe summary", async () => {
+    const view = await render(
+      <CancellationEvidencePanel
+        task={task({
+          cancellation: {
+            status: "CANCELLED",
+            requestedAt: "2026-08-03T12:30:00.000Z",
+            cancelledAt: "2026-08-03T12:31:00.000Z",
+            summary: "Task cancellation completed after active work stopped.",
+          },
+        })}
+      />,
+    );
+
+    expect(view.querySelector("h2")?.textContent).toBe("Cancellation");
+    expect(view.textContent).toContain("Task cancelled");
+    expect(view.textContent).toContain("Task cancellation completed after active work stopped.");
+    expect(view.textContent).toContain("Cancellation completed");
+    expect(view.textContent).toContain("Aug 3, 2026, 12:31 PM");
+    expect(view.querySelector("time")?.getAttribute("dateTime")).toBe("2026-08-03T12:31:00.000Z");
+  });
+
+  it("renders REQUESTED as Cancellation requested with requestedAt", async () => {
+    const view = await render(
+      <CancellationEvidencePanel
+        task={task({
+          cancellation: {
+            status: "REQUESTED",
+            requestedAt: "2026-08-03T12:30:00.000Z",
+            summary: "Task cancellation requested.",
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("Cancellation requested");
+    expect(view.textContent).toContain("Task cancellation requested.");
+    expect(view.textContent).toContain("Aug 3, 2026, 12:30 PM");
+    expect(view.querySelector("time")?.getAttribute("dateTime")).toBe("2026-08-03T12:30:00.000Z");
+  });
+
+  it("renders FAILED and unknown runtime states with neutral safe fallback text", async () => {
+    const failedView = await render(
+      <CancellationEvidencePanel
+        task={task({
+          cancellation: {
+            status: "FAILED",
+            requestedAt: "2026-08-03T12:30:00.000Z",
+            summary: "Cancellation cleanup requires human inspection.",
+          },
+        })}
+      />,
+    );
+    expect(failedView.textContent).toContain("Cancellation state needs review");
+    expect(failedView.textContent).toContain("Cancellation cleanup requires human inspection.");
+
+    await act(async () => root?.unmount());
+    root = undefined;
+    container?.remove();
+    container = undefined;
+
+    const unknownView = await render(
+      <CancellationEvidencePanel
+        task={task({
+          cancellation: {
+            status: "PARTIAL",
+            requestedAt: "not-a-timestamp",
+            summary: "Unknown public cancellation state.",
+          } as never,
+        })}
+      />,
+    );
+    expect(unknownView.textContent).toContain("Cancellation state unavailable");
+    expect(unknownView.textContent).toContain("Timestamp unavailable");
+  });
+
+  it("wraps long summaries and renders nothing when cancellation evidence is absent", async () => {
+    const longSummary =
+      "A very long cancellation summary with identifier_that_should_wrap_safely_at_mobile_width_without_forcing_horizontal_overflow.";
+    const view = await render(
+      <CancellationEvidencePanel
+        task={task({
+          cancellation: {
+            status: "CANCELLED",
+            requestedAt: "2026-08-03T12:30:00.000Z",
+            summary: longSummary,
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain(longSummary);
+    expect([...view.querySelectorAll("p")].find((item) => item.textContent?.includes(longSummary))?.className).toMatch(/break-words/);
+
+    await act(async () => root?.unmount());
+    root = undefined;
+    container?.remove();
+    container = undefined;
+
+    const emptyView = await render(<CancellationEvidencePanel task={task()} />);
+    expect(emptyView.textContent).not.toContain("Cancellation");
+    expect(emptyView.querySelector("section")).toBeNull();
+  });
+});
+
 describe("Activity structured evidence placement", () => {
   it("renders semantic panel headings and does not mix fixture evidence into an active backend task", async () => {
     const backendProject = project();
@@ -415,6 +523,82 @@ describe("Activity structured evidence placement", () => {
     expect(view.querySelector('ul[aria-label="Reviewer findings"]')).not.toBeNull();
     expect(view.textContent).toContain("#42");
     expect(view.textContent).toContain("devcrew/task-task_123");
+  });
+
+  it("places authoritative cancellation state before existing stage evidence panels", async () => {
+    workflowState = {
+      project: project(),
+      task: taskWithAllEvidence({
+        cancellation: {
+          status: "CANCELLED",
+          requestedAt: "2026-08-03T12:30:00.000Z",
+          cancelledAt: "2026-08-03T12:31:00.000Z",
+          summary: "Task cancelled by backend authority.",
+        },
+      }),
+      initializing: false,
+      approve: vi.fn(),
+      reject: vi.fn(),
+      execute: vi.fn(),
+      validate: vi.fn(),
+      review: vi.fn(),
+      fetchTask: vi.fn(),
+    };
+    activityState = { events: [], connection: "connected", lastSequence: 0 };
+
+    const view = await render(
+      <WorkspaceStateProvider>
+        <ActivityWorkspace />
+      </WorkspaceStateProvider>,
+    );
+    const headings = [...view.querySelectorAll("h2")].map((heading) => heading.textContent);
+
+    expect(headings.indexOf("Cancellation")).toBeGreaterThan(-1);
+    expect(headings.indexOf("Cancellation")).toBeLessThan(headings.indexOf("Developer evidence"));
+    expect(view.textContent).toContain("Task cancelled by backend authority.");
+    expect(view.textContent).toContain("Developer evidence");
+    expect(view.textContent).toContain("DevOps evidence");
+    expect(view.textContent).toContain("Reviewer evidence");
+    expect(view.textContent).toContain("Pull Request");
+  });
+
+  it("does not infer cancellation state from TASK_CANCELLED timeline events", async () => {
+    workflowState = {
+      project: project(),
+      task: taskWithAllEvidence(),
+      initializing: false,
+      approve: vi.fn(),
+      reject: vi.fn(),
+      execute: vi.fn(),
+      validate: vi.fn(),
+      review: vi.fn(),
+      fetchTask: vi.fn(),
+    };
+    activityState = {
+      events: [
+        {
+          id: "evt_cancelled",
+          sequence: 1,
+          projectId: "proj_1",
+          taskId: "task_1",
+          type: "TASK_CANCELLED",
+          actor: { kind: "SYSTEM" },
+          summary: "Task cancelled",
+          createdAt: "2026-08-03T12:31:00.000Z",
+        },
+      ],
+      connection: "connected",
+      lastSequence: 1,
+    };
+
+    const view = await render(
+      <WorkspaceStateProvider>
+        <ActivityWorkspace />
+      </WorkspaceStateProvider>,
+    );
+
+    expect(view.textContent).toContain("Task cancelled");
+    expect([...view.querySelectorAll("h2")].map((heading) => heading.textContent)).not.toContain("Cancellation");
   });
 
   it("clearly labels fixture setup mode without fabricating stage evidence", async () => {
