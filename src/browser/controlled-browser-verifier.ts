@@ -3,6 +3,7 @@ import type {
   BrowserVerificationEvidence,
   BrowserVerificationProfile,
 } from "./browser-types.js";
+import { throwIfSignalCancelled } from "../tasks/task-cancellation.js";
 
 export class ControlledBrowserVerificationError extends Error {
   constructor(readonly reason: string) {
@@ -15,6 +16,7 @@ export interface ControlledBrowserVerifier {
   verify(input: {
     profile: BrowserVerificationProfile;
     url: string;
+    signal?: AbortSignal;
   }): Promise<BrowserVerificationEvidence>;
 }
 
@@ -29,12 +31,15 @@ export function createControlledBrowserVerifier({
 }: ControlledBrowserVerifierDependencies = {}): ControlledBrowserVerifier {
   return {
     async verify(input) {
+      throwIfSignalCancelled(input.signal);
       const approvedUrl = validateLocalhostUrl(input.url, input.profile);
       const metadata = await adapter.verify({
         url: approvedUrl.href,
         expectedOrigin: approvedUrl.origin,
         timeoutMs: input.profile.navigationTimeoutMs,
+        signal: input.signal,
       });
+      throwIfSignalCancelled(input.signal);
       const finalUrl = validateLocalhostUrl(metadata.url, input.profile);
 
       if (finalUrl.origin !== approvedUrl.origin) {
@@ -67,9 +72,10 @@ export function createFetchBrowserAdapter({
         response = await fetchImpl(input.url, {
           method: "GET",
           redirect: "manual",
-          signal: AbortSignal.timeout(input.timeoutMs),
+          signal: timeoutOrCancellationSignal(input.timeoutMs, input.signal),
         });
       } catch (error) {
+        throwIfSignalCancelled(input.signal);
         if (error instanceof DOMException && error.name === "AbortError") {
           throw new ControlledBrowserVerificationError("browser navigation timed out");
         }
@@ -109,6 +115,33 @@ export function createFetchBrowserAdapter({
       };
     },
   };
+}
+
+function timeoutOrCancellationSignal(
+  ms: number,
+  signal?: AbortSignal,
+): AbortSignal {
+  if (signal === undefined) {
+    return AbortSignal.timeout(ms);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ms);
+  const onAbort = () => {
+    clearTimeout(timeout);
+    controller.abort(signal.reason);
+  };
+
+  signal.addEventListener("abort", onAbort, { once: true });
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+    },
+    { once: true },
+  );
+  return controller.signal;
 }
 
 export function localhostUrlForProfile(profile: BrowserVerificationProfile): string {

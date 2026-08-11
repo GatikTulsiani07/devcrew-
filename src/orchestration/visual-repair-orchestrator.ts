@@ -3,7 +3,12 @@ import type { ActivityService } from "../activity/activity-service.js";
 import type { ProjectSnapshot } from "../projects/types.js";
 import type { BrowserScreenshotEvidence } from "../browser/browser-types.js";
 import type { VisualReviewEvidence, VisualReviewFinding } from "../review/visual-reviewer.js";
+import {
+  isTaskCancellationError,
+  throwIfSignalCancelled,
+} from "../tasks/task-cancellation.js";
 import type {
+  CancellationStage,
   DeveloperExecutor,
   DeveloperRepairContext,
   DevOpsValidator,
@@ -30,6 +35,8 @@ export interface VisualRepairOrchestratorDependencies {
   store: TaskStore;
   now?: () => Date;
   activityService: ActivityService;
+  signal?: AbortSignal;
+  setStage?: (stage: CancellationStage) => void;
 }
 
 export interface VisualRepairOrchestrator {
@@ -43,6 +50,8 @@ export function createVisualRepairOrchestrator({
   store,
   now = () => new Date(),
   activityService,
+  signal,
+  setStage,
 }: VisualRepairOrchestratorDependencies): VisualRepairOrchestrator {
   return {
     async repairIfRequired(task) {
@@ -57,6 +66,7 @@ export function createVisualRepairOrchestrator({
       }
 
       while (shouldRepair(current)) {
+        throwIfSignalCancelled(signal);
         const existingAttempts = current.visualRepair?.attempts ?? [];
 
         if (existingAttempts.length >= MAX_VISUAL_REPAIR_ATTEMPTS) {
@@ -111,6 +121,8 @@ export function createVisualRepairOrchestrator({
         let validation: TaskValidation;
 
         try {
+          setStage?.("DEVELOPER");
+          throwIfSignalCancelled(signal);
           execution = await developerExecutor.execute({
             project,
             task: repairTaskForDeveloper(current, sourceVisualReview, sourceScreenshot),
@@ -120,7 +132,9 @@ export function createVisualRepairOrchestrator({
               sourceScreenshot,
               attemptNumber,
             ),
+            signal,
           });
+          throwIfSignalCancelled(signal);
 
           const taskWithRepairExecution: TaskSnapshot = {
             ...copyTask(current),
@@ -132,7 +146,12 @@ export function createVisualRepairOrchestrator({
             updatedAt: now().toISOString(),
           };
 
-          validation = await devOpsValidator.validate(taskWithRepairExecution);
+          setStage?.("DEVOPS");
+          validation = await devOpsValidator.validate(taskWithRepairExecution, {
+            signal,
+            setStage,
+          });
+          throwIfSignalCancelled(signal);
           if (
             validation.browserScreenshot === undefined ||
             validation.visualReview === undefined ||
@@ -140,7 +159,10 @@ export function createVisualRepairOrchestrator({
           ) {
             throw new Error("fresh visual evidence is missing after repair");
           }
-        } catch {
+        } catch (error) {
+          if (isTaskCancellationError(error)) {
+            throw error;
+          }
           throw repairFailure();
         }
 

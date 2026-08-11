@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 
 import { logger } from "../observability/logger.js";
+import { throwIfSignalCancelled } from "../tasks/task-cancellation.js";
 import {
   DEFAULT_BRANCH_NAMES,
   isSafeBranchName,
@@ -28,6 +29,7 @@ export interface GitRemotePushInput {
   projectRepositoryUrl: string;
   checkpoint?: GitCheckpointEvidence;
   existingRemoteBranch?: GitRemotePushEvidence;
+  signal?: AbortSignal;
 }
 
 export interface GitRemotePushService {
@@ -63,6 +65,7 @@ export function createGitRemotePushService({
 } = {}): GitRemotePushService {
   return {
     async pushValidatedBranch(input) {
+      throwIfSignalCancelled(input.signal);
       if (input.checkpoint === undefined) {
         throw new GitRemotePushError("checkpoint is required");
       }
@@ -70,18 +73,26 @@ export function createGitRemotePushService({
       const branch = taskBranchName(input.taskId);
       const checkpointSha = normalizeSha(input.checkpoint.sha);
 
-      await verifyLocalPreconditions(runner, input.repositoryRoot, branch, checkpointSha);
+      await verifyLocalPreconditions(
+        runner,
+        input.repositoryRoot,
+        branch,
+        checkpointSha,
+        input.signal,
+      );
       await verifyRemoteOwnership(
         runner,
         input.repositoryRoot,
         input.projectRepositoryUrl,
+        input.signal,
       );
-      await verifyDefaultBranch(runner, input.repositoryRoot, branch);
+      await verifyDefaultBranch(runner, input.repositoryRoot, branch, input.signal);
 
       const existingRemoteSha = await readRemoteBranchSha(
         runner,
         input.repositoryRoot,
         branch,
+        input.signal,
       );
 
       if (existingRemoteSha === checkpointSha) {
@@ -106,9 +117,15 @@ export function createGitRemotePushService({
         ["push", REMOTE_NAME, `${branch}:${branch}`],
         input.repositoryRoot,
         [0],
+        input.signal,
       );
 
-      const pushedSha = await readRemoteBranchSha(runner, input.repositoryRoot, branch);
+      const pushedSha = await readRemoteBranchSha(
+        runner,
+        input.repositoryRoot,
+        branch,
+        input.signal,
+      );
 
       if (pushedSha !== checkpointSha) {
         throw new GitRemotePushError("remote branch verification failed");
@@ -129,9 +146,11 @@ async function verifyLocalPreconditions(
   repositoryRoot: string,
   branch: string,
   checkpointSha: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const head = normalizeSha(
-    (await runGit(runner, ["rev-parse", "HEAD"], repositoryRoot, [0])).stdout,
+    (await runGit(runner, ["rev-parse", "HEAD"], repositoryRoot, [0], signal))
+      .stdout,
   );
 
   if (head !== checkpointSha) {
@@ -139,7 +158,7 @@ async function verifyLocalPreconditions(
   }
 
   const dirtyFiles = parseStatusOutput(
-    (await runGit(runner, statusArgs, repositoryRoot, [0])).stdout,
+    (await runGit(runner, statusArgs, repositoryRoot, [0], signal)).stdout,
   );
 
   if (dirtyFiles.length > 0) {
@@ -147,7 +166,13 @@ async function verifyLocalPreconditions(
   }
 
   const currentBranch = (
-    await runGit(runner, ["branch", "--show-current"], repositoryRoot, [0])
+    await runGit(
+      runner,
+      ["branch", "--show-current"],
+      repositoryRoot,
+      [0],
+      signal,
+    )
   ).stdout.trim();
 
   if (!isSafeBranchName(currentBranch)) {
@@ -167,9 +192,16 @@ async function verifyRemoteOwnership(
   runner: GitCommandRunner,
   repositoryRoot: string,
   projectRepositoryUrl: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const configuredUrl = (
-    await runGit(runner, ["remote", "get-url", REMOTE_NAME], repositoryRoot, [0])
+    await runGit(
+      runner,
+      ["remote", "get-url", REMOTE_NAME],
+      repositoryRoot,
+      [0],
+      signal,
+    )
   ).stdout.trim();
   const configured = githubRepositoryKey(configuredUrl);
   const expected = githubRepositoryKey(projectRepositoryUrl);
@@ -183,6 +215,7 @@ async function verifyDefaultBranch(
   runner: GitCommandRunner,
   repositoryRoot: string,
   taskBranch: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const defaultRef = (
     await runGit(
@@ -190,6 +223,7 @@ async function verifyDefaultBranch(
       ["symbolic-ref", "--quiet", "--short", `refs/remotes/${REMOTE_NAME}/HEAD`],
       repositoryRoot,
       [0],
+      signal,
     )
   ).stdout.trim();
   const defaultBranch = defaultRef.startsWith(`${REMOTE_NAME}/`)
@@ -209,6 +243,7 @@ async function readRemoteBranchSha(
   runner: GitCommandRunner,
   repositoryRoot: string,
   branch: string,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   const output = (
     await runGit(
@@ -216,6 +251,7 @@ async function readRemoteBranchSha(
       ["ls-remote", "--heads", REMOTE_NAME, branch],
       repositoryRoot,
       [0],
+      signal,
     )
   ).stdout.trim();
 
@@ -243,12 +279,15 @@ async function runGit(
   args: readonly string[],
   repositoryRoot: string,
   acceptedExitCodes: readonly number[],
+  signal?: AbortSignal,
 ): Promise<GitCommandResult> {
+  throwIfSignalCancelled(signal);
   if (!isAbsolute(repositoryRoot)) {
     throw new GitRemotePushError("repository root is not absolute");
   }
 
-  const result = await runner.run(args, repositoryRoot);
+  const result = await runner.run(args, repositoryRoot, { signal });
+  throwIfSignalCancelled(signal);
 
   if (
     !result.started ||

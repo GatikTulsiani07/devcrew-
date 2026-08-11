@@ -15,11 +15,13 @@ import { after, before, describe, it } from "node:test";
 import { ApplicationError } from "../src/errors.js";
 import type { ProjectService } from "../src/projects/project-service.js";
 import type { GitInspector } from "../src/repositories/git-inspector.js";
+import type { RepositoryWorkspace } from "../src/repositories/controlled-repository-workspace.js";
 import type { PreparedRepository } from "../src/repositories/prepared-repositories.js";
 import {
   createControlledDeveloperExecutor,
   type DeveloperImplementationPlanner,
 } from "../src/tasks/controlled-developer-executor.js";
+import { TaskCancellationError } from "../src/tasks/task-cancellation.js";
 import type { DeveloperExecutionInput } from "../src/tasks/types.js";
 
 let repositoryRoot: string;
@@ -116,12 +118,14 @@ function executor(
     preparedRepositories?: readonly PreparedRepository[];
     planner?: DeveloperImplementationPlanner;
     gitInspector?: GitInspector;
+    workspace?: RepositoryWorkspace;
   } = {},
 ) {
   return createControlledDeveloperExecutor({
     projectService: overrides.projectService ?? projectService(),
     preparedRepositories: overrides.preparedRepositories ?? [repository()],
     planner: overrides.planner ?? planner(plan),
+    ...(overrides.workspace === undefined ? {} : { workspace: overrides.workspace }),
     gitInspector: overrides.gitInspector ?? stubGitInspector(),
     generateExecutionId: () => "exec_000001",
     now: () => new Date("2026-08-03T02:00:00.000Z"),
@@ -327,6 +331,49 @@ describe("controlled developer executor", () => {
       await readFile(join(repositoryRoot, "restore.ts"), "utf8"),
       "original",
     );
+  });
+
+  it("rolls back an applied mutation when cancellation arrives before execution evidence is persisted", async () => {
+    const controller = new AbortController();
+    let applied = false;
+    let rolledBack = false;
+
+    await assert.rejects(
+      executor(
+        {
+          summary: "Apply then cancel",
+          operations: [{ type: "create", path: "cancelled.ts", content: "x" }],
+          verification: ["Run tests"],
+        },
+        {
+          workspace: {
+            async apply() {
+              applied = true;
+              return {
+                operations: [{ type: "create", path: "cancelled.ts" }],
+                async rollback() {
+                  rolledBack = true;
+                },
+              };
+            },
+          },
+          gitInspector: {
+            async assertCleanBaseline() {},
+            async captureEvidence() {
+              controller.abort(new TaskCancellationError());
+              return {
+                files: [{ path: "cancelled.ts", status: "ADDED" as const }],
+                summary: { filesChanged: 1 },
+              };
+            },
+          },
+        },
+      ).execute({ ...developerInput(), signal: controller.signal }),
+      { name: "TaskCancellationError" },
+    );
+
+    assert.equal(applied, true);
+    assert.equal(rolledBack, true);
   });
 
   it("treats a missing target as absent and fails closed for unreadable targets", async () => {

@@ -7,6 +7,7 @@ import {
   MAX_VISUAL_REPAIR_ATTEMPTS,
 } from "../src/orchestration/visual-repair-orchestrator.js";
 import { ApplicationError } from "../src/errors.js";
+import { TaskCancellationError } from "../src/tasks/task-cancellation.js";
 import type {
   DeveloperExecutionInput,
   DeveloperExecutor,
@@ -371,5 +372,28 @@ describe("visual repair orchestrator", () => {
       assert.equal(result.visualRepair?.attempts.length, 1);
       assert.equal(result.visualRepair?.outcome, outcome);
     }
+  });
+
+  it("stops before starting a visual repair attempt when cancellation is requested", async () => {
+    const initial = failedVisualTask();
+    const { store, read } = memoryStore(initial);
+    const developerCalls: DeveloperExecutionInput[] = [];
+    const controller = new AbortController();
+    controller.abort(new TaskCancellationError());
+
+    await assert.rejects(
+      createVisualRepairOrchestrator({
+        project,
+        developerExecutor: developer(developerCalls),
+        devOpsValidator: devops([validation("val_repair", "shot_repair", "PASSED")]),
+        store,
+        signal: controller.signal,
+        activityService: createNoopActivityService(),
+      }).repairIfRequired(initial),
+      { name: "TaskCancellationError" },
+    );
+
+    assert.equal(developerCalls.length, 0);
+    assert.equal(read().visualRepair, undefined);
   });
 });

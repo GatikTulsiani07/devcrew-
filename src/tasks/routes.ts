@@ -7,6 +7,8 @@ import {
   type RequestIdEnv,
 } from "../http/route-support.js";
 import {
+  cancelTaskPathParamsSchema,
+  cancelTaskRequestSchema,
   createTaskPathParamsSchema,
   createPullRequestPathParamsSchema,
   createPullRequestRequestSchema,
@@ -150,6 +152,25 @@ export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
     }
 
     const task = await taskService.retryTask(
+      params.data.projectId,
+      params.data.taskId,
+    );
+    return c.json({ task });
+  });
+
+  routes.post("/:projectId/tasks/:taskId/cancel", async (c) => {
+    const params = cancelTaskPathParamsSchema.safeParse({
+      projectId: c.req.param("projectId"),
+      taskId: c.req.param("taskId"),
+    });
+    const body = await readOptionalJsonBody(c.req.text.bind(c.req));
+    const request = cancelTaskRequestSchema.safeParse(body);
+
+    if (!params.success || !request.success) {
+      throw validationError();
+    }
+
+    const task = await taskService.cancelTask(
       params.data.projectId,
       params.data.taskId,
     );

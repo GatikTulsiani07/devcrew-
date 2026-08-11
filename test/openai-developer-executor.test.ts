@@ -7,6 +7,7 @@ import {
   createOpenAIDeveloperExecutor,
   type OpenAIDeveloperClient,
 } from "../src/tasks/openai-developer-executor.js";
+import { TaskCancellationError } from "../src/tasks/task-cancellation.js";
 import type { DeveloperExecutionInput } from "../src/tasks/types.js";
 
 const developerInput: DeveloperExecutionInput = {
@@ -316,6 +317,26 @@ describe("OpenAI developer executor", () => {
         !String(error).includes("sk-test-secret") &&
         !String(error).includes("stack trace"),
     );
+  });
+
+  it("passes AbortSignal to the provider and preserves provider cancellation", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const client: OpenAIDeveloperClient = {
+      responses: {
+        async parse(_params, options) {
+          receivedSignal = options?.signal;
+          throw new TaskCancellationError();
+        },
+      },
+    };
+    const executor = createOpenAIDeveloperExecutor({ client });
+
+    await assert.rejects(
+      () => executor.execute({ ...developerInput, signal: controller.signal }),
+      { name: "TaskCancellationError" },
+    );
+    assert.equal(receivedSignal, controller.signal);
   });
 
   it("uses deterministic fallback when no API key is configured", async () => {

@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createApp } from "../src/app.js";
+import {
+  createActivityService,
+  type ActivityService,
+} from "../src/activity/activity-service.js";
+import { InMemoryActivityStore } from "../src/activity/in-memory-activity-store.js";
 import type { DatabaseHealth } from "../src/db/health.js";
 import { InMemoryProjectStore } from "../src/projects/in-memory-project-store.js";
 import { createProjectService } from "../src/projects/project-service.js";
@@ -47,6 +52,7 @@ interface TestAppOptions {
   developerExecutor?: DeveloperExecutor;
   devOpsValidator?: DevOpsValidator;
   taskReviewer?: TaskReviewer;
+  activityService?: ActivityService;
   dates?: readonly string[];
 }
 
@@ -74,6 +80,7 @@ function createTestApp({
   developerExecutor,
   devOpsValidator,
   taskReviewer,
+  activityService,
   dates = ["2026-08-03T01:00:00.000Z"],
 }: TestAppOptions = {}) {
   const projectService = createDeterministicProjectService();
@@ -128,7 +135,9 @@ function createTestApp({
         return `task_${String(taskCount).padStart(6, "0")}`;
       },
       now: nextDate,
+      ...(activityService === undefined ? {} : { activityService }),
     }),
+    ...(activityService === undefined ? {} : { activityService }),
   });
 }
 
@@ -237,6 +246,21 @@ async function retryTask(
 ) {
   return app.request(
     `/api/v1/projects/${projectId}/tasks/${taskId}/retry`,
+    {
+      method: "POST",
+      ...init,
+    },
+  );
+}
+
+async function cancelTask(
+  app: ReturnType<typeof createTestApp>,
+  projectId = "proj_000001",
+  taskId = "task_000001",
+  init: RequestInit = {},
+) {
+  return app.request(
+    `/api/v1/projects/${projectId}/tasks/${taskId}/cancel`,
     {
       method: "POST",
       ...init,
@@ -1246,6 +1270,122 @@ describe("task manager planning API", () => {
     assert.equal(body.includes("git status"), false);
     assert.equal(body.includes("SENSITIVE"), false);
     assert.equal(body.includes("stack"), false);
+  });
+
+  it("cancels an active task through authoritative state and emits TASK_CANCELLED once", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let capturedSignal: AbortSignal | undefined;
+    const developerExecutor: DeveloperExecutor = {
+      async execute(input) {
+        capturedSignal = input.signal;
+        resolveStarted();
+        return await new Promise<TaskExecution>((_resolve, reject) => {
+          input.signal?.addEventListener(
+            "abort",
+            () => reject(input.signal?.reason ?? new Error("cancelled")),
+            { once: true },
+          );
+        });
+      },
+    };
+    const activityService = createActivityService({
+      store: new InMemoryActivityStore(),
+      generateEventId: () => "evt_cancelled",
+      now: () => new Date("2026-08-03T12:00:00.000Z"),
+    });
+    const app = createTestApp({
+      developerExecutor,
+      activityService,
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const executing = executeTask(app);
+    await started;
+
+    const requested = await cancelTask(app);
+    const requestedBody = await requested.json();
+    assert.equal(requested.status, 200);
+    assert.equal(requestedBody.task.cancellation.status, "REQUESTED");
+    assert.equal(requestedBody.task.cancellation.stage, "DEVELOPER");
+    assert.equal(capturedSignal?.aborted, true);
+
+    const executionResponse = await executing;
+    assert.equal(executionResponse.status, 409);
+    assert.equal((await executionResponse.json()).error.code, "TASK_CANCELLED");
+
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const readBody = await read.json();
+    assert.equal(readBody.task.cancellation.status, "CANCELLED");
+    assert.equal(readBody.task.cancellation.stage, "DEVELOPER");
+    assert.equal(typeof readBody.task.cancellation.cancelledAt, "string");
+    assert.equal(readBody.task.execution, undefined);
+
+    const repeated = await cancelTask(app);
+    assert.equal(repeated.status, 200);
+    assert.equal((await repeated.json()).task.cancellation.status, "CANCELLED");
+
+    const activity = await app.request(
+      "/api/v1/projects/proj_000001/activity",
+    );
+    const events = (await activity.json()).events.filter(
+      (event: { type: string }) => event.type === "TASK_CANCELLED",
+    );
+    assert.equal(events.length, 1);
+  });
+
+  it("rejects unsafe cancel request bodies and prevents later workflow stages", async () => {
+    let devOpsCalls = 0;
+    const app = createTestApp({
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          devOpsCalls += 1;
+          throw new Error("validation should not start");
+        },
+      },
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const rejected = await cancelTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force: true, stage: "DEVOPS", pid: 123 }),
+    });
+    assert.equal(rejected.status, 400);
+    assert.equal((await rejected.json()).error.code, "VALIDATION_FAILED");
+
+    const cancelled = await cancelTask(app);
+    assert.equal(cancelled.status, 200);
+    assert.equal((await cancelled.json()).task.cancellation.status, "CANCELLED");
+
+    const validation = await validateTask(app);
+    assert.equal(validation.status, 409);
+    assert.equal((await validation.json()).error.code, "INVALID_TASK_TRANSITION");
+    assert.equal(devOpsCalls, 0);
   });
 
   it("validates an implementation-completed task synchronously with persisted evidence", async () => {

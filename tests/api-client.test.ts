@@ -68,6 +68,7 @@ describe("Devcrew API client", () => {
     await client.executeTask("proj_1", "task_1");
     await client.validateTask("proj_1", "task_1");
     await client.reviewTask("proj_1", "task_1");
+    await client.cancelTask("proj_1", "task_1");
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
       "http://backend.test/api/v1/projects/proj_1/tasks",
@@ -76,6 +77,7 @@ describe("Devcrew API client", () => {
       "http://backend.test/api/v1/projects/proj_1/tasks/task_1/execute",
       "http://backend.test/api/v1/projects/proj_1/tasks/task_1/validate",
       "http://backend.test/api/v1/projects/proj_1/tasks/task_1/review",
+      "http://backend.test/api/v1/projects/proj_1/tasks/task_1/cancel",
     ]);
     expect(fetcher.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ decision: "APPROVE" }));
     expect(fetcher.mock.calls[2]?.[1]?.body).toBe(

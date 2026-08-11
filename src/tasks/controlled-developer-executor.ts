@@ -19,6 +19,10 @@ import {
   type GitInspector,
 } from "../repositories/git-inspector.js";
 import {
+  isTaskCancellationError,
+  throwIfSignalCancelled,
+} from "./task-cancellation.js";
+import {
   findPreparedRepository,
   type PreparedRepository,
 } from "../repositories/prepared-repositories.js";
@@ -84,12 +88,14 @@ export function createControlledDeveloperExecutor({
 }: ControlledDeveloperExecutorDependencies): DeveloperExecutor {
   return {
     async execute(input): Promise<TaskExecution> {
+      throwIfSignalCancelled(input.signal);
       const repositoryRoot = await resolveRepositoryRoot(
         projectService,
         preparedRepositories,
         input,
       );
       await assertBaseline(repositoryRoot, input, gitInspector);
+      throwIfSignalCancelled(input.signal);
 
       const startedAt = now().toISOString();
 
@@ -98,12 +104,17 @@ export function createControlledDeveloperExecutor({
       try {
         output = await planner.plan(input);
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          throw error;
+        }
+
         logger.error("Controlled developer planning failed", {
           taskId: input.task.id,
           cause: describeError(error),
         });
         throw executionFailure();
       }
+      throwIfSignalCancelled(input.signal);
 
       const parsed = developerImplementationPlanSchema.safeParse(output);
 
@@ -125,8 +136,14 @@ export function createControlledDeveloperExecutor({
       let mutation;
 
       try {
+        throwIfSignalCancelled(input.signal);
         mutation = await workspace.apply(repositoryRoot, parsed.data.operations);
+        await rollbackIfCancelled(mutation, input.signal);
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          throw error;
+        }
+
         logger.error("Controlled repository mutation was rejected", {
           taskId: input.task.id,
           cause: describeError(error),
@@ -137,8 +154,14 @@ export function createControlledDeveloperExecutor({
       let evidence;
 
       try {
+        throwIfSignalCancelled(input.signal);
         evidence = await gitInspector.captureEvidence(repositoryRoot);
+        await rollbackIfCancelled(mutation, input.signal);
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          throw error;
+        }
+
         logger.error("Git evidence capture failed after mutation", {
           taskId: input.task.id,
           cause: describeError(error),
@@ -167,6 +190,26 @@ export function createControlledDeveloperExecutor({
       };
     },
   };
+}
+
+async function rollbackIfCancelled(
+  mutation: { rollback(): Promise<void> },
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted !== true) {
+    return;
+  }
+
+  try {
+    await mutation.rollback();
+  } catch (error) {
+    logger.error("Controlled developer rollback failed after cancellation", {
+      cause: describeError(error),
+    });
+    throw executionFailure();
+  }
+
+  throwIfSignalCancelled(signal);
 }
 
 async function assertBaseline(

@@ -19,6 +19,7 @@ export interface GitHubPullRequestLookupInput {
   repository: GitHubRepositoryRef;
   head: string;
   base: string;
+  signal?: AbortSignal;
 }
 
 export interface GitHubPullRequestCreateInput
@@ -63,6 +64,7 @@ export function createGitHubPullRequestClient({
         timeoutMs,
         method: "GET",
         url: pullRequestsUrl(input),
+        signal: input.signal,
       });
 
       if (!Array.isArray(response)) {
@@ -89,6 +91,7 @@ export function createGitHubPullRequestClient({
           base: input.base,
           body: input.body,
         },
+        signal: input.signal,
       });
 
       return parsePullRequestResponse(response, input);
@@ -199,6 +202,7 @@ async function requestJson({
   method,
   url,
   body,
+  signal,
 }: {
   token?: string;
   fetchImpl: typeof fetch;
@@ -206,6 +210,7 @@ async function requestJson({
   method: "GET" | "POST";
   url: string;
   body?: Record<string, unknown>;
+  signal?: AbortSignal;
 }): Promise<unknown> {
   if (token === undefined || token.trim() === "") {
     throw new GitHubPullRequestClientError("missing GitHub token");
@@ -217,7 +222,7 @@ async function requestJson({
   try {
     const response = await fetchImpl(url, {
       method,
-      signal: controller.signal,
+      signal: timeoutOrCancellationSignal(controller.signal, signal),
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
@@ -238,6 +243,10 @@ async function requestJson({
       throw error;
     }
 
+    if (signal?.aborted === true) {
+      throw signal.reason ?? new Error("Operation cancelled");
+    }
+
     if (error instanceof DOMException && error.name === "AbortError") {
       throw new GitHubPullRequestClientError("provider request timed out");
     }
@@ -246,6 +255,32 @@ async function requestJson({
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function timeoutOrCancellationSignal(
+  timeoutSignal: AbortSignal,
+  signal?: AbortSignal,
+): AbortSignal {
+  if (signal === undefined) {
+    return timeoutSignal;
+  }
+
+  const controller = new AbortController();
+  const onTimeout = () => controller.abort(timeoutSignal.reason);
+  const onAbort = () => controller.abort(signal.reason);
+
+  timeoutSignal.addEventListener("abort", onTimeout, { once: true });
+  signal.addEventListener("abort", onAbort, { once: true });
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      timeoutSignal.removeEventListener("abort", onTimeout);
+      signal.removeEventListener("abort", onAbort);
+    },
+    { once: true },
+  );
+
+  return controller.signal;
 }
 
 function pullRequestsUrl(input: GitHubPullRequestLookupInput): string {

@@ -7,6 +7,7 @@ import {
   createReviewerFromEnv,
   type OpenAIReviewerClient,
 } from "../src/tasks/openai-reviewer.js";
+import { TaskCancellationError } from "../src/tasks/task-cancellation.js";
 import type { ProjectSnapshot } from "../src/projects/types.js";
 import type { TaskSnapshot } from "../src/tasks/types.js";
 
@@ -225,6 +226,25 @@ describe("OpenAI reviewer", () => {
     });
 
     await assert.rejects(() => unsafeReviewer.review(task, project));
+  });
+
+  it("passes AbortSignal to the provider and preserves cancellation", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const reviewer = createReviewer({
+      responses: {
+        async parse(_request, options) {
+          receivedSignal = options?.signal;
+          throw new TaskCancellationError();
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => reviewer.review(task, project, { signal: controller.signal }),
+      { name: "TaskCancellationError" },
+    );
+    assert.equal(receivedSignal, controller.signal);
   });
 
   it("uses the deterministic fallback without an API key", async () => {

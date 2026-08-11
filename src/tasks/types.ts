@@ -41,6 +41,7 @@ export type RetryStage =
   | "CHECKPOINT"
   | "REMOTE_PUSH"
   | "PULL_REQUEST";
+export type CancellationStage = RetryStage | "RETRY_WAIT";
 export type RetryFailureCategory =
   | "PROVIDER_TIMEOUT"
   | "PROVIDER_NETWORK"
@@ -149,6 +150,14 @@ export interface RetryRecoveryEvidence {
   attempts: readonly RetryAttemptEvidence[];
 }
 
+export interface TaskCancellationEvidence {
+  status: "REQUESTED" | "CANCELLED" | "FAILED";
+  requestedAt: string;
+  cancelledAt?: string;
+  stage?: CancellationStage;
+  summary?: string;
+}
+
 export interface ValidationCheck {
   name: ValidationCheckName;
   status: ValidationCheckStatus;
@@ -211,6 +220,7 @@ export interface TaskSnapshot {
   validation?: TaskValidation;
   visualRepair?: VisualRepairEvidence;
   retryRecovery?: RetryRecoveryEvidence;
+  cancellation?: TaskCancellationEvidence;
   review?: TaskReview;
   pullRequest?: TaskPullRequestEvidence;
   createdAt: string;
@@ -235,6 +245,7 @@ export interface DeveloperExecutionInput {
   project: ProjectSnapshot;
   task: TaskSnapshot;
   repairContext?: DeveloperRepairContext;
+  signal?: AbortSignal;
 }
 
 export interface DeveloperRepairFindingContext {
@@ -282,20 +293,37 @@ export interface DeveloperExecutor {
 }
 
 export interface DevOpsValidator {
-  validate(task: TaskSnapshot): Promise<TaskValidation>;
+  validate(
+    task: TaskSnapshot,
+    options?: {
+      signal?: AbortSignal;
+      setStage?: (stage: CancellationStage) => void;
+    },
+  ): Promise<TaskValidation>;
 }
 
 export interface DevOpsPublisher {
-  publishValidatedTask(task: TaskSnapshot): Promise<TaskValidation>;
+  publishValidatedTask(
+    task: TaskSnapshot,
+    options?: {
+      signal?: AbortSignal;
+      setStage?: (stage: CancellationStage) => void;
+    },
+  ): Promise<TaskValidation>;
 }
 
 export interface TaskReviewer {
-  review(task: TaskSnapshot, project?: ProjectSnapshot): Promise<TaskReview>;
+  review(
+    task: TaskSnapshot,
+    project?: ProjectSnapshot,
+    options?: { signal?: AbortSignal },
+  ): Promise<TaskReview>;
 }
 
 export interface TaskPullRequestCreatorInput {
   project: ProjectSnapshot;
   task: TaskSnapshot;
+  signal?: AbortSignal;
 }
 
 export interface TaskPullRequestCreatorResult {
