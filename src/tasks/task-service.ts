@@ -7,9 +7,13 @@ import {
 import { ApplicationError } from "../errors.js";
 import type { ProjectService } from "../projects/project-service.js";
 import type { GitChangeEvidence } from "../repositories/git-inspector.js";
+import {
+  createVisualRepairOrchestrator,
+} from "../orchestration/visual-repair-orchestrator.js";
 import type {
   CreateTaskInput,
   DeveloperExecutor,
+  DevOpsPublisher,
   DevOpsValidator,
   ManagerPlanner,
   PlanDecisionInput,
@@ -200,7 +204,7 @@ export function createTaskService({
     },
 
     async validateTask(projectId, taskId) {
-      await projectService.getProject(projectId);
+      const project = await projectService.getProject(projectId);
 
       const task = await store.findByProjectAndId(projectId, taskId);
 
@@ -229,48 +233,18 @@ export function createTaskService({
       };
 
       const validatedTask = copyTask(await store.update(updatedTask));
-      await activityService.append({
-        projectId,
-        taskId,
-        type: "VALIDATION_COMPLETED",
-        actor: { kind: "AGENT", role: "DEVOPS_ENGINEER" },
-        summary: "DevOps Engineer completed validation.",
-      });
+      await appendValidationActivity(projectId, taskId, validation);
 
-      if (validation.browserVerification !== undefined) {
-        await activityService.append({
-          projectId,
-          taskId,
-          type: "BROWSER_VERIFICATION_COMPLETED",
-          actor: { kind: "SYSTEM" },
-          summary: "Localhost application verified.",
-        });
-      }
+      const repairedTask = await createVisualRepairOrchestrator({
+        project,
+        developerExecutor,
+        devOpsValidator,
+        store,
+        now,
+        activityService,
+      }).repairIfRequired(validatedTask);
 
-      if (validation.browserScreenshot !== undefined) {
-        await activityService.append({
-          projectId,
-          taskId,
-          type: "SCREENSHOT_CAPTURED",
-          actor: { kind: "SYSTEM" },
-          summary: "Frontend screenshot captured.",
-        });
-      }
-
-      if (validation.visualReview !== undefined) {
-        await activityService.append({
-          projectId,
-          taskId,
-          type: "VISUAL_REVIEW_COMPLETED",
-          actor: { kind: "SYSTEM" },
-          summary:
-            validation.visualReview.status === "PASSED"
-              ? "Visual review passed."
-              : `Visual review found ${validation.visualReview.findings.length} issues.`,
-        });
-      }
-
-      return validatedTask;
+      return maybePublishValidatedTask(repairedTask);
     },
 
     async reviewTask(projectId, taskId) {
@@ -287,6 +261,17 @@ export function createTaskService({
           "INVALID_TASK_TRANSITION",
           409,
           "Task validation is not ready for review",
+        );
+      }
+
+      if (
+        task.validation?.visualReview?.status === "FAILED" ||
+        task.visualRepair?.outcome === "EXHAUSTED"
+      ) {
+        throw new ApplicationError(
+          "INVALID_TASK_TRANSITION",
+          409,
+          "Task visual review is not approved for review",
         );
       }
 
@@ -359,6 +344,89 @@ export function createTaskService({
       return taskWithPullRequest;
     },
   };
+
+  async function maybePublishValidatedTask(
+    task: TaskSnapshot,
+  ): Promise<TaskSnapshot> {
+    if (
+      task.status !== "VALIDATION_COMPLETED" ||
+      task.visualRepair?.outcome === "EXHAUSTED" ||
+      task.validation?.visualReview?.status === "FAILED" ||
+      task.validation?.checkpoint !== undefined ||
+      task.validation?.remoteBranch !== undefined
+    ) {
+      return copyTask(task);
+    }
+
+    if (!isDevOpsPublisher(devOpsValidator)) {
+      return copyTask(task);
+    }
+
+    const validation = await devOpsValidator.publishValidatedTask(copyTask(task));
+    const timestamp = now().toISOString();
+    return copyTask(
+      await store.update({
+        ...copyTask(task),
+        validation,
+        updatedAt: timestamp,
+      }),
+    );
+  }
+
+  async function appendValidationActivity(
+    projectId: string,
+    taskId: string,
+    validation: TaskSnapshot["validation"],
+  ): Promise<void> {
+    if (validation === undefined) return;
+
+    await activityService.append({
+      projectId,
+      taskId,
+      type: "VALIDATION_COMPLETED",
+      actor: { kind: "AGENT", role: "DEVOPS_ENGINEER" },
+      summary: "DevOps Engineer completed validation.",
+    });
+
+    if (validation.browserVerification !== undefined) {
+      await activityService.append({
+        projectId,
+        taskId,
+        type: "BROWSER_VERIFICATION_COMPLETED",
+        actor: { kind: "SYSTEM" },
+        summary: "Localhost application verified.",
+      });
+    }
+
+    if (validation.browserScreenshot !== undefined) {
+      await activityService.append({
+        projectId,
+        taskId,
+        type: "SCREENSHOT_CAPTURED",
+        actor: { kind: "SYSTEM" },
+        summary: "Frontend screenshot captured.",
+      });
+    }
+
+    if (validation.visualReview !== undefined) {
+      await activityService.append({
+        projectId,
+        taskId,
+        type: "VISUAL_REVIEW_COMPLETED",
+        actor: { kind: "SYSTEM" },
+        summary:
+          validation.visualReview.status === "PASSED"
+            ? "Visual review passed."
+            : `Visual review found ${validation.visualReview.findings.length} issues.`,
+      });
+    }
+  }
+}
+
+function isDevOpsPublisher(
+  devOpsValidator: DevOpsValidator,
+): devOpsValidator is DevOpsValidator & DevOpsPublisher {
+  return "publishValidatedTask" in devOpsValidator;
 }
 
 function unavailablePullRequestCreator(): TaskPullRequestCreator {
@@ -505,7 +573,57 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                     screenshotId: task.validation.visualReview.screenshotId,
                     reviewedAt: task.validation.visualReview.reviewedAt,
                   },
-                }),
+            }),
+          },
+        }),
+    ...(task.visualRepair === undefined
+      ? {}
+      : {
+          visualRepair: {
+            maxAttempts: task.visualRepair.maxAttempts,
+            ...(task.visualRepair.outcome === undefined
+              ? {}
+              : { outcome: task.visualRepair.outcome }),
+            attempts: task.visualRepair.attempts.map((attempt) => ({
+              attempt: attempt.attempt,
+              startedAt: attempt.startedAt,
+              ...(attempt.completedAt === undefined
+                ? {}
+                : { completedAt: attempt.completedAt }),
+              sourceScreenshotId: attempt.sourceScreenshotId,
+              sourceVisualReview: {
+                status: attempt.sourceVisualReview.status,
+                summary: attempt.sourceVisualReview.summary,
+                findingCount: attempt.sourceVisualReview.findingCount,
+              },
+              ...(attempt.developer === undefined
+                ? {}
+                : {
+                    developer: {
+                      summary: attempt.developer.summary,
+                      changedFiles: [...attempt.developer.changedFiles],
+                    },
+                  }),
+              ...(attempt.validation === undefined
+                ? {}
+                : {
+                    validation: {
+                      status: attempt.validation.status,
+                    },
+                  }),
+              ...(attempt.screenshotId === undefined
+                ? {}
+                : { screenshotId: attempt.screenshotId }),
+              ...(attempt.visualReview === undefined
+                ? {}
+                : {
+                    visualReview: {
+                      status: attempt.visualReview.status,
+                      summary: attempt.visualReview.summary,
+                      findingCount: attempt.visualReview.findingCount,
+                    },
+                  }),
+            })),
           },
         }),
     ...(task.review === undefined

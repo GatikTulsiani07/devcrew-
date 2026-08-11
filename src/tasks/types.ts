@@ -60,6 +60,45 @@ export interface TaskExecution {
   result: ImplementationResult;
 }
 
+export interface VisualRepairSourceReview {
+  status: "FAILED";
+  summary: string;
+  findingCount: number;
+}
+
+export interface VisualRepairAttemptDeveloperEvidence {
+  summary: string;
+  changedFiles: readonly string[];
+}
+
+export interface VisualRepairAttemptValidationEvidence {
+  status: "PASSED";
+}
+
+export interface VisualRepairAttemptReviewEvidence {
+  status: "PASSED" | "FAILED";
+  summary: string;
+  findingCount: number;
+}
+
+export interface VisualRepairAttempt {
+  attempt: number;
+  startedAt: string;
+  completedAt?: string;
+  sourceScreenshotId: string;
+  sourceVisualReview: VisualRepairSourceReview;
+  developer?: VisualRepairAttemptDeveloperEvidence;
+  validation?: VisualRepairAttemptValidationEvidence;
+  screenshotId?: string;
+  visualReview?: VisualRepairAttemptReviewEvidence;
+}
+
+export interface VisualRepairEvidence {
+  maxAttempts: 2;
+  outcome?: "PASSED" | "EXHAUSTED";
+  attempts: readonly VisualRepairAttempt[];
+}
+
 export interface ValidationCheck {
   name: ValidationCheckName;
   status: ValidationCheckStatus;
@@ -120,6 +159,7 @@ export interface TaskSnapshot {
   planDecision?: PlanDecision;
   execution?: TaskExecution;
   validation?: TaskValidation;
+  visualRepair?: VisualRepairEvidence;
   review?: TaskReview;
   pullRequest?: TaskPullRequestEvidence;
   createdAt: string;
@@ -143,6 +183,34 @@ export interface PlanDecisionInput {
 export interface DeveloperExecutionInput {
   project: ProjectSnapshot;
   task: TaskSnapshot;
+  repairContext?: DeveloperRepairContext;
+}
+
+export interface DeveloperRepairFindingContext {
+  title: string;
+  description: string;
+  severity: "INFO" | "WARNING" | "ERROR";
+  category: string;
+}
+
+export interface DeveloperRepairContext {
+  attempt: number;
+  originalTaskTitle: string;
+  originalTaskDescription: string;
+  approvedPlanSummary: string;
+  approvedPlanSteps: readonly string[];
+  previousDeveloperSummary: string;
+  failedVisualReviewSummary: string;
+  findings: readonly DeveloperRepairFindingContext[];
+  screenshotId: string;
+  screenshotViewport: {
+    width: number;
+    height: number;
+  };
+  browserPage?: {
+    url: string;
+    pageTitle?: string;
+  };
 }
 
 export interface TaskStore {
@@ -164,6 +232,10 @@ export interface DeveloperExecutor {
 
 export interface DevOpsValidator {
   validate(task: TaskSnapshot): Promise<TaskValidation>;
+}
+
+export interface DevOpsPublisher {
+  publishValidatedTask(task: TaskSnapshot): Promise<TaskValidation>;
 }
 
 export interface TaskReviewer {

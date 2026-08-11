@@ -266,6 +266,50 @@ describe("pull request service", () => {
     );
   });
 
+  it("rejects failed or exhausted visual repair evidence before PR creation", async () => {
+    const service = createPullRequestService({
+      githubClient: fakeClient().client,
+      preparedRepositories,
+    });
+
+    await assert.rejects(
+      service.createPullRequest({
+        project,
+        task: validTask({
+          validation: {
+            ...validTask().validation!,
+            visualReview: {
+              status: "FAILED",
+              summary: "Visible issues remain.",
+              findings: [],
+              screenshotId: "shot_123e4567-e89b-42d3-a456-426614174000",
+              reviewedAt: "2026-08-03T04:02:00.000Z",
+            },
+          },
+        }),
+      }),
+      (error: unknown) =>
+        error instanceof PullRequestServiceError &&
+        error.reason === "visual review approval is required",
+    );
+
+    await assert.rejects(
+      service.createPullRequest({
+        project,
+        task: validTask({
+          visualRepair: {
+            maxAttempts: 2,
+            outcome: "EXHAUSTED",
+            attempts: [],
+          },
+        }),
+      }),
+      (error: unknown) =>
+        error instanceof PullRequestServiceError &&
+        error.reason === "visual review approval is required",
+    );
+  });
+
   it("rejects non-authoritative refs, repositories, and unsafe base branches", async () => {
     const service = createPullRequestService({
       githubClient: fakeClient().client,

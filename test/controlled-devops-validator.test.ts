@@ -144,34 +144,13 @@ describe("controlled DevOps validator", () => {
       preparedRepositories: [repository],
       runner,
       checkpointService: {
-        async createCheckpoint(input) {
-          assert.equal(input.repositoryRoot, repository.localCheckoutPath);
-          assert.equal(input.taskId, task.id);
-          assert.deepEqual(input.changeEvidence, task.execution?.result.changeEvidence);
-          return {
-            sha: "0123456789abcdef0123456789abcdef01234567",
-            shortSha: "0123456789ab",
-            message: "devcrew: implement task task_000001",
-            createdAt: "2026-08-03T04:00:00.000Z",
-            filesChanged: ["src/app.ts"],
-          };
+        async createCheckpoint() {
+          throw new Error("checkpoint should not run during visual validation");
         },
       },
       remotePushService: {
-        async pushValidatedBranch(input) {
-          assert.equal(input.repositoryRoot, repository.localCheckoutPath);
-          assert.equal(input.taskId, task.id);
-          assert.equal(input.projectRepositoryUrl, repository.publicRepositoryUrl);
-          assert.equal(
-            input.checkpoint?.sha,
-            "0123456789abcdef0123456789abcdef01234567",
-          );
-          return {
-            remote: "origin",
-            branch: "devcrew/task-task_000001",
-            commitSha: "0123456789abcdef0123456789abcdef01234567",
-            pushedAt: "2026-08-03T04:00:00.000Z",
-          };
+        async pushValidatedBranch() {
+          throw new Error("remote push should not run during visual validation");
         },
       },
       generateValidationId: () => "val_000001",
@@ -196,20 +175,87 @@ describe("controlled DevOps validator", () => {
         { name: "build", status: "PASSED", summary: "Production build completed successfully." },
       ],
       summary: "Controlled validation completed successfully.",
-      checkpoint: {
-        sha: "0123456789abcdef0123456789abcdef01234567",
-        shortSha: "0123456789ab",
-        message: "devcrew: implement task task_000001",
-        createdAt: "2026-08-03T04:00:00.000Z",
-        filesChanged: ["src/app.ts"],
+    });
+  });
+
+  it("publishes only validated visual-approved task evidence", async () => {
+    const validator = createControlledDevOpsValidator({
+      projectService: projectService(),
+      preparedRepositories: [repository],
+      runner: passingRunner(),
+      checkpointService: {
+        async createCheckpoint(input) {
+          assert.equal(input.repositoryRoot, repository.localCheckoutPath);
+          assert.equal(input.taskId, task.id);
+          assert.deepEqual(input.changeEvidence, task.execution?.result.changeEvidence);
+          return checkpoint;
+        },
       },
-      remoteBranch: {
-        remote: "origin",
-        branch: "devcrew/task-task_000001",
-        commitSha: "0123456789abcdef0123456789abcdef01234567",
-        pushedAt: "2026-08-03T04:00:00.000Z",
+      remotePushService: {
+        async pushValidatedBranch(input) {
+          assert.equal(input.repositoryRoot, repository.localCheckoutPath);
+          assert.equal(input.taskId, task.id);
+          assert.equal(input.projectRepositoryUrl, repository.publicRepositoryUrl);
+          assert.equal(input.checkpoint?.sha, checkpoint.sha);
+          return {
+            remote: "origin",
+            branch: "devcrew/task-task_000001",
+            commitSha: checkpoint.sha,
+            pushedAt: "2026-08-03T04:00:00.000Z",
+          };
+        },
       },
     });
+
+    const published = await validator.publishValidatedTask({
+      ...task,
+      status: "VALIDATION_COMPLETED",
+      validation: {
+        id: "val_000001",
+        role: "DEVOPS_ENGINEER",
+        status: "PASSED",
+        attempt: 1,
+        startedAt: "2026-08-03T04:00:00.000Z",
+        completedAt: "2026-08-03T04:01:00.000Z",
+        checks: [],
+        summary: "Controlled validation completed successfully.",
+        visualReview: {
+          status: "PASSED",
+          summary: "Visible requirements passed.",
+          findings: [],
+          screenshotId: "shot_123e4567-e89b-42d3-a456-426614174000",
+          reviewedAt: "2026-08-03T04:02:00.000Z",
+        },
+      },
+    });
+
+    assert.equal(published.checkpoint?.sha, checkpoint.sha);
+    assert.equal(published.remoteBranch?.commitSha, checkpoint.sha);
+
+    await assert.rejects(
+      validator.publishValidatedTask({
+        ...task,
+        status: "VALIDATION_COMPLETED",
+        validation: {
+          id: "val_failed",
+          role: "DEVOPS_ENGINEER",
+          status: "PASSED",
+          attempt: 1,
+          startedAt: "2026-08-03T04:00:00.000Z",
+          completedAt: "2026-08-03T04:01:00.000Z",
+          checks: [],
+          summary: "Controlled validation completed successfully.",
+          visualReview: {
+            status: "FAILED",
+            summary: "Visible issues remain.",
+            findings: [],
+            screenshotId: "shot_123e4567-e89b-42d3-a456-426614174000",
+            reviewedAt: "2026-08-03T04:02:00.000Z",
+          },
+        },
+      }),
+      (error: unknown) => error instanceof ApplicationError,
+    );
   });
 
   it("stops after the first failed check and fails closed for missing configuration", async () => {
@@ -258,7 +304,20 @@ describe("controlled DevOps validator", () => {
             throw new Error("unused");
           },
         },
-      }).validate(task),
+      }).publishValidatedTask({
+        ...task,
+        status: "VALIDATION_COMPLETED",
+        validation: {
+          id: "val_000001",
+          role: "DEVOPS_ENGINEER",
+          status: "PASSED",
+          attempt: 1,
+          startedAt: "2026-08-03T04:00:00.000Z",
+          completedAt: "2026-08-03T04:01:00.000Z",
+          checks: [],
+          summary: "Controlled validation completed successfully.",
+        },
+      }),
       (error: unknown) => error instanceof ApplicationError && error.code === "INTERNAL_ERROR",
     );
   });
@@ -289,7 +348,20 @@ describe("controlled DevOps validator", () => {
             throw new Error("secret failure at /Users/example/checkout");
           },
         },
-      }).validate(task),
+      }).publishValidatedTask({
+        ...task,
+        status: "VALIDATION_COMPLETED",
+        validation: {
+          id: "val_000001",
+          role: "DEVOPS_ENGINEER",
+          status: "PASSED",
+          attempt: 1,
+          startedAt: "2026-08-03T04:00:00.000Z",
+          completedAt: "2026-08-03T04:01:00.000Z",
+          checks: [],
+          summary: "Controlled validation completed successfully.",
+        },
+      }),
       (error: unknown) =>
         error instanceof ApplicationError &&
         error.code === "INTERNAL_ERROR" &&
@@ -334,7 +406,20 @@ describe("controlled DevOps validator", () => {
             throw new Error("auth token failed at https://token@example.invalid");
           },
         },
-      }).validate(task),
+      }).publishValidatedTask({
+        ...task,
+        status: "VALIDATION_COMPLETED",
+        validation: {
+          id: "val_000001",
+          role: "DEVOPS_ENGINEER",
+          status: "PASSED",
+          attempt: 1,
+          startedAt: "2026-08-03T04:00:00.000Z",
+          completedAt: "2026-08-03T04:01:00.000Z",
+          checks: [],
+          summary: "Controlled validation completed successfully.",
+        },
+      }),
       (error: unknown) =>
         error instanceof ApplicationError &&
         error.code === "INTERNAL_ERROR" &&
@@ -373,7 +458,20 @@ describe("controlled DevOps validator", () => {
         projectService: projectService(),
         preparedRepositories: [repository],
         runner,
-      }).validate(taskWithoutEvidence),
+      }).publishValidatedTask({
+        ...taskWithoutEvidence,
+        status: "VALIDATION_COMPLETED",
+        validation: {
+          id: "val_000001",
+          role: "DEVOPS_ENGINEER",
+          status: "PASSED",
+          attempt: 1,
+          startedAt: "2026-08-03T04:00:00.000Z",
+          completedAt: "2026-08-03T04:01:00.000Z",
+          checks: [],
+          summary: "Controlled validation completed successfully.",
+        },
+      }),
       (error: unknown) =>
         error instanceof ApplicationError &&
         error.code === "INTERNAL_ERROR" &&

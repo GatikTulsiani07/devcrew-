@@ -1384,10 +1384,12 @@ describe("task manager planning API", () => {
   });
 
   it("persists public screenshot and visual review evidence without leaking internals", async () => {
+    let validationCount = 0;
     const devOpsValidator: DevOpsValidator = {
       async validate() {
+        validationCount += 1;
         return {
-          id: "val_screenshot",
+          id: validationCount === 1 ? "val_screenshot" : "val_repair",
           role: "DEVOPS_ENGINEER",
           status: "PASSED",
           attempt: 1,
@@ -1419,23 +1421,36 @@ describe("task manager planning API", () => {
           },
           browserScreenshot: {
             status: "CAPTURED",
-            id: "shot_123e4567-e89b-42d3-a456-426614174000",
+            id:
+              validationCount === 1
+                ? "shot_123e4567-e89b-42d3-a456-426614174000"
+                : "shot_123e4567-e89b-42d3-a456-426614174001",
             url: "http://127.0.0.1:43117/",
             viewport: { width: 1440, height: 900 },
             capturedAt: "2026-08-03T06:31:00.000Z",
           },
           visualReview: {
-            status: "FAILED",
-            summary: "The requested sidebar is not visible.",
-            findings: [
-              {
-                severity: "ERROR",
-                category: "missing-element",
-                title: "Sidebar missing",
-                description: "The screenshot does not show the requested sidebar.",
-              },
-            ],
-            screenshotId: "shot_123e4567-e89b-42d3-a456-426614174000",
+            status: validationCount === 1 ? "FAILED" : "PASSED",
+            summary:
+              validationCount === 1
+                ? "The requested sidebar is not visible."
+                : "The requested sidebar is visible.",
+            findings:
+              validationCount === 1
+                ? [
+                    {
+                      severity: "ERROR",
+                      category: "missing-element",
+                      title: "Sidebar missing",
+                      description:
+                        "The screenshot does not show the requested sidebar.",
+                    },
+                  ]
+                : [],
+            screenshotId:
+              validationCount === 1
+                ? "shot_123e4567-e89b-42d3-a456-426614174000"
+                : "shot_123e4567-e89b-42d3-a456-426614174001",
             reviewedAt: "2026-08-03T06:32:00.000Z",
           },
         };
