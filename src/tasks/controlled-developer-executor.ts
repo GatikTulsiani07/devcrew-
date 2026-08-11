@@ -89,15 +89,7 @@ export function createControlledDeveloperExecutor({
         preparedRepositories,
         input,
       );
-      try {
-        await gitInspector.assertCleanBaseline(repositoryRoot);
-      } catch (error) {
-        logger.error("Prepared repository baseline is unusable", {
-          taskId: input.task.id,
-          cause: describeError(error),
-        });
-        throw executionFailure();
-      }
+      await assertBaseline(repositoryRoot, input, gitInspector);
 
       const startedAt = now().toISOString();
 
@@ -175,6 +167,42 @@ export function createControlledDeveloperExecutor({
       };
     },
   };
+}
+
+async function assertBaseline(
+  repositoryRoot: string,
+  input: DeveloperExecutionInput,
+  gitInspector: GitInspector,
+): Promise<void> {
+  try {
+    if (input.repairContext === undefined) {
+      await gitInspector.assertCleanBaseline(repositoryRoot);
+      return;
+    }
+
+    const expectedFiles = input.task.execution?.result.changeEvidence?.files;
+
+    if (expectedFiles === undefined || expectedFiles.length === 0) {
+      throw new Error("missing repair baseline evidence");
+    }
+
+    const observed = await gitInspector.captureEvidence(repositoryRoot);
+    const expectedPaths = new Set(expectedFiles.map((file) => file.path));
+    const observedPaths = new Set(observed.files.map((file) => file.path));
+
+    if (
+      expectedPaths.size !== observedPaths.size ||
+      [...observedPaths].some((path) => !expectedPaths.has(path))
+    ) {
+      throw new Error("repair baseline does not match previous Developer evidence");
+    }
+  } catch (error) {
+    logger.error("Prepared repository baseline is unusable", {
+      taskId: input.task.id,
+      cause: describeError(error),
+    });
+    throw executionFailure();
+  }
 }
 
 async function resolveRepositoryRoot(

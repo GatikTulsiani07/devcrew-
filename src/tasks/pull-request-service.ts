@@ -182,6 +182,13 @@ function resolveContext(
     throw new PullRequestServiceError("reviewer approval is required");
   }
 
+  if (
+    task.validation?.visualReview?.status === "FAILED" ||
+    task.visualRepair?.outcome === "EXHAUSTED"
+  ) {
+    throw new PullRequestServiceError("visual review approval is required");
+  }
+
   const checkpoint = task.validation?.checkpoint;
 
   if (checkpoint === undefined) {

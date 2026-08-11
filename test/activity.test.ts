@@ -565,10 +565,17 @@ describe("activity API", () => {
 
   it("appends VISUAL_REVIEW_COMPLETED for passed and failed visual verdicts", async () => {
     for (const status of ["PASSED", "FAILED"] as const) {
+      let validationCount = 0;
       const devOpsValidator: DevOpsValidator = {
         async validate() {
+          validationCount += 1;
+          const repaired = status === "FAILED" && validationCount > 1;
+          const visualStatus = repaired ? "PASSED" : status;
+          const screenshotId = repaired
+            ? "shot_123e4567-e89b-42d3-a456-426614174001"
+            : "shot_123e4567-e89b-42d3-a456-426614174000";
           return {
-            id: `val_visual_${status.toLowerCase()}`,
+            id: `val_visual_${status.toLowerCase()}_${validationCount}`,
             role: "DEVOPS_ENGINEER",
             status: "PASSED",
             attempt: 1,
@@ -599,19 +606,19 @@ describe("activity API", () => {
             },
             browserScreenshot: {
               status: "CAPTURED",
-              id: "shot_123e4567-e89b-42d3-a456-426614174000",
+              id: screenshotId,
               url: "http://127.0.0.1:43117/",
               viewport: { width: 1440, height: 900 },
               capturedAt: "2026-08-03T04:00:00.000Z",
             },
             visualReview: {
-              status,
+              status: visualStatus,
               summary:
-                status === "PASSED"
+                visualStatus === "PASSED"
                   ? "Visible requirements look satisfied."
                   : "A visible issue remains.",
               findings:
-                status === "PASSED"
+                visualStatus === "PASSED"
                   ? []
                   : [
                       {
@@ -621,7 +628,7 @@ describe("activity API", () => {
                         description: "Visible content overlaps.",
                       },
                     ],
-              screenshotId: "shot_123e4567-e89b-42d3-a456-426614174000",
+              screenshotId,
               reviewedAt: "2026-08-03T04:00:00.000Z",
             },
           };
@@ -638,10 +645,18 @@ describe("activity API", () => {
       const snapshot = await activitySnapshot(app);
       const visualEvent = snapshot.events.at(-1);
       assert.equal(visualEvent?.type, "VISUAL_REVIEW_COMPLETED");
-      assert.equal(visualEvent?.summary, status === "PASSED" ? "Visual review passed." : "Visual review found 1 issues.");
+      assert.equal(visualEvent?.summary, "Visual review passed.");
       assert.equal(
         snapshot.events.filter((event) => event.type === "VISUAL_REVIEW_COMPLETED").length,
-        1,
+        status === "PASSED" ? 1 : 2,
+      );
+      assert.equal(
+        snapshot.events.some((event) => event.type === "VISUAL_REPAIR_STARTED"),
+        status === "FAILED",
+      );
+      assert.equal(
+        snapshot.events.some((event) => event.type === "VISUAL_REPAIR_COMPLETED"),
+        status === "FAILED",
       );
       assert.equal(JSON.stringify(snapshot).includes("Visible content overlaps"), false);
       assert.equal(JSON.stringify(snapshot).includes("shot_123e4567"), false);

@@ -51,6 +51,7 @@ import type {
   ValidationProfile,
 } from "../validation/types.js";
 import type {
+  DevOpsPublisher,
   DevOpsValidator,
   TaskValidation,
   ValidationCheckName,
@@ -88,31 +89,12 @@ export function createControlledDevOpsValidator({
   browserVerifier = createControlledBrowserVerifier(),
   screenshotCapture = createControlledScreenshotCapture(),
   visualReviewer = createVisualReviewerFromEnv(),
-}: ControlledDevOpsValidatorDependencies): DevOpsValidator {
+}: ControlledDevOpsValidatorDependencies): DevOpsValidator & DevOpsPublisher {
   const runner = injectedRunner ?? createControlledCommandRunner(runnerOptions);
 
   return {
     async validate(task): Promise<TaskValidation> {
-      const project = await projectService.getProject(task.projectId);
-      const repository = findPreparedRepository(
-        preparedRepositories,
-        project.repository.preparedRepositoryId,
-      );
-      const profileId = repository?.validationProfileId;
-      const profile =
-        profileId === undefined
-          ? undefined
-          : findValidationProfile(profiles, profileId);
-
-      if (
-        !repository ||
-        repository.publicRepositoryUrl !== project.repository.publicRepositoryUrl ||
-        !profile ||
-        !isValidRepository(repository) ||
-        !isValidProfile(profile)
-      ) {
-        throw validationFailure();
-      }
+      const { repository, profile } = await resolveValidationContext(task);
 
       const startedAt = now().toISOString();
       const checks = [];
@@ -135,50 +117,6 @@ export function createControlledDevOpsValidator({
           status: "PASSED" as const,
           summary: checkSummary(check.name),
         });
-      }
-
-      const changeEvidence = task.execution?.result.changeEvidence;
-
-      if (changeEvidence === undefined) {
-        logger.error("Controlled validation cannot checkpoint without Git evidence", {
-          taskId: task.id,
-        });
-        throw validationFailure();
-      }
-
-      let checkpoint;
-
-      try {
-        checkpoint = await checkpointService.createCheckpoint({
-          repositoryRoot: repository.localCheckoutPath,
-          taskId: task.id,
-          changeEvidence,
-          existingCheckpoint: task.validation?.checkpoint,
-        });
-      } catch (error) {
-        logger.error("Controlled Git checkpoint failed after validation", {
-          taskId: task.id,
-          cause: describeError(error),
-        });
-        throw validationFailure();
-      }
-
-      let remoteBranch;
-
-      try {
-        remoteBranch = await remotePushService.pushValidatedBranch({
-          repositoryRoot: repository.localCheckoutPath,
-          taskId: task.id,
-          projectRepositoryUrl: project.repository.publicRepositoryUrl,
-          checkpoint,
-          existingRemoteBranch: task.validation?.remoteBranch,
-        });
-      } catch (error) {
-        logger.error("Controlled Git remote push failed after checkpoint", {
-          taskId: task.id,
-          cause: describeError(error),
-        });
-        throw validationFailure();
       }
 
       let browserVerification: BrowserVerificationEvidence | undefined;
@@ -215,13 +153,11 @@ export function createControlledDevOpsValidator({
             profile: browserProfile,
             browserVerification,
             repositoryRoot: repository.localCheckoutPath,
-            existingEvidence: task.validation?.browserScreenshot,
           });
           visualReview = await visualReviewer.review({
             task,
             browserVerification,
             browserScreenshot,
-            existingEvidence: task.validation?.visualReview,
           });
         } catch (error) {
           logger.error("Controlled browser verification failed after validation", {
@@ -250,14 +186,99 @@ export function createControlledDevOpsValidator({
         completedAt: now().toISOString(),
         checks,
         summary: "Controlled validation completed successfully.",
-        checkpoint,
-        remoteBranch,
         ...(browserVerification === undefined ? {} : { browserVerification }),
         ...(browserScreenshot === undefined ? {} : { browserScreenshot }),
         ...(visualReview === undefined ? {} : { visualReview }),
       };
     },
+
+    async publishValidatedTask(task): Promise<TaskValidation> {
+      const { project, repository } = await resolveValidationContext(task);
+
+      if (task.status !== "VALIDATION_COMPLETED" || task.validation?.status !== "PASSED") {
+        throw validationFailure();
+      }
+
+      if (task.validation.visualReview?.status === "FAILED") {
+        throw validationFailure();
+      }
+
+      const changeEvidence = task.execution?.result.changeEvidence;
+
+      if (changeEvidence === undefined) {
+        logger.error("Controlled validation cannot checkpoint without Git evidence", {
+          taskId: task.id,
+        });
+        throw validationFailure();
+      }
+
+      let checkpoint;
+
+      try {
+        checkpoint = await checkpointService.createCheckpoint({
+          repositoryRoot: repository.localCheckoutPath,
+          taskId: task.id,
+          changeEvidence,
+          existingCheckpoint: task.validation.checkpoint,
+        });
+      } catch (error) {
+        logger.error("Controlled Git checkpoint failed after visual approval", {
+          taskId: task.id,
+          cause: describeError(error),
+        });
+        throw validationFailure();
+      }
+
+      let remoteBranch;
+
+      try {
+        remoteBranch = await remotePushService.pushValidatedBranch({
+          repositoryRoot: repository.localCheckoutPath,
+          taskId: task.id,
+          projectRepositoryUrl: project.repository.publicRepositoryUrl,
+          checkpoint,
+          existingRemoteBranch: task.validation.remoteBranch,
+        });
+      } catch (error) {
+        logger.error("Controlled Git remote push failed after checkpoint", {
+          taskId: task.id,
+          cause: describeError(error),
+        });
+        throw validationFailure();
+      }
+
+      return {
+        ...task.validation,
+        checkpoint,
+        remoteBranch,
+      };
+    },
   };
+
+  async function resolveValidationContext(task: { id: string; projectId: string }) {
+    const project = await projectService.getProject(task.projectId);
+    const repository = findPreparedRepository(
+      preparedRepositories,
+      project.repository.preparedRepositoryId,
+    );
+    const profileId = repository?.validationProfileId;
+    const profile =
+      profileId === undefined
+        ? undefined
+        : findValidationProfile(profiles, profileId);
+
+    if (
+      !repository ||
+      repository.publicRepositoryUrl !== project.repository.publicRepositoryUrl ||
+      !profile ||
+      !isValidRepository(repository) ||
+      !isValidProfile(profile)
+    ) {
+      throw validationFailure();
+    }
+
+    return { project, repository, profile };
+  }
 }
 
 function isValidRepository(repository: PreparedRepository): repository is PreparedRepository & {

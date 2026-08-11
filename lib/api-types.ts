@@ -105,6 +105,37 @@ export interface VisualReviewEvidence {
   reviewedAt: string;
 }
 
+export interface VisualRepairAttempt {
+  attempt: number;
+  startedAt: string;
+  completedAt?: string;
+  sourceScreenshotId: string;
+  sourceVisualReview: {
+    status: "FAILED";
+    summary: string;
+    findingCount: number;
+  };
+  developer?: {
+    summary: string;
+    changedFiles: readonly string[];
+  };
+  validation?: {
+    status: "PASSED";
+  };
+  screenshotId?: string;
+  visualReview?: {
+    status: "PASSED" | "FAILED";
+    summary: string;
+    findingCount: number;
+  };
+}
+
+export interface VisualRepairEvidence {
+  maxAttempts: 2;
+  outcome?: "PASSED" | "EXHAUSTED";
+  attempts: readonly VisualRepairAttempt[];
+}
+
 export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
 
 export interface TaskPullRequestEvidence {
@@ -177,6 +208,7 @@ export interface TaskSnapshot {
   planDecision?: PlanDecision;
   execution?: TaskExecution;
   validation?: TaskValidation;
+  visualRepair?: VisualRepairEvidence;
   review?: TaskReview;
   pullRequest?: TaskPullRequestEvidence;
   createdAt: string;
@@ -205,6 +237,9 @@ export type ActivityEventType =
   | "BROWSER_VERIFICATION_COMPLETED"
   | "SCREENSHOT_CAPTURED"
   | "VISUAL_REVIEW_COMPLETED"
+  | "VISUAL_REPAIR_STARTED"
+  | "VISUAL_REPAIR_COMPLETED"
+  | "VISUAL_REPAIR_EXHAUSTED"
   | "PULL_REQUEST_CREATED";
 
 export type ActivityActor =
