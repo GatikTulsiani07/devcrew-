@@ -16,6 +16,9 @@ export type ActivityEventType =
   | "VISUAL_REPAIR_STARTED"
   | "VISUAL_REPAIR_COMPLETED"
   | "VISUAL_REPAIR_EXHAUSTED"
+  | "RETRY_STARTED"
+  | "RETRY_COMPLETED"
+  | "RETRY_EXHAUSTED"
   | "PULL_REQUEST_CREATED";
 
 export type ActivityActor =

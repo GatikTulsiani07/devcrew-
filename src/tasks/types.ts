@@ -31,6 +31,38 @@ export type ReviewStatus = "COMPLETED";
 export type ReviewVerdict = "APPROVED";
 export type ReviewFindingSeverity = "INFO";
 export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
+export type RetryStage =
+  | "DEVELOPER"
+  | "DEVOPS"
+  | "BROWSER"
+  | "SCREENSHOT"
+  | "VISUAL_REVIEW"
+  | "REVIEWER"
+  | "CHECKPOINT"
+  | "REMOTE_PUSH"
+  | "PULL_REQUEST";
+export type RetryFailureCategory =
+  | "PROVIDER_TIMEOUT"
+  | "PROVIDER_NETWORK"
+  | "BROWSER_STARTUP_TRANSIENT"
+  | "LOCALHOST_STARTUP_TIMEOUT"
+  | "GITHUB_TIMEOUT"
+  | "GITHUB_TRANSIENT"
+  | "GIT_PUSH_TRANSIENT"
+  | "UNSAFE_PATH"
+  | "SECURITY_VIOLATION"
+  | "REPOSITORY_MISMATCH"
+  | "INVALID_TASK_STATE"
+  | "INVALID_TRANSITION"
+  | "MALFORMED_AUTHORITATIVE_STATE"
+  | "BRANCH_DIVERGENCE"
+  | "CHECKPOINT_MISMATCH"
+  | "SCREENSHOT_ARTIFACT_MISMATCH"
+  | "VISUAL_REVIEW_FAILED_VERDICT"
+  | "REVIEWER_REJECTED_VERDICT"
+  | "MODEL_OUTPUT_SCHEMA_INVALID"
+  | "UNSUPPORTED_CONFIGURATION"
+  | "UNKNOWN_FAILURE";
 
 export interface TaskPlan {
   summary: string;
@@ -99,6 +131,24 @@ export interface VisualRepairEvidence {
   attempts: readonly VisualRepairAttempt[];
 }
 
+export interface RetryAttemptEvidence {
+  stage: RetryStage;
+  attempt: number;
+  status: "FAILED" | "SUCCEEDED";
+  category: RetryFailureCategory;
+  startedAt: string;
+  completedAt: string;
+  retryable: boolean;
+  summary: string;
+}
+
+export interface RetryRecoveryEvidence {
+  failedStage?: RetryStage;
+  retryAvailable: boolean;
+  exhausted?: boolean;
+  attempts: readonly RetryAttemptEvidence[];
+}
+
 export interface ValidationCheck {
   name: ValidationCheckName;
   status: ValidationCheckStatus;
@@ -160,6 +210,7 @@ export interface TaskSnapshot {
   execution?: TaskExecution;
   validation?: TaskValidation;
   visualRepair?: VisualRepairEvidence;
+  retryRecovery?: RetryRecoveryEvidence;
   review?: TaskReview;
   pullRequest?: TaskPullRequestEvidence;
   createdAt: string;

@@ -7,6 +7,10 @@ import type {
 } from "../browser/browser-types.js";
 import { createScreenshotArtifactStore } from "../browser/screenshot-store.js";
 import { ApplicationError } from "../errors.js";
+import {
+  createRetryStageFailure,
+  RetryStageFailureError,
+} from "../orchestration/retry-orchestrator.js";
 import type { TaskSnapshot } from "../tasks/types.js";
 
 export const VISUAL_REVIEW_MAX_FINDINGS = 8;
@@ -120,7 +124,10 @@ export function createVisualReviewService({
           ),
           pngBytes: artifact.pngBytes,
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof RetryStageFailureError) {
+          throw error;
+        }
         throw visualReviewFailure("visual review provider failed");
       }
 
@@ -254,6 +261,37 @@ function copyVisualReviewEvidence(
 }
 
 export function visualReviewFailure(reason: string): ApplicationError {
-  void reason;
-  return new ApplicationError("INTERNAL_ERROR", 500, "Visual review failed");
+  if (reason === "visual review response is invalid") {
+    return createRetryStageFailure(
+      "VISUAL_REVIEW",
+      "MODEL_OUTPUT_SCHEMA_INVALID",
+      false,
+      "Visual review failed",
+    );
+  }
+
+  if (reason === "visual review is not configured") {
+    return createRetryStageFailure(
+      "VISUAL_REVIEW",
+      "UNSUPPORTED_CONFIGURATION",
+      false,
+      "Visual review failed",
+    );
+  }
+
+  if (reason === "screenshot artifact mismatch") {
+    return createRetryStageFailure(
+      "VISUAL_REVIEW",
+      "SCREENSHOT_ARTIFACT_MISMATCH",
+      false,
+      "Visual review failed",
+    );
+  }
+
+  return createRetryStageFailure(
+    "VISUAL_REVIEW",
+    "UNKNOWN_FAILURE",
+    false,
+    "Visual review failed",
+  );
 }

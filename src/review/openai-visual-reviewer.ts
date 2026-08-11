@@ -3,10 +3,13 @@ import { zodTextFormat } from "openai/helpers/zod";
 
 import { describeError, logger } from "../observability/logger.js";
 import {
+  classifyProviderFailure,
+  RetryStageFailureError,
+} from "../orchestration/retry-orchestrator.js";
+import {
   createUnavailableVisualReviewer,
   createVisualReviewService,
   visualReviewEvidenceSchema,
-  visualReviewFailure,
   type VisualReviewAIClient,
   type VisualReviewContext,
   type VisualReviewer,
@@ -88,7 +91,10 @@ export function createOpenAIVisualReviewClient({
           model,
           cause: describeError(error),
         });
-        throw visualReviewFailure("visual review provider failed");
+        throw new RetryStageFailureError(
+          classifyProviderFailure("VISUAL_REVIEW", error).classification,
+          "Visual review failed",
+        );
       }
     },
   };

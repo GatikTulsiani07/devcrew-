@@ -48,6 +48,9 @@ const eventPresentations: Record<ActivityEventType, EventPresentation> = {
   VISUAL_REPAIR_STARTED: { title: "Visual repair started", tone: "progress" },
   VISUAL_REPAIR_COMPLETED: { title: "Visual repair completed", tone: "success" },
   VISUAL_REPAIR_EXHAUSTED: { title: "Visual repair exhausted", tone: "warning" },
+  RETRY_STARTED: { title: "Retry started", tone: "progress" },
+  RETRY_COMPLETED: { title: "Retry completed", tone: "success" },
+  RETRY_EXHAUSTED: { title: "Retry exhausted", tone: "warning" },
   PULL_REQUEST_CREATED: { title: "Pull request created", tone: "success" },
 };
 

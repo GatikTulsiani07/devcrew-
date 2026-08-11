@@ -6,6 +6,7 @@ import type { DatabaseHealth } from "../src/db/health.js";
 import { InMemoryProjectStore } from "../src/projects/in-memory-project-store.js";
 import { createProjectService } from "../src/projects/project-service.js";
 import type { ProjectService } from "../src/projects/project-service.js";
+import { createRetryStageFailure } from "../src/orchestration/retry-orchestrator.js";
 import type { PreparedRepository } from "../src/repositories/prepared-repositories.js";
 import { createDeterministicDeveloperExecutor } from "../src/tasks/deterministic-developer-executor.js";
 import { createDeterministicDevOpsValidator } from "../src/tasks/deterministic-devops-validator.js";
@@ -17,6 +18,8 @@ import type {
   DeveloperExecutor,
   DevOpsValidator,
   ManagerPlanner,
+  TaskExecution,
+  TaskValidation,
   TaskReviewer,
 } from "../src/tasks/types.js";
 
@@ -219,6 +222,21 @@ async function reviewTask(
 ) {
   return app.request(
     `/api/v1/projects/${projectId}/tasks/${taskId}/review`,
+    {
+      method: "POST",
+      ...init,
+    },
+  );
+}
+
+async function retryTask(
+  app: ReturnType<typeof createTestApp>,
+  projectId = "proj_000001",
+  taskId = "task_000001",
+  init: RequestInit = {},
+) {
+  return app.request(
+    `/api/v1/projects/${projectId}/tasks/${taskId}/retry`,
     {
       method: "POST",
       ...init,
@@ -2250,4 +2268,213 @@ describe("task manager planning API", () => {
     assert.equal(body.includes("SENSITIVE"), false);
     assert.equal(body.includes("stack"), false);
   });
+
+  it("records a retryable Developer failure and retries through the controlled endpoint", async () => {
+    let calls = 0;
+    const developerExecutor: DeveloperExecutor = {
+      async execute(): Promise<TaskExecution> {
+        calls += 1;
+        if (calls === 1) {
+          throw createRetryStageFailure(
+            "DEVELOPER",
+            "PROVIDER_TIMEOUT",
+            true,
+          );
+        }
+
+        return developerExecution("exec_retry");
+      },
+    };
+    const app = createTestApp({
+      developerExecutor,
+      dates: [
+        "2026-08-03T01:00:00.000Z",
+        "2026-08-03T02:00:00.000Z",
+        "2026-08-03T03:00:00.000Z",
+        "2026-08-03T04:00:00.000Z",
+        "2026-08-03T05:00:00.000Z",
+        "2026-08-03T06:00:00.000Z",
+      ],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const failed = await executeTask(app);
+    assert.equal(failed.status, 500);
+
+    const failedTask = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+    assert.equal(failedTask.task.status, "PLAN_APPROVED");
+    assert.equal(failedTask.task.retryRecovery.failedStage, "DEVELOPER");
+    assert.equal(failedTask.task.retryRecovery.retryAvailable, true);
+    assert.equal(failedTask.task.retryRecovery.attempts.length, 1);
+    assert.equal(
+      failedTask.task.retryRecovery.attempts[0].category,
+      "PROVIDER_TIMEOUT",
+    );
+
+    const rejectedBody = await retryTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage: "DEVOPS" }),
+    });
+    assert.equal(rejectedBody.status, 400);
+
+    const retried = await retryTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(retried.status, 200);
+    const body = await retried.json();
+    assert.equal(body.task.status, "IMPLEMENTATION_COMPLETED");
+    assert.equal(body.task.execution.id, "exec_retry");
+    assert.equal(body.task.retryRecovery.retryAvailable, false);
+    assert.equal(body.task.retryRecovery.failedStage, undefined);
+    assert.equal(body.task.retryRecovery.attempts.length, 2);
+    assert.equal(body.task.retryRecovery.attempts[1].status, "SUCCEEDED");
+    assert.equal(calls, 2);
+
+    const duplicate = await retryTask(app);
+    assert.equal(duplicate.status, 409);
+    assert.equal(calls, 2);
+  });
+
+  it("fails closed for non-retryable Developer output failures", async () => {
+    const developerExecutor: DeveloperExecutor = {
+      async execute() {
+        throw createRetryStageFailure(
+          "DEVELOPER",
+          "MODEL_OUTPUT_SCHEMA_INVALID",
+          false,
+        );
+      },
+    };
+    const app = createTestApp({ developerExecutor });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const failed = await executeTask(app);
+    assert.equal(failed.status, 500);
+
+    const task = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+    assert.equal(task.task.retryRecovery.retryAvailable, false);
+    assert.equal(task.task.retryRecovery.exhausted, false);
+    assert.equal(
+      task.task.retryRecovery.attempts[0].category,
+      "MODEL_OUTPUT_SCHEMA_INVALID",
+    );
+
+    const retry = await retryTask(app);
+    assert.equal(retry.status, 409);
+  });
+
+  it("does not create generic retry evidence for a Visual Review FAILED verdict", async () => {
+    const devOpsValidator: DevOpsValidator = {
+      async validate(): Promise<TaskValidation> {
+        return validationWithFailedVisualReview();
+      },
+    };
+    const app = createTestApp({ devOpsValidator });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const validated = await validateTask(app);
+    assert.equal(validated.status, 200);
+    const body = await validated.json();
+    assert.equal(body.task.validation.visualReview.status, "FAILED");
+    assert.equal(body.task.retryRecovery, undefined);
+
+    const retry = await retryTask(app);
+    assert.equal(retry.status, 409);
+  });
+
+  it("marks retry exhausted after the server-owned second attempt fails", async () => {
+    let calls = 0;
+    const taskReviewer: TaskReviewer = {
+      async review() {
+        calls += 1;
+        throw createRetryStageFailure("REVIEWER", "PROVIDER_NETWORK", true);
+      },
+    };
+    const app = createTestApp({ taskReviewer });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    assert.equal((await reviewTask(app)).status, 500);
+    const retried = await retryTask(app);
+    assert.equal(retried.status, 500);
+
+    const task = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+    assert.equal(task.task.retryRecovery.failedStage, "REVIEWER");
+    assert.equal(task.task.retryRecovery.retryAvailable, false);
+    assert.equal(task.task.retryRecovery.exhausted, true);
+    assert.equal(task.task.retryRecovery.attempts.length, 2);
+    assert.equal(task.task.retryRecovery.attempts[0].status, "FAILED");
+    assert.equal(task.task.retryRecovery.attempts[1].status, "FAILED");
+    assert.equal(calls, 2);
+
+    const third = await retryTask(app);
+    assert.equal(third.status, 409);
+    assert.equal(calls, 2);
+  });
 });
+
+function developerExecution(id: string): TaskExecution {
+  return {
+    id,
+    role: "FULL_STACK_DEVELOPER",
+    status: "COMPLETED",
+    attempt: 1,
+    startedAt: "2026-08-03T03:00:00.000Z",
+    completedAt: "2026-08-03T03:01:00.000Z",
+    result: {
+      summary: "Implemented retry-safe change.",
+      changedFiles: ["src/app.ts"],
+      verification: ["npm test"],
+    },
+  };
+}
+
+function validationWithFailedVisualReview(): TaskValidation {
+  return {
+    id: "val_visual_failed",
+    role: "DEVOPS_ENGINEER",
+    status: "PASSED",
+    attempt: 1,
+    startedAt: "2026-08-03T04:00:00.000Z",
+    completedAt: "2026-08-03T04:01:00.000Z",
+    checks: [
+      {
+        name: "typecheck",
+        status: "PASSED",
+        summary: "Type checking completed successfully.",
+      },
+    ],
+    summary: "Validation passed with visual findings.",
+    visualReview: {
+      status: "FAILED",
+      summary: "The requested UI is visibly incomplete.",
+      findings: [
+        {
+          severity: "ERROR",
+          category: "missing-element",
+          title: "Panel missing",
+          description: "The required panel is not visible.",
+        },
+      ],
+      screenshotId: "shot_missing_panel",
+      reviewedAt: "2026-08-03T04:01:00.000Z",
+    },
+  };
+}

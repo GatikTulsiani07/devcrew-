@@ -4,8 +4,11 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 
-import { ApplicationError } from "../errors.js";
 import { describeError, logger } from "../observability/logger.js";
+import {
+  classifyProviderFailure,
+  createRetryStageFailure,
+} from "../orchestration/retry-orchestrator.js";
 import type { ProjectSnapshot } from "../projects/types.js";
 import { createDeterministicReviewer } from "./deterministic-reviewer.js";
 import type {
@@ -100,7 +103,7 @@ export function createOpenAIReviewer({
           model,
           cause: describeError(error),
         });
-        throw sanitizedReviewerError();
+        throw classifyProviderFailure("REVIEWER", error);
       }
 
       const parsed = reviewerResponseSchema.safeParse(output);
@@ -111,7 +114,11 @@ export function createOpenAIReviewer({
           reason: parsed.success ? "unsafe_output" : "schema_validation_failed",
           ...(parsed.success ? {} : { issues: parsed.error.issues }),
         });
-        throw sanitizedReviewerError();
+        throw createRetryStageFailure(
+          "REVIEWER",
+          parsed.success ? "SECURITY_VIOLATION" : "MODEL_OUTPUT_SCHEMA_INVALID",
+          false,
+        );
       }
 
       return {
@@ -237,13 +244,5 @@ function containsUnsafeOutput(response: ReviewerResponse | undefined): boolean {
       "git status",
       "child_process",
     ].some((unsafePattern) => value.includes(unsafePattern)),
-  );
-}
-
-function sanitizedReviewerError(): ApplicationError {
-  return new ApplicationError(
-    "INTERNAL_ERROR",
-    500,
-    "An unexpected error occurred",
   );
 }

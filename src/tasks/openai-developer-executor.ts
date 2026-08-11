@@ -4,8 +4,11 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 
-import { ApplicationError } from "../errors.js";
 import { describeError, logger } from "../observability/logger.js";
+import {
+  classifyProviderFailure,
+  createRetryStageFailure,
+} from "../orchestration/retry-orchestrator.js";
 import { createDeterministicDeveloperExecutor } from "./deterministic-developer-executor.js";
 import type {
   DeveloperExecutionInput,
@@ -105,7 +108,7 @@ export function createOpenAIDeveloperExecutor({
           model,
           cause: describeError(error),
         });
-        throw sanitizedDeveloperError();
+        throw classifyProviderFailure("DEVELOPER", error);
       }
 
       const parsed = developerResponseSchema.safeParse(output);
@@ -115,21 +118,25 @@ export function createOpenAIDeveloperExecutor({
           model,
           issues: parsed.error.issues,
         });
-        throw sanitizedDeveloperError();
+        throw createRetryStageFailure(
+          "DEVELOPER",
+          "MODEL_OUTPUT_SCHEMA_INVALID",
+          false,
+        );
       }
 
       if (parsed.data.changedFiles.some((file) => isLocalPath(file.path))) {
         logger.error("Developer execution proposed an unsafe local path", {
           model,
         });
-        throw sanitizedDeveloperError();
+        throw createRetryStageFailure("DEVELOPER", "UNSAFE_PATH", false);
       }
 
       if (containsUnsafeOutput(parsed.data)) {
         logger.error("Developer execution returned unsafe output", {
           model,
         });
-        throw sanitizedDeveloperError();
+        throw createRetryStageFailure("DEVELOPER", "SECURITY_VIOLATION", false);
       }
 
       return {
@@ -242,14 +249,6 @@ function toImplementationResult(response: DeveloperResponse): ImplementationResu
       ...response.notes.map((note) => `Note: ${note}`),
     ],
   };
-}
-
-function sanitizedDeveloperError(): ApplicationError {
-  return new ApplicationError(
-    "INTERNAL_ERROR",
-    500,
-    "An unexpected error occurred",
-  );
 }
 
 function isLocalPath(value: string): boolean {
