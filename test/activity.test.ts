@@ -15,6 +15,7 @@ import {
   createProjectService,
   type ProjectService,
 } from "../src/projects/project-service.js";
+import { createRetryStageFailure } from "../src/orchestration/retry-orchestrator.js";
 import type { PreparedRepository } from "../src/repositories/prepared-repositories.js";
 import { createDeterministicDeveloperExecutor } from "../src/tasks/deterministic-developer-executor.js";
 import { createDeterministicDevOpsValidator } from "../src/tasks/deterministic-devops-validator.js";
@@ -25,6 +26,7 @@ import { createTaskService } from "../src/tasks/task-service.js";
 import type {
   DeveloperExecutor,
   DevOpsValidator,
+  TaskReview,
   TaskReviewer,
 } from "../src/tasks/types.js";
 
@@ -217,6 +219,14 @@ async function validateTask(app: ReturnType<typeof createTestApp>["app"]) {
 async function reviewTask(app: ReturnType<typeof createTestApp>["app"]) {
   return app.request("/api/v1/projects/proj_000001/tasks/task_000001/review", {
     method: "POST",
+  });
+}
+
+async function retryTask(app: ReturnType<typeof createTestApp>["app"]) {
+  return app.request("/api/v1/projects/proj_000001/tasks/task_000001/retry", {
+    method: "POST",
+    body: JSON.stringify({}),
+    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -477,6 +487,59 @@ describe("activity API", () => {
       ],
     );
     assert.equal((await taskResponse.json()).task.status, "VALIDATION_COMPLETED");
+  });
+
+  it("appends retry lifecycle events once for controlled retry success", async () => {
+    let calls = 0;
+    const taskReviewer: TaskReviewer = {
+      async review(): Promise<TaskReview> {
+        calls += 1;
+        if (calls === 1) {
+          throw createRetryStageFailure("REVIEWER", "PROVIDER_TIMEOUT", true);
+        }
+
+        return {
+          id: "review_retry",
+          role: "REVIEWER",
+          status: "COMPLETED",
+          verdict: "APPROVED",
+          attempt: 1,
+          startedAt: "2026-08-03T05:00:00.000Z",
+          completedAt: "2026-08-03T05:01:00.000Z",
+          summary: "Review recovered after retry.",
+          findings: [
+            {
+              severity: "INFO",
+              title: "Recovered",
+              description: "Reviewer provider retry succeeded.",
+            },
+          ],
+        };
+      },
+    };
+    const { app } = createTestApp({ taskReviewer });
+
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await approvePlan(app)).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 500);
+    assert.equal((await retryTask(app)).status, 200);
+    assert.equal((await retryTask(app)).status, 409);
+
+    const snapshot = await activitySnapshot(app);
+    assert.deepEqual(
+      snapshot.events
+        .filter((event) => event.type.startsWith("RETRY_"))
+        .map((event) => event.type),
+      ["RETRY_STARTED", "RETRY_COMPLETED"],
+    );
+    assert.equal(
+      snapshot.events.some((event) => event.type === "RETRY_EXHAUSTED"),
+      false,
+    );
+    assert.equal(calls, 2);
   });
 
   it("appends SCREENSHOT_CAPTURED once when validation includes screenshot evidence", async () => {

@@ -92,6 +92,10 @@ export class ApiClient {
     return this.taskAction(projectId, taskId, "review");
   }
 
+  retryTask(projectId: string, taskId: string): Promise<TaskSnapshot> {
+    return this.taskAction(projectId, taskId, "retry");
+  }
+
   getActivitySnapshot(projectId: string, after?: number): Promise<ActivitySnapshot> {
     const search = after === undefined ? "" : `?after=${encodeURIComponent(String(after))}`;
     return this.requestJson<ActivitySnapshot>(
@@ -134,7 +138,7 @@ export class ApiClient {
   private taskAction(
     projectId: string,
     taskId: string,
-    action: "execute" | "validate" | "review",
+    action: "execute" | "validate" | "review" | "retry",
   ): Promise<TaskSnapshot> {
     return this.requestWrapped<TaskSnapshot>(
       "task",

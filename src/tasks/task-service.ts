@@ -10,6 +10,10 @@ import type { GitChangeEvidence } from "../repositories/git-inspector.js";
 import {
   createVisualRepairOrchestrator,
 } from "../orchestration/visual-repair-orchestrator.js";
+import {
+  createRetryOrchestrator,
+  sanitizeStageError,
+} from "../orchestration/retry-orchestrator.js";
 import type {
   CreateTaskInput,
   DeveloperExecutor,
@@ -17,6 +21,7 @@ import type {
   DevOpsValidator,
   ManagerPlanner,
   PlanDecisionInput,
+  RetryStage,
   TaskPullRequestCreator,
   TaskReviewer,
   TaskSnapshot,
@@ -53,6 +58,7 @@ export interface TaskService {
   executeTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   validateTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   reviewTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
+  retryTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   createPullRequest(projectId: string, taskId: string): Promise<TaskSnapshot>;
 }
 
@@ -68,6 +74,13 @@ export function createTaskService({
   now = () => new Date(),
   activityService = createNoopActivityService(),
 }: TaskServiceDependencies): TaskService {
+  const retryOrchestrator = createRetryOrchestrator({
+    store,
+    now,
+    activityService,
+    runStage: retryStage,
+  });
+
   return {
     async createTask(projectId, input) {
       const project = await projectService.getProject(projectId);
@@ -179,28 +192,15 @@ export function createTaskService({
         );
       }
 
-      const execution = await developerExecutor.execute({
-        project,
-        task: copyTask(task),
-      });
-      const timestamp = now().toISOString();
-      const updatedTask: TaskSnapshot = {
-        ...copyTask(task),
-        status: "IMPLEMENTATION_COMPLETED",
-        execution,
-        updatedAt: timestamp,
-      };
+      assertNoPendingRetry(task);
 
-      const executedTask = copyTask(await store.update(updatedTask));
-      await activityService.append({
-        projectId,
-        taskId,
-        type: "IMPLEMENTATION_COMPLETED",
-        actor: { kind: "AGENT", role: "FULL_STACK_DEVELOPER" },
-        summary: "Full Stack Developer completed implementation.",
-      });
-
-      return executedTask;
+      try {
+        return await runDeveloperStage(project, task);
+      } catch (error) {
+        const latest = await latestTaskOr(task);
+        await retryOrchestrator.recordFailure(latest, "DEVELOPER", error);
+        throw sanitizeStageError("DEVELOPER");
+      }
     },
 
     async validateTask(projectId, taskId) {
@@ -223,28 +223,15 @@ export function createTaskService({
         );
       }
 
-      const validation = await devOpsValidator.validate(copyTask(task));
-      const timestamp = now().toISOString();
-      const updatedTask: TaskSnapshot = {
-        ...copyTask(task),
-        status: "VALIDATION_COMPLETED",
-        validation,
-        updatedAt: timestamp,
-      };
+      assertNoPendingRetry(task);
 
-      const validatedTask = copyTask(await store.update(updatedTask));
-      await appendValidationActivity(projectId, taskId, validation);
-
-      const repairedTask = await createVisualRepairOrchestrator({
-        project,
-        developerExecutor,
-        devOpsValidator,
-        store,
-        now,
-        activityService,
-      }).repairIfRequired(validatedTask);
-
-      return maybePublishValidatedTask(repairedTask);
+      try {
+        return await runValidationWorkflow(project, task);
+      } catch (error) {
+        const latest = await latestTaskOr(task);
+        await retryOrchestrator.recordFailure(latest, "DEVOPS", error);
+        throw sanitizeStageError("DEVOPS");
+      }
     },
 
     async reviewTask(projectId, taskId) {
@@ -275,25 +262,27 @@ export function createTaskService({
         );
       }
 
-      const review = await taskReviewer.review(copyTask(task), project);
-      const timestamp = now().toISOString();
-      const updatedTask: TaskSnapshot = {
-        ...copyTask(task),
-        status: "REVIEW_COMPLETED",
-        review,
-        updatedAt: timestamp,
-      };
+      assertNoPendingRetry(task);
 
-      const reviewedTask = copyTask(await store.update(updatedTask));
-      await activityService.append({
-        projectId,
-        taskId,
-        type: "REVIEW_COMPLETED",
-        actor: { kind: "AGENT", role: "REVIEWER" },
-        summary: "Reviewer approved the completed work.",
-      });
+      try {
+        return await runReviewerStage(project, task);
+      } catch (error) {
+        const latest = await latestTaskOr(task);
+        await retryOrchestrator.recordFailure(latest, "REVIEWER", error);
+        throw sanitizeStageError("REVIEWER");
+      }
+    },
 
-      return reviewedTask;
+    async retryTask(projectId, taskId) {
+      await projectService.getProject(projectId);
+
+      const task = await store.findByProjectAndId(projectId, taskId);
+
+      if (task === undefined) {
+        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
+      }
+
+      return retryOrchestrator.retry(copyTask(task));
     },
 
     async createPullRequest(projectId, taskId) {
@@ -305,45 +294,165 @@ export function createTaskService({
         throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
       }
 
-      const result = await pullRequestCreator.createPullRequest({
-        project,
-        task: copyTask(task),
-      });
+      assertNoPendingRetry(task);
 
-      if (task.pullRequest !== undefined) {
-        return copyTask(task);
+      try {
+        return await runPullRequestStage(project, task);
+      } catch (error) {
+        const latest = await latestTaskOr(task);
+        await retryOrchestrator.recordFailure(latest, "PULL_REQUEST", error);
+        throw sanitizeStageError("PULL_REQUEST");
       }
-
-      const timestamp = now().toISOString();
-      const updatedTask: TaskSnapshot = {
-        ...copyTask(task),
-        pullRequest: {
-          number: result.evidence.number,
-          url: result.evidence.url,
-          state: result.evidence.state,
-          headBranch: result.evidence.headBranch,
-          baseBranch: result.evidence.baseBranch,
-          commitSha: result.evidence.commitSha,
-          createdAt: result.evidence.createdAt,
-        },
-        updatedAt: timestamp,
-      };
-
-      const taskWithPullRequest = copyTask(await store.update(updatedTask));
-
-      if (result.created) {
-        await activityService.append({
-          projectId,
-          taskId,
-          type: "PULL_REQUEST_CREATED",
-          actor: { kind: "SYSTEM" },
-          summary: `Pull request #${result.evidence.number} created.`,
-        });
-      }
-
-      return taskWithPullRequest;
     },
   };
+
+  async function retryStage(
+    stage: RetryStage,
+    task: TaskSnapshot,
+  ): Promise<TaskSnapshot> {
+    const project = await projectService.getProject(task.projectId);
+
+    switch (stage) {
+      case "DEVELOPER":
+        return runDeveloperStage(project, task);
+      case "DEVOPS":
+      case "BROWSER":
+      case "SCREENSHOT":
+      case "VISUAL_REVIEW":
+        return runValidationWorkflow(project, task);
+      case "CHECKPOINT":
+      case "REMOTE_PUSH":
+        return maybePublishValidatedTask(task);
+      case "REVIEWER":
+        return runReviewerStage(project, task);
+      case "PULL_REQUEST":
+        return runPullRequestStage(project, task);
+    }
+  }
+
+  async function runDeveloperStage(
+    project: Awaited<ReturnType<ProjectService["getProject"]>>,
+    task: TaskSnapshot,
+  ): Promise<TaskSnapshot> {
+    const execution = await developerExecutor.execute({
+      project,
+      task: copyTask(task),
+    });
+    const timestamp = now().toISOString();
+    const updatedTask: TaskSnapshot = {
+      ...copyTask(task),
+      status: "IMPLEMENTATION_COMPLETED",
+      execution,
+      updatedAt: timestamp,
+    };
+
+    const executedTask = copyTask(await store.update(updatedTask));
+    await activityService.append({
+      projectId: task.projectId,
+      taskId: task.id,
+      type: "IMPLEMENTATION_COMPLETED",
+      actor: { kind: "AGENT", role: "FULL_STACK_DEVELOPER" },
+      summary: "Full Stack Developer completed implementation.",
+    });
+
+    return executedTask;
+  }
+
+  async function runValidationWorkflow(
+    project: Awaited<ReturnType<ProjectService["getProject"]>>,
+    task: TaskSnapshot,
+  ): Promise<TaskSnapshot> {
+    const validation = await devOpsValidator.validate(copyTask(task));
+    const timestamp = now().toISOString();
+    const updatedTask: TaskSnapshot = {
+      ...copyTask(task),
+      status: "VALIDATION_COMPLETED",
+      validation,
+      updatedAt: timestamp,
+    };
+
+    const validatedTask = copyTask(await store.update(updatedTask));
+    await appendValidationActivity(task.projectId, task.id, validation);
+
+    const repairedTask = await createVisualRepairOrchestrator({
+      project,
+      developerExecutor,
+      devOpsValidator,
+      store,
+      now,
+      activityService,
+    }).repairIfRequired(validatedTask);
+
+    return maybePublishValidatedTask(repairedTask);
+  }
+
+  async function runReviewerStage(
+    project: Awaited<ReturnType<ProjectService["getProject"]>>,
+    task: TaskSnapshot,
+  ): Promise<TaskSnapshot> {
+    const review = await taskReviewer.review(copyTask(task), project);
+    const timestamp = now().toISOString();
+    const updatedTask: TaskSnapshot = {
+      ...copyTask(task),
+      status: "REVIEW_COMPLETED",
+      review,
+      updatedAt: timestamp,
+    };
+
+    const reviewedTask = copyTask(await store.update(updatedTask));
+    await activityService.append({
+      projectId: task.projectId,
+      taskId: task.id,
+      type: "REVIEW_COMPLETED",
+      actor: { kind: "AGENT", role: "REVIEWER" },
+      summary: "Reviewer approved the completed work.",
+    });
+
+    return reviewedTask;
+  }
+
+  async function runPullRequestStage(
+    project: Awaited<ReturnType<ProjectService["getProject"]>>,
+    task: TaskSnapshot,
+  ): Promise<TaskSnapshot> {
+    const result = await pullRequestCreator.createPullRequest({
+      project,
+      task: copyTask(task),
+    });
+
+    if (task.pullRequest !== undefined) {
+      return copyTask(task);
+    }
+
+    const timestamp = now().toISOString();
+    const updatedTask: TaskSnapshot = {
+      ...copyTask(task),
+      pullRequest: {
+        number: result.evidence.number,
+        url: result.evidence.url,
+        state: result.evidence.state,
+        headBranch: result.evidence.headBranch,
+        baseBranch: result.evidence.baseBranch,
+        commitSha: result.evidence.commitSha,
+        createdAt: result.evidence.createdAt,
+      },
+      updatedAt: timestamp,
+    };
+
+    const taskWithPullRequest = copyTask(await store.update(updatedTask));
+
+    if (result.created) {
+      await activityService.append({
+        projectId: task.projectId,
+        taskId: task.id,
+        type: "PULL_REQUEST_CREATED",
+        actor: { kind: "SYSTEM" },
+        summary: `Pull request #${result.evidence.number} created.`,
+      });
+    }
+
+    return taskWithPullRequest;
+  }
 
   async function maybePublishValidatedTask(
     task: TaskSnapshot,
@@ -370,6 +479,12 @@ export function createTaskService({
         validation,
         updatedAt: timestamp,
       }),
+    );
+  }
+
+  async function latestTaskOr(task: TaskSnapshot): Promise<TaskSnapshot> {
+    return (
+      (await store.findByProjectAndId(task.projectId, task.id)) ?? copyTask(task)
     );
   }
 
@@ -420,6 +535,16 @@ export function createTaskService({
             : `Visual review found ${validation.visualReview.findings.length} issues.`,
       });
     }
+  }
+}
+
+function assertNoPendingRetry(task: TaskSnapshot): void {
+  if (task.retryRecovery?.failedStage !== undefined) {
+    throw new ApplicationError(
+      "INVALID_TASK_TRANSITION",
+      409,
+      "Task has an unresolved controlled retry state",
+    );
   }
 }
 
@@ -623,6 +748,29 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                       findingCount: attempt.visualReview.findingCount,
                     },
                   }),
+            })),
+          },
+        }),
+    ...(task.retryRecovery === undefined
+      ? {}
+      : {
+          retryRecovery: {
+            ...(task.retryRecovery.failedStage === undefined
+              ? {}
+              : { failedStage: task.retryRecovery.failedStage }),
+            retryAvailable: task.retryRecovery.retryAvailable,
+            ...(task.retryRecovery.exhausted === undefined
+              ? {}
+              : { exhausted: task.retryRecovery.exhausted }),
+            attempts: task.retryRecovery.attempts.map((attempt) => ({
+              stage: attempt.stage,
+              attempt: attempt.attempt,
+              status: attempt.status,
+              category: attempt.category,
+              startedAt: attempt.startedAt,
+              completedAt: attempt.completedAt,
+              retryable: attempt.retryable,
+              summary: attempt.summary,
             })),
           },
         }),

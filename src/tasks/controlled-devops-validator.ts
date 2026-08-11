@@ -4,6 +4,10 @@ import { isAbsolute } from "node:path";
 import { ApplicationError } from "../errors.js";
 import { describeError, logger } from "../observability/logger.js";
 import {
+  classifyRetryFailure,
+  createRetryStageFailure,
+} from "../orchestration/retry-orchestrator.js";
+import {
   browserVerificationProfiles,
   createControlledDevServer,
   type ControlledDevServerDependencies,
@@ -133,7 +137,12 @@ export function createControlledDevOpsValidator({
           logger.error("Controlled browser verification profile is unsupported", {
             taskId: task.id,
           });
-          throw validationFailure();
+          throw createRetryStageFailure(
+            "BROWSER",
+            "UNSUPPORTED_CONFIGURATION",
+            false,
+            "Validation failed",
+          );
         }
 
         let server;
@@ -164,7 +173,7 @@ export function createControlledDevOpsValidator({
             taskId: task.id,
             cause: describeError(error),
           });
-          throw validationFailure();
+          throw toStageFailure("BROWSER", error);
         } finally {
           if (server !== undefined) {
             await server.stop().catch((error: unknown) => {
@@ -226,7 +235,7 @@ export function createControlledDevOpsValidator({
           taskId: task.id,
           cause: describeError(error),
         });
-        throw validationFailure();
+        throw toStageFailure("CHECKPOINT", error);
       }
 
       let remoteBranch;
@@ -244,7 +253,7 @@ export function createControlledDevOpsValidator({
           taskId: task.id,
           cause: describeError(error),
         });
-        throw validationFailure();
+        throw toStageFailure("REMOTE_PUSH", error);
       }
 
       return {
@@ -326,4 +335,17 @@ function checkSummary(name: string): string {
 
 function validationFailure(): ApplicationError {
   return new ApplicationError("INTERNAL_ERROR", 500, "Validation failed");
+}
+
+function toStageFailure(
+  fallbackStage: Parameters<typeof classifyRetryFailure>[1],
+  error: unknown,
+): ApplicationError {
+  const classification = classifyRetryFailure(error, fallbackStage);
+  return createRetryStageFailure(
+    classification.stage,
+    classification.category,
+    classification.retryable,
+    "Validation failed",
+  );
 }
