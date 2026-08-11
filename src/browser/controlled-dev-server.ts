@@ -2,6 +2,10 @@ import { spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
 
 import { describeError, logger } from "../observability/logger.js";
+import {
+  isTaskCancellationError,
+  throwIfSignalCancelled,
+} from "../tasks/task-cancellation.js";
 import type {
   BrowserVerificationProfile,
   ControlledDevServer,
@@ -58,6 +62,7 @@ export function createControlledDevServer({
 }: ControlledDevServerDependencies = {}): ControlledDevServer {
   return {
     async start(input) {
+      throwIfSignalCancelled(input.signal);
       const profile = resolveProfile(profiles, input.profileId);
 
       if (!isAbsolute(input.repositoryRoot)) {
@@ -91,6 +96,7 @@ export function createControlledDevServer({
           timeoutMs: profile.startupTimeoutMs,
           pollIntervalMs: profile.pollIntervalMs,
           monitor,
+          signal: input.signal,
         });
       } catch (error) {
         await stopOwnedProcess(child, profile.shutdownTimeoutMs).catch(
@@ -103,6 +109,10 @@ export function createControlledDevServer({
         );
 
         if (error instanceof ControlledDevServerError) {
+          throw error;
+        }
+
+        if (isTaskCancellationError(error)) {
           throw error;
         }
 
@@ -187,16 +197,19 @@ async function waitForReadiness({
   timeoutMs,
   pollIntervalMs,
   monitor,
+  signal,
 }: {
   url: string;
   fetchImpl: typeof fetch;
   timeoutMs: number;
   pollIntervalMs: number;
   monitor: { exited(): boolean; outputLimitExceeded(): boolean };
+  signal?: AbortSignal;
 }): Promise<void> {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt <= timeoutMs) {
+    throwIfSignalCancelled(signal);
     if (monitor.exited()) {
       throw new ControlledDevServerError("server exited before readiness");
     }
@@ -209,17 +222,18 @@ async function waitForReadiness({
       const response = await fetchImpl(url, {
         method: "GET",
         redirect: "manual",
-        signal: AbortSignal.timeout(Math.min(1_000, pollIntervalMs)),
+        signal: timeoutOrCancellationSignal(Math.min(1_000, pollIntervalMs), signal),
       });
 
       if (response.ok) {
         return;
       }
     } catch {
+      throwIfSignalCancelled(signal);
       // The server is expected to refuse connections until it is ready.
     }
 
-    await delay(pollIntervalMs);
+    await delay(pollIntervalMs, signal);
   }
 
   throw new ControlledDevServerError("server startup timed out");
@@ -255,6 +269,50 @@ async function stopOwnedProcess(
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfSignalCancelled(signal);
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      cleanup();
+      reject(signal?.reason ?? new Error("Operation cancelled"));
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function timeoutOrCancellationSignal(
+  ms: number,
+  signal?: AbortSignal,
+): AbortSignal {
+  if (signal === undefined) {
+    return AbortSignal.timeout(ms);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ms);
+  const onAbort = () => {
+    clearTimeout(timeout);
+    controller.abort(signal.reason);
+  };
+
+  signal.addEventListener("abort", onAbort, { once: true });
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+    },
+    { once: true },
+  );
+  return controller.signal;
 }

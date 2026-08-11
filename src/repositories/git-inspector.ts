@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
 
 import { describeError, logger } from "../observability/logger.js";
+import { TaskCancellationError, throwIfSignalCancelled } from "../tasks/task-cancellation.js";
 
 export type GitFileStatus =
   | "ADDED"
@@ -39,7 +40,11 @@ export interface GitCommandResult {
 }
 
 export interface GitCommandRunner {
-  run(args: readonly string[], cwd: string): Promise<GitCommandResult>;
+  run(
+    args: readonly string[],
+    cwd: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<GitCommandResult>;
 }
 
 export interface GitInspector {
@@ -105,8 +110,15 @@ export function createControlledGitCommandRunner({
   maxOutputBytes?: number;
 } = {}): GitCommandRunner {
   return {
-    run(args, cwd) {
-      return new Promise((resolve) => {
+    run(args, cwd, options = {}) {
+      return new Promise((resolve, reject) => {
+        try {
+          throwIfSignalCancelled(options.signal);
+        } catch (error) {
+          reject(error);
+          return;
+        }
+
         if (!isAbsolute(cwd)) {
           resolve(failedCommand());
           return;
@@ -141,6 +153,8 @@ export function createControlledGitCommandRunner({
         let outputLimitExceeded = false;
         let timedOut = false;
         let settled = false;
+        let cancellationRequested = false;
+        let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 
         child.stdout?.on("data", (chunk: Buffer) => {
           const remaining = maxOutputBytes - stdout.length;
@@ -163,6 +177,16 @@ export function createControlledGitCommandRunner({
           }
           settled = true;
           clearTimeout(timeout);
+          if (forceKillTimer !== undefined) {
+            clearTimeout(forceKillTimer);
+          }
+          options.signal?.removeEventListener("abort", abortOwnedChild);
+
+          if (cancellationRequested) {
+            reject(new TaskCancellationError());
+            return;
+          }
+
           resolve({
             stdout: stdout.toString("utf8"),
             exitCode,
@@ -177,8 +201,23 @@ export function createControlledGitCommandRunner({
           child.kill("SIGKILL");
         }, timeoutMs);
 
+        const abortOwnedChild = () => {
+          if (settled) {
+            return;
+          }
+
+          cancellationRequested = true;
+          child.kill("SIGTERM");
+          forceKillTimer = setTimeout(() => {
+            if (!settled) {
+              child.kill("SIGKILL");
+            }
+          }, 500);
+        };
+
         child.once("error", () => finish(null, false));
         child.once("close", (exitCode) => finish(exitCode, true));
+        options.signal?.addEventListener("abort", abortOwnedChild, { once: true });
       });
     },
   };

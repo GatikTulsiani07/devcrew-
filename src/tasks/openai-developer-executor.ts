@@ -9,6 +9,10 @@ import {
   classifyProviderFailure,
   createRetryStageFailure,
 } from "../orchestration/retry-orchestrator.js";
+import {
+  isTaskCancellationError,
+  throwIfSignalCancelled,
+} from "./task-cancellation.js";
 import { createDeterministicDeveloperExecutor } from "./deterministic-developer-executor.js";
 import type {
   DeveloperExecutionInput,
@@ -42,6 +46,7 @@ export type ExecutionClock = () => Date;
 export interface OpenAIDeveloperResponses {
   parse(
     params: Parameters<OpenAI["responses"]["parse"]>[0],
+    options?: { signal?: AbortSignal },
   ): Promise<{ output_parsed: unknown }>;
 }
 
@@ -75,35 +80,43 @@ export function createOpenAIDeveloperExecutor({
       const startedAt = now().toISOString();
       let output: unknown;
 
+      throwIfSignalCancelled(input.signal);
       try {
-        const response = await openaiClient.responses.parse({
-          model,
-          input: [
-            {
-              role: "system",
-              content: [
-                "You are Devcrew's Full Stack Developer agent.",
-                "Generate a structured implementation proposal only.",
-                "Do not claim files were modified, commands were executed, or tests were run.",
-                "Do not request local filesystem access, shell execution, Git operations, or Codex CLI.",
-                "Return only schema-compliant structured output.",
-              ].join(" "),
+        const response = await openaiClient.responses.parse(
+          {
+            model,
+            input: [
+              {
+                role: "system",
+                content: [
+                  "You are Devcrew's Full Stack Developer agent.",
+                  "Generate a structured implementation proposal only.",
+                  "Do not claim files were modified, commands were executed, or tests were run.",
+                  "Do not request local filesystem access, shell execution, Git operations, or Codex CLI.",
+                  "Return only schema-compliant structured output.",
+                ].join(" "),
+              },
+              {
+                role: "user",
+                content: buildDeveloperPrompt(input),
+              },
+            ],
+            text: {
+              format: zodTextFormat(
+                developerResponseSchema,
+                "developer_implementation_proposal",
+              ),
             },
-            {
-              role: "user",
-              content: buildDeveloperPrompt(input),
-            },
-          ],
-          text: {
-            format: zodTextFormat(
-              developerResponseSchema,
-              "developer_implementation_proposal",
-            ),
           },
-        });
+          { signal: input.signal },
+        );
+        throwIfSignalCancelled(input.signal);
 
         output = response.output_parsed;
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          throw error;
+        }
         logger.error("Developer execution request failed", {
           model,
           cause: describeError(error),
@@ -112,6 +125,7 @@ export function createOpenAIDeveloperExecutor({
       }
 
       const parsed = developerResponseSchema.safeParse(output);
+      throwIfSignalCancelled(input.signal);
 
       if (!parsed.success) {
         logger.error("Developer execution returned an invalid response", {

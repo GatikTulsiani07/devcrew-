@@ -8,6 +8,7 @@ import {
   type OpenAIVisualReviewClient,
 } from "../src/review/openai-visual-reviewer.js";
 import type { VisualReviewContext } from "../src/review/visual-reviewer.js";
+import { TaskCancellationError } from "../src/tasks/task-cancellation.js";
 
 const pngBytes = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00,
@@ -129,6 +130,28 @@ describe("OpenAI visual reviewer", () => {
           !String(error).includes("sk-live-secret"),
       );
     }
+  });
+
+  it("passes AbortSignal to the provider and preserves cancellation", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const reviewer = createOpenAIVisualReviewClient({
+      apiKey: "sk-test-secret",
+      client: {
+        responses: {
+          async parse(_request, options) {
+            receivedSignal = options?.signal;
+            throw new TaskCancellationError();
+          },
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => reviewer.analyze({ context, pngBytes, signal: controller.signal }),
+      { name: "TaskCancellationError" },
+    );
+    assert.equal(receivedSignal, controller.signal);
   });
 
   it("fails closed when no OpenAI API key is configured", async () => {

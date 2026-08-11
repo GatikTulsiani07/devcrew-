@@ -147,6 +147,8 @@ export type RetryStage =
   | "REMOTE_PUSH"
   | "PULL_REQUEST";
 
+export type CancellationStage = RetryStage | "RETRY_WAIT";
+
 export type RetryFailureCategory =
   | "PROVIDER_TIMEOUT"
   | "PROVIDER_NETWORK"
@@ -186,6 +188,14 @@ export interface RetryRecoveryEvidence {
   retryAvailable: boolean;
   exhausted?: boolean;
   attempts: readonly RetryAttemptEvidence[];
+}
+
+export interface TaskCancellationEvidence {
+  status: "REQUESTED" | "CANCELLED" | "FAILED";
+  requestedAt: string;
+  cancelledAt?: string;
+  stage?: CancellationStage;
+  summary?: string;
 }
 
 export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
@@ -262,6 +272,7 @@ export interface TaskSnapshot {
   validation?: TaskValidation;
   visualRepair?: VisualRepairEvidence;
   retryRecovery?: RetryRecoveryEvidence;
+  cancellation?: TaskCancellationEvidence;
   review?: TaskReview;
   pullRequest?: TaskPullRequestEvidence;
   createdAt: string;
@@ -296,6 +307,7 @@ export type ActivityEventType =
   | "RETRY_STARTED"
   | "RETRY_COMPLETED"
   | "RETRY_EXHAUSTED"
+  | "TASK_CANCELLED"
   | "PULL_REQUEST_CREATED";
 
 export type ActivityActor =

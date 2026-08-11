@@ -11,6 +11,10 @@ import {
   createRetryStageFailure,
   RetryStageFailureError,
 } from "../orchestration/retry-orchestrator.js";
+import {
+  isTaskCancellationError,
+  throwIfSignalCancelled,
+} from "../tasks/task-cancellation.js";
 import type { TaskSnapshot } from "../tasks/types.js";
 
 export const VISUAL_REVIEW_MAX_FINDINGS = 8;
@@ -59,6 +63,7 @@ export interface VisualReviewAIClient {
   analyze(input: {
     context: VisualReviewContext;
     pngBytes: Uint8Array;
+    signal?: AbortSignal;
   }): Promise<unknown>;
 }
 
@@ -68,6 +73,7 @@ export interface VisualReviewer {
     browserVerification?: BrowserVerificationEvidence;
     browserScreenshot?: BrowserScreenshotEvidence;
     existingEvidence?: VisualReviewEvidence;
+    signal?: AbortSignal;
   }): Promise<VisualReviewEvidence>;
 }
 
@@ -84,6 +90,7 @@ export function createVisualReviewService({
 }: VisualReviewServiceDependencies): VisualReviewer {
   return {
     async review(input) {
+      throwIfSignalCancelled(input.signal);
       const browserVerification =
         input.browserVerification ?? input.task.validation?.browserVerification;
       const browserScreenshot =
@@ -109,6 +116,7 @@ export function createVisualReviewService({
         taskId: input.task.id,
         artifactId: browserScreenshot.id,
       });
+      throwIfSignalCancelled(input.signal);
 
       if (artifact.artifactId !== browserScreenshot.id) {
         throw visualReviewFailure("screenshot artifact mismatch");
@@ -123,13 +131,19 @@ export function createVisualReviewService({
             browserScreenshot,
           ),
           pngBytes: artifact.pngBytes,
+          signal: input.signal,
         });
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          throw error;
+        }
+
         if (error instanceof RetryStageFailureError) {
           throw error;
         }
         throw visualReviewFailure("visual review provider failed");
       }
+      throwIfSignalCancelled(input.signal);
 
       const parsed = visualReviewEvidenceSchema
         .omit({ screenshotId: true, reviewedAt: true })

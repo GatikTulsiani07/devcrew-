@@ -51,6 +51,7 @@ const eventPresentations: Record<ActivityEventType, EventPresentation> = {
   RETRY_STARTED: { title: "Retry started", tone: "progress" },
   RETRY_COMPLETED: { title: "Retry completed", tone: "success" },
   RETRY_EXHAUSTED: { title: "Retry exhausted", tone: "warning" },
+  TASK_CANCELLED: { title: "Task cancelled", tone: "warning" },
   PULL_REQUEST_CREATED: { title: "Pull request created", tone: "success" },
 };
 

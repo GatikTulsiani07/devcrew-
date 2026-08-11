@@ -14,7 +14,14 @@ import {
   createRetryOrchestrator,
   sanitizeStageError,
 } from "../orchestration/retry-orchestrator.js";
+import {
+  createTaskCancellationRegistry,
+  isTaskCancellationError,
+  type ActiveTaskExecution,
+  type TaskCancellationRegistry,
+} from "./task-cancellation.js";
 import type {
+  CancellationStage,
   CreateTaskInput,
   DeveloperExecutor,
   DevOpsPublisher,
@@ -42,6 +49,7 @@ export interface TaskServiceDependencies {
   generateTaskId?: TaskIdGenerator;
   now?: TaskClock;
   activityService?: ActivityService;
+  cancellationRegistry?: TaskCancellationRegistry;
 }
 
 export interface TaskService {
@@ -59,6 +67,7 @@ export interface TaskService {
   validateTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   reviewTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   retryTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
+  cancelTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   createPullRequest(projectId: string, taskId: string): Promise<TaskSnapshot>;
 }
 
@@ -73,6 +82,7 @@ export function createTaskService({
   generateTaskId = () => `task_${randomUUID()}`,
   now = () => new Date(),
   activityService = createNoopActivityService(),
+  cancellationRegistry = createTaskCancellationRegistry(),
 }: TaskServiceDependencies): TaskService {
   const retryOrchestrator = createRetryOrchestrator({
     store,
@@ -193,13 +203,25 @@ export function createTaskService({
       }
 
       assertNoPendingRetry(task);
+      assertTaskNotCancelled(task);
 
+      const active = cancellationRegistry.register({
+        projectId,
+        taskId,
+        stage: "DEVELOPER",
+      });
       try {
-        return await runDeveloperStage(project, task);
+        return await runDeveloperStage(project, task, active);
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          await completeCancellation(await latestTaskOr(task), active.stage);
+          throw error;
+        }
         const latest = await latestTaskOr(task);
         await retryOrchestrator.recordFailure(latest, "DEVELOPER", error);
         throw sanitizeStageError("DEVELOPER");
+      } finally {
+        active.unregister();
       }
     },
 
@@ -224,13 +246,25 @@ export function createTaskService({
       }
 
       assertNoPendingRetry(task);
+      assertTaskNotCancelled(task);
 
+      const active = cancellationRegistry.register({
+        projectId,
+        taskId,
+        stage: "DEVOPS",
+      });
       try {
-        return await runValidationWorkflow(project, task);
+        return await runValidationWorkflow(project, task, active);
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          await completeCancellation(await latestTaskOr(task), active.stage);
+          throw error;
+        }
         const latest = await latestTaskOr(task);
         await retryOrchestrator.recordFailure(latest, "DEVOPS", error);
         throw sanitizeStageError("DEVOPS");
+      } finally {
+        active.unregister();
       }
     },
 
@@ -263,13 +297,25 @@ export function createTaskService({
       }
 
       assertNoPendingRetry(task);
+      assertTaskNotCancelled(task);
 
+      const active = cancellationRegistry.register({
+        projectId,
+        taskId,
+        stage: "REVIEWER",
+      });
       try {
-        return await runReviewerStage(project, task);
+        return await runReviewerStage(project, task, active);
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          await completeCancellation(await latestTaskOr(task), active.stage);
+          throw error;
+        }
         const latest = await latestTaskOr(task);
         await retryOrchestrator.recordFailure(latest, "REVIEWER", error);
         throw sanitizeStageError("REVIEWER");
+      } finally {
+        active.unregister();
       }
     },
 
@@ -282,7 +328,74 @@ export function createTaskService({
         throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
       }
 
-      return retryOrchestrator.retry(copyTask(task));
+      assertTaskNotCancelled(task);
+
+      const stage = task.retryRecovery?.failedStage ?? "RETRY_WAIT";
+      const active = cancellationRegistry.register({
+        projectId,
+        taskId,
+        stage,
+      });
+      try {
+        return await retryOrchestrator.retry(copyTask(task), {
+          signal: active.signal,
+          setStage: active.setStage,
+        });
+      } catch (error) {
+        if (isTaskCancellationError(error)) {
+          await completeCancellation(await latestTaskOr(task), active.stage);
+        }
+        throw error;
+      } finally {
+        active.unregister();
+      }
+    },
+
+    async cancelTask(projectId, taskId) {
+      await projectService.getProject(projectId);
+
+      const task = await store.findByProjectAndId(projectId, taskId);
+
+      if (task === undefined) {
+        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
+      }
+
+      if (task.cancellation?.status === "CANCELLED") {
+        return copyTask(task);
+      }
+
+      if (task.cancellation?.status === "FAILED") {
+        throw new ApplicationError(
+          "INVALID_TASK_TRANSITION",
+          409,
+          "Task cancellation could not be completed safely",
+        );
+      }
+
+      if (task.pullRequest !== undefined || task.status === "PLAN_REJECTED") {
+        throw new ApplicationError(
+          "INVALID_TASK_TRANSITION",
+          409,
+          "Task cannot be cancelled",
+        );
+      }
+
+      if (task.cancellation?.status === "REQUESTED") {
+        return copyTask(task);
+      }
+
+      const active = cancellationRegistry.find(projectId, taskId);
+      const requested = await persistCancellationRequested(
+        task,
+        active?.stage,
+      );
+
+      if (active !== undefined) {
+        active.abort();
+        return requested;
+      }
+
+      return completeCancellation(requested, requested.cancellation?.stage);
     },
 
     async createPullRequest(projectId, taskId) {
@@ -295,13 +408,25 @@ export function createTaskService({
       }
 
       assertNoPendingRetry(task);
+      assertTaskNotCancelled(task);
 
+      const active = cancellationRegistry.register({
+        projectId,
+        taskId,
+        stage: "PULL_REQUEST",
+      });
       try {
-        return await runPullRequestStage(project, task);
+        return await runPullRequestStage(project, task, active);
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          await completeCancellation(await latestTaskOr(task), active.stage);
+          throw error;
+        }
         const latest = await latestTaskOr(task);
         await retryOrchestrator.recordFailure(latest, "PULL_REQUEST", error);
         throw sanitizeStageError("PULL_REQUEST");
+      } finally {
+        active.unregister();
       }
     },
   };
@@ -311,33 +436,40 @@ export function createTaskService({
     task: TaskSnapshot,
   ): Promise<TaskSnapshot> {
     const project = await projectService.getProject(task.projectId);
+    const active = cancellationRegistry.find(task.projectId, task.id);
+    active?.setStage(stage);
 
     switch (stage) {
       case "DEVELOPER":
-        return runDeveloperStage(project, task);
+        return runDeveloperStage(project, task, active);
       case "DEVOPS":
       case "BROWSER":
       case "SCREENSHOT":
       case "VISUAL_REVIEW":
-        return runValidationWorkflow(project, task);
+        return runValidationWorkflow(project, task, active);
       case "CHECKPOINT":
       case "REMOTE_PUSH":
-        return maybePublishValidatedTask(task);
+        return maybePublishValidatedTask(task, active);
       case "REVIEWER":
-        return runReviewerStage(project, task);
+        return runReviewerStage(project, task, active);
       case "PULL_REQUEST":
-        return runPullRequestStage(project, task);
+        return runPullRequestStage(project, task, active);
     }
   }
 
   async function runDeveloperStage(
     project: Awaited<ReturnType<ProjectService["getProject"]>>,
     task: TaskSnapshot,
+    active?: ActiveTaskExecution,
   ): Promise<TaskSnapshot> {
+    active?.setStage("DEVELOPER");
+    active?.throwIfCancelled();
     const execution = await developerExecutor.execute({
       project,
       task: copyTask(task),
+      signal: active?.signal,
     });
+    active?.throwIfCancelled();
     const timestamp = now().toISOString();
     const updatedTask: TaskSnapshot = {
       ...copyTask(task),
@@ -361,8 +493,15 @@ export function createTaskService({
   async function runValidationWorkflow(
     project: Awaited<ReturnType<ProjectService["getProject"]>>,
     task: TaskSnapshot,
+    active?: ActiveTaskExecution,
   ): Promise<TaskSnapshot> {
-    const validation = await devOpsValidator.validate(copyTask(task));
+    active?.setStage("DEVOPS");
+    active?.throwIfCancelled();
+    const validation = await devOpsValidator.validate(copyTask(task), {
+      signal: active?.signal,
+      setStage: active?.setStage,
+    });
+    active?.throwIfCancelled();
     const timestamp = now().toISOString();
     const updatedTask: TaskSnapshot = {
       ...copyTask(task),
@@ -381,16 +520,25 @@ export function createTaskService({
       store,
       now,
       activityService,
+      signal: active?.signal,
+      setStage: active?.setStage,
     }).repairIfRequired(validatedTask);
 
-    return maybePublishValidatedTask(repairedTask);
+    active?.throwIfCancelled();
+    return maybePublishValidatedTask(repairedTask, active);
   }
 
   async function runReviewerStage(
     project: Awaited<ReturnType<ProjectService["getProject"]>>,
     task: TaskSnapshot,
+    active?: ActiveTaskExecution,
   ): Promise<TaskSnapshot> {
-    const review = await taskReviewer.review(copyTask(task), project);
+    active?.setStage("REVIEWER");
+    active?.throwIfCancelled();
+    const review = await taskReviewer.review(copyTask(task), project, {
+      signal: active?.signal,
+    });
+    active?.throwIfCancelled();
     const timestamp = now().toISOString();
     const updatedTask: TaskSnapshot = {
       ...copyTask(task),
@@ -414,11 +562,16 @@ export function createTaskService({
   async function runPullRequestStage(
     project: Awaited<ReturnType<ProjectService["getProject"]>>,
     task: TaskSnapshot,
+    active?: ActiveTaskExecution,
   ): Promise<TaskSnapshot> {
+    active?.setStage("PULL_REQUEST");
+    active?.throwIfCancelled();
     const result = await pullRequestCreator.createPullRequest({
       project,
       task: copyTask(task),
+      signal: active?.signal,
     });
+    active?.throwIfCancelled();
 
     if (task.pullRequest !== undefined) {
       return copyTask(task);
@@ -456,6 +609,7 @@ export function createTaskService({
 
   async function maybePublishValidatedTask(
     task: TaskSnapshot,
+    active?: ActiveTaskExecution,
   ): Promise<TaskSnapshot> {
     if (
       task.status !== "VALIDATION_COMPLETED" ||
@@ -471,7 +625,13 @@ export function createTaskService({
       return copyTask(task);
     }
 
-    const validation = await devOpsValidator.publishValidatedTask(copyTask(task));
+    active?.setStage("CHECKPOINT");
+    active?.throwIfCancelled();
+    const validation = await devOpsValidator.publishValidatedTask(copyTask(task), {
+      signal: active?.signal,
+      setStage: active?.setStage,
+    });
+    active?.throwIfCancelled();
     const timestamp = now().toISOString();
     return copyTask(
       await store.update({
@@ -486,6 +646,63 @@ export function createTaskService({
     return (
       (await store.findByProjectAndId(task.projectId, task.id)) ?? copyTask(task)
     );
+  }
+
+  async function persistCancellationRequested(
+    task: TaskSnapshot,
+    stage?: CancellationStage,
+  ): Promise<TaskSnapshot> {
+    const timestamp = now().toISOString();
+    return copyTask(
+      await store.update({
+        ...copyTask(task),
+        cancellation: {
+          status: "REQUESTED",
+          requestedAt: task.cancellation?.requestedAt ?? timestamp,
+          ...(stage === undefined ? {} : { stage }),
+          summary: "Task cancellation requested.",
+        },
+        updatedAt: timestamp,
+      }),
+    );
+  }
+
+  async function completeCancellation(
+    task: TaskSnapshot,
+    stage?: CancellationStage,
+  ): Promise<TaskSnapshot> {
+    if (task.cancellation?.status === "CANCELLED") {
+      return copyTask(task);
+    }
+
+    const timestamp = now().toISOString();
+    const requestedAt = task.cancellation?.requestedAt ?? timestamp;
+    const resolvedStage = stage ?? task.cancellation?.stage;
+    const cancelledTask = copyTask(
+      await store.update({
+        ...copyTask(task),
+        cancellation: {
+          status: "CANCELLED",
+          requestedAt,
+          cancelledAt: task.cancellation?.cancelledAt ?? timestamp,
+          ...(resolvedStage === undefined ? {} : { stage: resolvedStage }),
+          summary: "Task cancelled.",
+        },
+        updatedAt: timestamp,
+      }),
+    );
+
+    if (task.cancellation?.cancelledAt === undefined) {
+      await activityService.append({
+        projectId: task.projectId,
+        taskId: task.id,
+        type: "TASK_CANCELLED",
+        actor: { kind: "SYSTEM" },
+        summary: "Task cancelled.",
+      });
+    }
+
+    return cancelledTask;
   }
 
   async function appendValidationActivity(
@@ -544,6 +761,16 @@ function assertNoPendingRetry(task: TaskSnapshot): void {
       "INVALID_TASK_TRANSITION",
       409,
       "Task has an unresolved controlled retry state",
+    );
+  }
+}
+
+function assertTaskNotCancelled(task: TaskSnapshot): void {
+  if (task.cancellation !== undefined) {
+    throw new ApplicationError(
+      "INVALID_TASK_TRANSITION",
+      409,
+      "Task has been cancelled",
     );
   }
 }
@@ -772,6 +999,23 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               retryable: attempt.retryable,
               summary: attempt.summary,
             })),
+          },
+        }),
+    ...(task.cancellation === undefined
+      ? {}
+      : {
+          cancellation: {
+            status: task.cancellation.status,
+            requestedAt: task.cancellation.requestedAt,
+            ...(task.cancellation.cancelledAt === undefined
+              ? {}
+              : { cancelledAt: task.cancellation.cancelledAt }),
+            ...(task.cancellation.stage === undefined
+              ? {}
+              : { stage: task.cancellation.stage }),
+            ...(task.cancellation.summary === undefined
+              ? {}
+              : { summary: task.cancellation.summary }),
           },
         }),
     ...(task.review === undefined

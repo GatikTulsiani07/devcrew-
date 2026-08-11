@@ -42,6 +42,7 @@ export interface ControlledDevServer {
   start(input: {
     profileId: string;
     repositoryRoot: string;
+    signal?: AbortSignal;
   }): Promise<RunningDevServer>;
 }
 
@@ -55,6 +56,7 @@ export interface BrowserAdapter {
     url: string;
     expectedOrigin: string;
     timeoutMs: number;
+    signal?: AbortSignal;
   }): Promise<BrowserPageMetadata>;
 }
 
@@ -70,6 +72,7 @@ export interface BrowserRenderer {
     viewport: ScreenshotViewport;
     timeoutMs: number;
     maxBytes: number;
+    signal?: AbortSignal;
   }): Promise<BrowserScreenshotResult>;
 }
 

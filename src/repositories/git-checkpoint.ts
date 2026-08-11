@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 import { describeError, logger } from "../observability/logger.js";
+import { throwIfSignalCancelled } from "../tasks/task-cancellation.js";
 import {
   createControlledGitCommandRunner,
   isSafeEvidencePath,
@@ -25,6 +26,7 @@ export interface GitCheckpointInput {
   taskId: string;
   changeEvidence: GitChangeEvidence;
   existingCheckpoint?: GitCheckpointEvidence;
+  signal?: AbortSignal;
 }
 
 export interface GitCheckpointService {
@@ -63,6 +65,7 @@ export function createGitCheckpointService({
 } = {}): GitCheckpointService {
   return {
     async createCheckpoint(input) {
+      throwIfSignalCancelled(input.signal);
       const expectedPaths = expectedChangedPaths(input.changeEvidence);
       const taskBranch = taskBranchName(input.taskId);
 
@@ -72,17 +75,29 @@ export function createGitCheckpointService({
           input.repositoryRoot,
           input.existingCheckpoint,
           taskBranch,
+          input.signal,
         );
       }
 
-      await verifyPreCommitStatus(runner, input.repositoryRoot, expectedPaths);
-      await ensureTaskBranch(runner, input.repositoryRoot, taskBranch);
+      await verifyPreCommitStatus(
+        runner,
+        input.repositoryRoot,
+        expectedPaths,
+        input.signal,
+      );
+      await ensureTaskBranch(runner, input.repositoryRoot, taskBranch, input.signal);
 
       const hooksPath = await mkdtemp(join(tmpdir(), "devcrew-git-hooks-"));
       const message = checkpointMessage(input.taskId);
 
       try {
-        await runGit(runner, ["add", "--", ...expectedPaths], input.repositoryRoot, [0]);
+        await runGit(
+          runner,
+          ["add", "--", ...expectedPaths],
+          input.repositoryRoot,
+          [0],
+          input.signal,
+        );
         await runGit(
           runner,
           [
@@ -99,6 +114,7 @@ export function createGitCheckpointService({
           ],
           input.repositoryRoot,
           [0],
+          input.signal,
         );
       } finally {
         await rm(hooksPath, { recursive: true, force: true }).catch((error: unknown) => {
@@ -109,9 +125,17 @@ export function createGitCheckpointService({
       }
 
       const sha = parseSha(
-        (await runGit(runner, ["rev-parse", "HEAD"], input.repositoryRoot, [0])).stdout,
+        (
+          await runGit(
+            runner,
+            ["rev-parse", "HEAD"],
+            input.repositoryRoot,
+            [0],
+            input.signal,
+          )
+        ).stdout,
       );
-      await verifyPostCommitStatus(runner, input.repositoryRoot);
+      await verifyPostCommitStatus(runner, input.repositoryRoot, input.signal);
 
       return {
         sha,
@@ -155,8 +179,9 @@ async function verifyPreCommitStatus(
   runner: GitCommandRunner,
   repositoryRoot: string,
   expectedPaths: readonly string[],
+  signal?: AbortSignal,
 ): Promise<void> {
-  const dirtyPaths = new Set(await readDirtyPaths(runner, repositoryRoot));
+  const dirtyPaths = new Set(await readDirtyPaths(runner, repositoryRoot, signal));
   const expected = new Set(expectedPaths);
 
   for (const path of dirtyPaths) {
@@ -175,8 +200,9 @@ async function verifyPreCommitStatus(
 async function verifyPostCommitStatus(
   runner: GitCommandRunner,
   repositoryRoot: string,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const dirtyPaths = await readDirtyPaths(runner, repositoryRoot);
+  const dirtyPaths = await readDirtyPaths(runner, repositoryRoot, signal);
 
   if (dirtyPaths.length > 0) {
     throw new GitCheckpointError("post-commit repository state is dirty");
@@ -188,17 +214,18 @@ async function verifyExistingCheckpoint(
   repositoryRoot: string,
   checkpoint: GitCheckpointEvidence,
   taskBranch: string,
+  signal?: AbortSignal,
 ): Promise<GitCheckpointEvidence> {
   const head = parseSha(
-    (await runGit(runner, ["rev-parse", "HEAD"], repositoryRoot, [0])).stdout,
+    (await runGit(runner, ["rev-parse", "HEAD"], repositoryRoot, [0], signal)).stdout,
   );
 
   if (head !== checkpoint.sha) {
     throw new GitCheckpointError("existing checkpoint does not match HEAD");
   }
 
-  await verifyPostCommitStatus(runner, repositoryRoot);
-  await verifyCurrentBranch(runner, repositoryRoot, taskBranch);
+  await verifyPostCommitStatus(runner, repositoryRoot, signal);
+  await verifyCurrentBranch(runner, repositoryRoot, taskBranch, signal);
 
   return {
     sha: checkpoint.sha,
@@ -213,8 +240,9 @@ async function ensureTaskBranch(
   runner: GitCommandRunner,
   repositoryRoot: string,
   taskBranch: string,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const currentBranch = await currentBranchName(runner, repositoryRoot);
+  const currentBranch = await currentBranchName(runner, repositoryRoot, signal);
 
   if (currentBranch === taskBranch) {
     return;
@@ -229,23 +257,25 @@ async function ensureTaskBranch(
     ["show-ref", "--verify", "--quiet", `refs/heads/${taskBranch}`],
     repositoryRoot,
     [0, 1],
+    signal,
   );
 
   if (branchExists.exitCode === 0) {
-    await runGit(runner, ["switch", taskBranch], repositoryRoot, [0]);
+    await runGit(runner, ["switch", taskBranch], repositoryRoot, [0], signal);
   } else {
-    await runGit(runner, ["switch", "-c", taskBranch], repositoryRoot, [0]);
+    await runGit(runner, ["switch", "-c", taskBranch], repositoryRoot, [0], signal);
   }
 
-  await verifyCurrentBranch(runner, repositoryRoot, taskBranch);
+  await verifyCurrentBranch(runner, repositoryRoot, taskBranch, signal);
 }
 
 async function verifyCurrentBranch(
   runner: GitCommandRunner,
   repositoryRoot: string,
   taskBranch: string,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const currentBranch = await currentBranchName(runner, repositoryRoot);
+  const currentBranch = await currentBranchName(runner, repositoryRoot, signal);
 
   if (currentBranch !== taskBranch) {
     throw new GitCheckpointError("current branch is not the task branch");
@@ -255,9 +285,16 @@ async function verifyCurrentBranch(
 async function currentBranchName(
   runner: GitCommandRunner,
   repositoryRoot: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const branch = (
-    await runGit(runner, ["branch", "--show-current"], repositoryRoot, [0])
+    await runGit(
+      runner,
+      ["branch", "--show-current"],
+      repositoryRoot,
+      [0],
+      signal,
+    )
   ).stdout.trim();
 
   if (!isSafeBranchName(branch)) {
@@ -270,9 +307,10 @@ async function currentBranchName(
 async function readDirtyPaths(
   runner: GitCommandRunner,
   repositoryRoot: string,
+  signal?: AbortSignal,
 ): Promise<readonly string[]> {
   return parseStatusOutput(
-    (await runGit(runner, statusArgs, repositoryRoot, [0])).stdout,
+    (await runGit(runner, statusArgs, repositoryRoot, [0], signal)).stdout,
   ).map((file) => file.path);
 }
 
@@ -281,12 +319,15 @@ async function runGit(
   args: readonly string[],
   repositoryRoot: string,
   acceptedExitCodes: readonly number[],
+  signal?: AbortSignal,
 ): Promise<GitCommandResult> {
+  throwIfSignalCancelled(signal);
   if (!isAbsolute(repositoryRoot)) {
     throw new GitCheckpointError("repository root is not absolute");
   }
 
-  const result = await runner.run(args, repositoryRoot);
+  const result = await runner.run(args, repositoryRoot, { signal });
+  throwIfSignalCancelled(signal);
 
   if (
     !result.started ||

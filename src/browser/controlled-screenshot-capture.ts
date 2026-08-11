@@ -1,4 +1,8 @@
 import { describeError, logger } from "../observability/logger.js";
+import {
+  isTaskCancellationError,
+  throwIfSignalCancelled,
+} from "../tasks/task-cancellation.js";
 import type {
   BrowserRenderer,
   BrowserScreenshotEvidence,
@@ -33,6 +37,7 @@ export interface ControlledScreenshotCapture {
     browserVerification: BrowserVerificationEvidence;
     repositoryRoot: string;
     existingEvidence?: BrowserScreenshotEvidence;
+    signal?: AbortSignal;
   }): Promise<BrowserScreenshotEvidence>;
 }
 
@@ -55,6 +60,7 @@ export function createControlledScreenshotCapture({
 
   return {
     async capture(input) {
+      throwIfSignalCancelled(input.signal);
       if (input.browserVerification.status !== "PASSED") {
         throw new ControlledScreenshotCaptureError("browser verification is not passed");
       }
@@ -82,8 +88,12 @@ export function createControlledScreenshotCapture({
           viewport: serverViewport,
           timeoutMs: input.profile.navigationTimeoutMs,
           maxBytes,
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
         });
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          throw error;
+        }
         logger.error("Controlled screenshot renderer failed", {
           taskId: input.taskId,
           projectId: input.projectId,
@@ -92,6 +102,7 @@ export function createControlledScreenshotCapture({
         });
         throw new ControlledScreenshotCaptureError("screenshot capture failed");
       }
+      throwIfSignalCancelled(input.signal);
 
       const renderedUrl = validateScreenshotUrl(rendered.url, input.profile);
 
@@ -116,6 +127,9 @@ export function createControlledScreenshotCapture({
           repositoryRoot: input.repositoryRoot,
         });
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          throw error;
+        }
         logger.error("Controlled screenshot storage failed", {
           taskId: input.taskId,
           projectId: input.projectId,
@@ -125,6 +139,7 @@ export function createControlledScreenshotCapture({
         });
         throw new ControlledScreenshotCaptureError("screenshot storage failed");
       }
+      throwIfSignalCancelled(input.signal);
 
       return {
         status: "CAPTURED",
@@ -142,6 +157,7 @@ export function createPlaywrightBrowserRenderer({
 }: { executablePath?: string } = {}): BrowserRenderer {
   return {
     async captureScreenshot(input) {
+      throwIfSignalCancelled(input.signal);
       const { chromium } = await import("playwright-core");
       const browser = await chromium.launch({
         headless: true,
@@ -155,17 +171,26 @@ export function createPlaywrightBrowserRenderer({
       let page:
         | Awaited<ReturnType<NonNullable<typeof context>["newPage"]>>
         | undefined;
+      const onAbort = () => {
+        void page?.close().catch(() => undefined);
+        void context?.close().catch(() => undefined);
+        void browser.close().catch(() => undefined);
+      };
 
       try {
+        input.signal?.addEventListener("abort", onAbort, { once: true });
         context = await browser.newContext({
           viewport: input.viewport,
           ignoreHTTPSErrors: false,
         });
+        throwIfSignalCancelled(input.signal);
         page = await context.newPage();
+        throwIfSignalCancelled(input.signal);
         await page.goto(input.url, {
           waitUntil: "networkidle",
           timeout: input.timeoutMs,
         });
+        throwIfSignalCancelled(input.signal);
 
         const finalUrl = new URL(page.url());
         if (finalUrl.origin !== input.expectedOrigin) {
@@ -177,6 +202,7 @@ export function createPlaywrightBrowserRenderer({
           fullPage: false,
           timeout: input.timeoutMs,
         });
+        throwIfSignalCancelled(input.signal);
 
         if (pngBytes.byteLength === 0) {
           throw new ControlledScreenshotCaptureError("screenshot is empty");
@@ -190,7 +216,11 @@ export function createPlaywrightBrowserRenderer({
           url: page.url(),
           pngBytes,
         };
+      } catch (error) {
+        throwIfSignalCancelled(input.signal);
+        throw error;
       } finally {
+        input.signal?.removeEventListener("abort", onAbort);
         await page?.close().catch(() => undefined);
         await context?.close().catch(() => undefined);
         await browser.close().catch(() => undefined);

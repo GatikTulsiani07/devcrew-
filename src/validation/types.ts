@@ -25,5 +25,6 @@ export interface ControlledCommandRunner {
   run(
     check: ValidationCheckDefinition,
     cwd: string,
+    options?: { signal?: AbortSignal },
   ): Promise<CommandRunResult>;
 }

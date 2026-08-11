@@ -8,6 +8,11 @@ import { GitCheckpointError } from "../repositories/git-checkpoint.js";
 import { GitRemotePushError } from "../repositories/git-remote-push.js";
 import type { ActivityService } from "../activity/activity-service.js";
 import { PullRequestServiceError } from "../tasks/pull-request-service.js";
+import {
+  isTaskCancellationError,
+  throwIfSignalCancelled,
+} from "../tasks/task-cancellation.js";
+import type { CancellationStage } from "../tasks/types.js";
 import type {
   RetryAttemptEvidence,
   RetryFailureCategory,
@@ -41,7 +46,7 @@ export class RetryStageFailureError extends ApplicationError {
 export interface RetryOrchestratorDependencies {
   store: TaskStore;
   now?: () => Date;
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   activityService: ActivityService;
   runStage(stage: RetryStage, task: TaskSnapshot): Promise<TaskSnapshot>;
 }
@@ -52,13 +57,19 @@ export interface RetryOrchestrator {
     fallbackStage: RetryStage,
     error: unknown,
   ): Promise<TaskSnapshot>;
-  retry(task: TaskSnapshot): Promise<TaskSnapshot>;
+  retry(
+    task: TaskSnapshot,
+    options?: {
+      signal?: AbortSignal;
+      setStage?: (stage: CancellationStage) => void;
+    },
+  ): Promise<TaskSnapshot>;
 }
 
 export function createRetryOrchestrator({
   store,
   now = () => new Date(),
-  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep = abortableSleep,
   activityService,
   runStage,
 }: RetryOrchestratorDependencies): RetryOrchestrator {
@@ -95,7 +106,7 @@ export function createRetryOrchestrator({
       );
     },
 
-    async retry(task) {
+    async retry(task, options = {}) {
       const recovery = task.retryRecovery;
       const stage = recovery?.failedStage;
 
@@ -110,6 +121,7 @@ export function createRetryOrchestrator({
       const previousStageAttempts = attemptsForStage(recovery.attempts, stage);
       const attemptNumber = previousStageAttempts.length + 1;
       const policy = retryPolicyForStage(stage);
+      throwIfSignalCancelled(options.signal);
 
       if (attemptNumber > policy.maxAttempts) {
         throw new ApplicationError(
@@ -120,8 +132,11 @@ export function createRetryOrchestrator({
       }
 
       if (attemptNumber > 1) {
-        await sleep(RETRY_BACKOFF_MS);
+        options.setStage?.("RETRY_WAIT");
+        await sleep(RETRY_BACKOFF_MS, options.signal);
       }
+      options.setStage?.(stage);
+      throwIfSignalCancelled(options.signal);
 
       await activityService.append({
         projectId: task.projectId,
@@ -134,6 +149,7 @@ export function createRetryOrchestrator({
       const startedAt = now().toISOString();
       try {
         const retried = await runStage(stage, copyTask(task));
+        throwIfSignalCancelled(options.signal);
         const completedAt = now().toISOString();
         const success = successAttemptEvidence({
           stage,
@@ -162,6 +178,9 @@ export function createRetryOrchestrator({
 
         return copyTask(updated);
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          throw error;
+        }
         const classification = classifyRetryFailure(error, stage);
         const completedAt = now().toISOString();
         const exhausted = attemptNumber >= policy.maxAttempts;
@@ -522,4 +541,25 @@ function safeText(value: string, maxLength: number): string {
 
 function copyTask(task: TaskSnapshot): TaskSnapshot {
   return JSON.parse(JSON.stringify(task)) as TaskSnapshot;
+}
+
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfSignalCancelled(signal);
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      cleanup();
+      reject(signal?.reason ?? new Error("Operation cancelled"));
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }

@@ -9,6 +9,10 @@ import {
   classifyProviderFailure,
   createRetryStageFailure,
 } from "../orchestration/retry-orchestrator.js";
+import {
+  isTaskCancellationError,
+  throwIfSignalCancelled,
+} from "./task-cancellation.js";
 import type { ProjectSnapshot } from "../projects/types.js";
 import { createDeterministicReviewer } from "./deterministic-reviewer.js";
 import type {
@@ -40,6 +44,7 @@ export type ReviewClock = () => Date;
 export interface OpenAIReviewerResponses {
   parse(
     params: Parameters<OpenAI["responses"]["parse"]>[0],
+    options?: { signal?: AbortSignal },
   ): Promise<{ output_parsed: unknown }>;
 }
 
@@ -65,40 +70,48 @@ export function createOpenAIReviewer({
   const openaiClient = client ?? new OpenAI({ apiKey });
 
   return {
-    async review(task, project): Promise<TaskReview> {
+    async review(task, project, options): Promise<TaskReview> {
       const startedAt = now().toISOString();
       let output: unknown;
 
+      throwIfSignalCancelled(options?.signal);
       try {
-        const response = await openaiClient.responses.parse({
-          model,
-          input: [
-            {
-              role: "system",
-              content: [
-                "You are Devcrew's Reviewer agent.",
-                "Review the supplied proposal and validation snapshot only.",
-                "Return an approval review with INFO findings only.",
-                "Do not claim files were changed or commands were run.",
-                "Do not request filesystem access, shell execution, Git operations, or repository contents.",
-                "Return only schema-compliant structured output.",
-              ].join(" "),
+        const response = await openaiClient.responses.parse(
+          {
+            model,
+            input: [
+              {
+                role: "system",
+                content: [
+                  "You are Devcrew's Reviewer agent.",
+                  "Review the supplied proposal and validation snapshot only.",
+                  "Return an approval review with INFO findings only.",
+                  "Do not claim files were changed or commands were run.",
+                  "Do not request filesystem access, shell execution, Git operations, or repository contents.",
+                  "Return only schema-compliant structured output.",
+                ].join(" "),
+              },
+              {
+                role: "user",
+                content: buildReviewerPrompt(task, project),
+              },
+            ],
+            text: {
+              format: zodTextFormat(
+                reviewerResponseSchema,
+                "reviewer_review",
+              ),
             },
-            {
-              role: "user",
-              content: buildReviewerPrompt(task, project),
-            },
-          ],
-          text: {
-            format: zodTextFormat(
-              reviewerResponseSchema,
-              "reviewer_review",
-            ),
           },
-        });
+          { signal: options?.signal },
+        );
+        throwIfSignalCancelled(options?.signal);
 
         output = response.output_parsed;
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          throw error;
+        }
         logger.error("Reviewer request failed", {
           model,
           cause: describeError(error),
@@ -107,6 +120,7 @@ export function createOpenAIReviewer({
       }
 
       const parsed = reviewerResponseSchema.safeParse(output);
+      throwIfSignalCancelled(options?.signal);
 
       if (!parsed.success || containsUnsafeOutput(parsed.data)) {
         logger.error("Reviewer returned an invalid or unsafe response", {

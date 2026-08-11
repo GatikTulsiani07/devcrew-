@@ -8,6 +8,10 @@ import {
   createRetryStageFailure,
 } from "../orchestration/retry-orchestrator.js";
 import {
+  isTaskCancellationError,
+  throwIfSignalCancelled,
+} from "./task-cancellation.js";
+import {
   browserVerificationProfiles,
   createControlledDevServer,
   type ControlledDevServerDependencies,
@@ -97,7 +101,7 @@ export function createControlledDevOpsValidator({
   const runner = injectedRunner ?? createControlledCommandRunner(runnerOptions);
 
   return {
-    async validate(task): Promise<TaskValidation> {
+    async validate(task, options = {}): Promise<TaskValidation> {
       const { repository, profile } = await resolveValidationContext(task);
 
       const startedAt = now().toISOString();
@@ -105,8 +109,16 @@ export function createControlledDevOpsValidator({
       for (const check of profile.checks) {
         let result;
         try {
-          result = await runner.run(check, repository.localCheckoutPath);
+          options.setStage?.("DEVOPS");
+          throwIfSignalCancelled(options.signal);
+          result = await runner.run(check, repository.localCheckoutPath, {
+            signal: options.signal,
+          });
+          throwIfSignalCancelled(options.signal);
         } catch (error) {
+          if (isTaskCancellationError(error)) {
+            throw error;
+          }
           logger.error("Validation check runner threw", {
             check: check.name,
             cause: describeError(error),
@@ -148,27 +160,43 @@ export function createControlledDevOpsValidator({
         let server;
 
         try {
+          options.setStage?.("BROWSER");
+          throwIfSignalCancelled(options.signal);
           server = await devServer.start({
             profileId: browserProfileId,
             repositoryRoot: repository.localCheckoutPath,
+            signal: options.signal,
           });
+          throwIfSignalCancelled(options.signal);
+          options.setStage?.("BROWSER");
           browserVerification = await browserVerifier.verify({
             profile: browserProfile,
             url: server.url,
+            signal: options.signal,
           });
+          throwIfSignalCancelled(options.signal);
+          options.setStage?.("SCREENSHOT");
           browserScreenshot = await screenshotCapture.capture({
             projectId: task.projectId,
             taskId: task.id,
             profile: browserProfile,
             browserVerification,
             repositoryRoot: repository.localCheckoutPath,
+            signal: options.signal,
           });
+          throwIfSignalCancelled(options.signal);
+          options.setStage?.("VISUAL_REVIEW");
           visualReview = await visualReviewer.review({
             task,
             browserVerification,
             browserScreenshot,
+            signal: options.signal,
           });
+          throwIfSignalCancelled(options.signal);
         } catch (error) {
+          if (isTaskCancellationError(error)) {
+            throw error;
+          }
           logger.error("Controlled browser verification failed after validation", {
             taskId: task.id,
             cause: describeError(error),
@@ -201,7 +229,7 @@ export function createControlledDevOpsValidator({
       };
     },
 
-    async publishValidatedTask(task): Promise<TaskValidation> {
+    async publishValidatedTask(task, options = {}): Promise<TaskValidation> {
       const { project, repository } = await resolveValidationContext(task);
 
       if (task.status !== "VALIDATION_COMPLETED" || task.validation?.status !== "PASSED") {
@@ -224,13 +252,20 @@ export function createControlledDevOpsValidator({
       let checkpoint;
 
       try {
+        options.setStage?.("CHECKPOINT");
+        throwIfSignalCancelled(options.signal);
         checkpoint = await checkpointService.createCheckpoint({
           repositoryRoot: repository.localCheckoutPath,
           taskId: task.id,
           changeEvidence,
           existingCheckpoint: task.validation.checkpoint,
+          signal: options.signal,
         });
+        throwIfSignalCancelled(options.signal);
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          throw error;
+        }
         logger.error("Controlled Git checkpoint failed after visual approval", {
           taskId: task.id,
           cause: describeError(error),
@@ -241,14 +276,21 @@ export function createControlledDevOpsValidator({
       let remoteBranch;
 
       try {
+        options.setStage?.("REMOTE_PUSH");
+        throwIfSignalCancelled(options.signal);
         remoteBranch = await remotePushService.pushValidatedBranch({
           repositoryRoot: repository.localCheckoutPath,
           taskId: task.id,
           projectRepositoryUrl: project.repository.publicRepositoryUrl,
           checkpoint,
           existingRemoteBranch: task.validation.remoteBranch,
+          signal: options.signal,
         });
+        throwIfSignalCancelled(options.signal);
       } catch (error) {
+        if (isTaskCancellationError(error)) {
+          throw error;
+        }
         logger.error("Controlled Git remote push failed after checkpoint", {
           taskId: task.id,
           cause: describeError(error),

@@ -19,6 +19,7 @@ export type ActivityEventType =
   | "RETRY_STARTED"
   | "RETRY_COMPLETED"
   | "RETRY_EXHAUSTED"
+  | "TASK_CANCELLED"
   | "PULL_REQUEST_CREATED";
 
 export type ActivityActor =

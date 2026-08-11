@@ -4,6 +4,7 @@ import {
   sameGitHubRepository,
 } from "../github/github-pull-request-client.js";
 import { ApplicationError } from "../errors.js";
+import { throwIfSignalCancelled } from "./task-cancellation.js";
 import {
   isSafeBranchName,
   isSafeTaskBranchName,
@@ -47,6 +48,7 @@ export function createPullRequestService({
 }: PullRequestServiceDependencies): TaskPullRequestCreator {
   return {
     async createPullRequest(input) {
+      throwIfSignalCancelled(input.signal);
       const context = resolveContext(input, preparedRepositories);
 
       if (input.task.pullRequest !== undefined) {
@@ -65,7 +67,9 @@ export function createPullRequestService({
         repository: context.repository,
         head: context.headBranch,
         base: context.baseBranch,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
+      throwIfSignalCancelled(input.signal);
 
       if (existing !== undefined) {
         return {
@@ -85,10 +89,12 @@ export function createPullRequestService({
       const created = await githubClient.createPullRequest({
         repository: context.repository,
         head: context.headBranch,
-        base: context.baseBranch,
-        title: pullRequestTitle(input.task),
-        body: pullRequestBody(input.task),
-      });
+          base: context.baseBranch,
+          title: pullRequestTitle(input.task),
+          body: pullRequestBody(input.task),
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+        });
+      throwIfSignalCancelled(input.signal);
 
       return {
         evidence: {
