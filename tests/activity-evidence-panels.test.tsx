@@ -10,7 +10,7 @@ import { ActivityWorkspace } from "@/components/activity/activity-workspace";
 import { WorkspaceStateProvider } from "@/components/shell/workspace-state";
 import type { ProjectWorkflowState } from "@/hooks/use-project-workflow";
 import type { ProjectActivityState } from "@/hooks/use-project-activity";
-import type { ProjectSnapshot, TaskSnapshot } from "@/lib/api-types";
+import type { ProjectSnapshot, TaskSnapshot, VisualReviewFinding } from "@/lib/api-types";
 
 vi.mock("@/hooks/use-project-workflow", () => ({
   useProjectWorkflow: () => workflowState,
@@ -149,6 +149,21 @@ function taskWithScreenshotEvidence(id = "shot_123e4567-e89b-42d3-a456-426614174
     },
   };
   return screenshotTask;
+}
+
+function taskWithVisualReview(findings: readonly VisualReviewFinding[]): TaskSnapshot {
+  const visualReviewTask = taskWithAllEvidence();
+  visualReviewTask.validation = {
+    ...visualReviewTask.validation!,
+    visualReview: {
+      status: "FAILED",
+      summary: "Visual Review checked the captured browser state.",
+      findings,
+      screenshotId: "shot_visual_review",
+      reviewedAt: "2026-08-03T12:13:30.000Z",
+    },
+  };
+  return visualReviewTask;
 }
 
 describe("Developer evidence panel", () => {
@@ -294,6 +309,114 @@ describe("DevOps evidence panel", () => {
     expect(view.textContent).toContain("Screenshot captured");
     expect(view.textContent).toContain("Aug 3, 2026, 12:13 PM");
     expect(view.textContent).toContain("Validation passed");
+  });
+
+  it("renders Visual Review ERROR, WARNING, and INFO counts in severity order", async () => {
+    const view = await render(
+      <DevopsEvidencePanel
+        task={taskWithVisualReview([
+          { severity: "WARNING", category: "spacing", title: "Crowded controls", description: "Toolbar controls need more spacing." },
+          { severity: "INFO", category: "typography", title: "Text rhythm", description: "Line height remains readable." },
+          { severity: "ERROR", category: "layout", title: "Panel overlap", description: "The evidence panel overlaps adjacent content." },
+        ])}
+      />,
+    );
+
+    expect(view.textContent).toContain("Visual Review");
+    expect(view.textContent).toContain("1 error · 1 warning · 1 info");
+  });
+
+  it("counts multiple Visual Review findings of the same severity", async () => {
+    const view = await render(
+      <DevopsEvidencePanel
+        task={taskWithVisualReview([
+          { severity: "ERROR", category: "layout", title: "Panel overlap", description: "The panel overlaps content." },
+          { severity: "ERROR", category: "responsive", title: "Mobile overflow", description: "The panel overflows on mobile." },
+          { severity: "WARNING", category: "spacing", title: "Dense controls", description: "Controls are too dense." },
+          { severity: "INFO", category: "typography", title: "Readable text", description: "Text remains readable." },
+          { severity: "INFO", category: "accessibility", title: "Visible label", description: "The label remains visible." },
+          { severity: "INFO", category: "other", title: "Reference note", description: "The reference note is informational." },
+        ])}
+      />,
+    );
+
+    expect(view.textContent).toContain("2 errors · 1 warning · 3 info");
+  });
+
+  it("omits Visual Review severity groups with zero findings", async () => {
+    const view = await render(
+      <DevopsEvidencePanel
+        task={taskWithVisualReview([
+          { severity: "ERROR", category: "layout", title: "Panel overlap", description: "The panel overlaps content." },
+          { severity: "INFO", category: "typography", title: "Readable text", description: "Text remains readable." },
+        ])}
+      />,
+    );
+
+    expect(view.textContent).toContain("1 error · 1 info");
+    expect(view.textContent).not.toContain("warning");
+  });
+
+  it("does not render a Visual Review severity summary when findings are empty", async () => {
+    const view = await render(<DevopsEvidencePanel task={taskWithVisualReview([])} />);
+
+    expect(view.textContent).toContain("Visual Review checked the captured browser state.");
+    expect(view.textContent).not.toContain("0 errors");
+    expect(view.textContent).not.toContain("0 warnings");
+    expect(view.textContent).not.toContain("0 info");
+    expect(view.querySelector('ul[aria-label="Visual Review findings"]')).toBeNull();
+  });
+
+  it("renders singular Visual Review severity labels", async () => {
+    const view = await render(
+      <DevopsEvidencePanel
+        task={taskWithVisualReview([
+          { severity: "ERROR", category: "layout", title: "Panel overlap", description: "The panel overlaps content." },
+          { severity: "WARNING", category: "spacing", title: "Dense controls", description: "Controls are too dense." },
+          { severity: "INFO", category: "typography", title: "Readable text", description: "Text remains readable." },
+        ])}
+      />,
+    );
+
+    expect(view.textContent).toContain("1 error · 1 warning · 1 info");
+    expect(view.textContent).not.toContain("1 errors");
+    expect(view.textContent).not.toContain("1 warnings");
+  });
+
+  it("ignores unexpected Visual Review severities in the summary without crashing", async () => {
+    const view = await render(
+      <DevopsEvidencePanel
+        task={taskWithVisualReview([
+          {
+            severity: "CRITICAL",
+            category: "layout",
+            title: "Unexpected severity remains visible",
+            description: "The runtime finding should still render in the detailed list.",
+          } as never,
+          { severity: "INFO", category: "other", title: "Supported severity", description: "This finding is counted." },
+        ])}
+      />,
+    );
+
+    expect(view.textContent).toContain("1 info");
+    expect(view.textContent).not.toContain("CRITICAL");
+    expect(view.textContent).toContain("Severity unknown");
+    expect(view.textContent).toContain("Unexpected severity remains visible");
+  });
+
+  it("keeps detailed Visual Review findings visible with severity and description", async () => {
+    const view = await render(
+      <DevopsEvidencePanel
+        task={taskWithVisualReview([
+          { severity: "ERROR", category: "layout", title: "Panel overlap", description: "The evidence panel overlaps adjacent content." },
+        ])}
+      />,
+    );
+
+    expect(view.querySelector('ul[aria-label="Visual Review findings"]')).not.toBeNull();
+    expect(view.textContent).toContain("Panel overlap");
+    expect(view.textContent).toContain("ERROR");
+    expect(view.textContent).toContain("The evidence panel overlaps adjacent content.");
   });
 });
 
