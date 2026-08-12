@@ -136,6 +136,21 @@ function taskWithAllEvidence(overrides: Partial<TaskSnapshot> = {}): TaskSnapsho
   });
 }
 
+function taskWithScreenshotEvidence(id = "shot_123e4567-e89b-42d3-a456-426614174000"): TaskSnapshot {
+  const screenshotTask = taskWithAllEvidence();
+  screenshotTask.validation = {
+    ...screenshotTask.validation!,
+    browserScreenshot: {
+      status: "CAPTURED",
+      id,
+      url: "http://127.0.0.1:43117/",
+      viewport: { width: 1440, height: 900 },
+      capturedAt: "2026-08-03T12:13:00.000Z",
+    },
+  };
+  return screenshotTask;
+}
+
 describe("Developer evidence panel", () => {
   it("renders implementation summary, proposed files, verification steps, and timestamp with proposal language", async () => {
     const view = await render(<DeveloperEvidencePanel task={taskWithAllEvidence()} />);
@@ -236,6 +251,49 @@ describe("DevOps evidence panel", () => {
     expect(view.textContent).toContain("Safe test summary.");
     expect(view.textContent).not.toContain("SECRET_STDOUT_SHOULD_NOT_RENDER");
     expect(view.textContent).not.toContain("SECRET_STDERR_SHOULD_NOT_RENDER");
+  });
+
+  it("renders a copy action when screenshot ID exists", async () => {
+    const view = await render(<DevopsEvidencePanel task={taskWithScreenshotEvidence()} />);
+
+    expect(view.textContent).toContain("shot_123e4567-e89b-42d3-a456-426614174000");
+    expect(view.querySelector('button[aria-label="Copy screenshot ID"]')).not.toBeNull();
+  });
+
+  it("copies the exact authoritative screenshot ID", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const view = await render(<DevopsEvidencePanel task={taskWithScreenshotEvidence("shot_authoritative_exact")} />);
+
+    view.querySelector<HTMLButtonElement>('button[aria-label="Copy screenshot ID"]')?.click();
+
+    expect(writeText).toHaveBeenCalledWith("shot_authoritative_exact");
+  });
+
+  it("does not render a screenshot ID copy action when screenshot evidence is missing", async () => {
+    const view = await render(<DevopsEvidencePanel task={taskWithAllEvidence()} />);
+
+    expect(view.querySelector('button[aria-label="Copy screenshot ID"]')).toBeNull();
+  });
+
+  it("does not render a screenshot ID copy action when screenshot ID is empty", async () => {
+    const view = await render(<DevopsEvidencePanel task={taskWithScreenshotEvidence("")} />);
+
+    expect(view.querySelector('button[aria-label="Copy screenshot ID"]')).toBeNull();
+  });
+
+  it("keeps screenshot evidence content visible beside the copy action", async () => {
+    const view = await render(<DevopsEvidencePanel task={taskWithScreenshotEvidence()} />);
+
+    expect(view.textContent).toContain("Screenshot evidence");
+    expect(view.textContent).toContain("shot_123e4567-e89b-42d3-a456-426614174000");
+    expect(view.textContent).toContain("1440x900");
+    expect(view.textContent).toContain("Screenshot captured");
+    expect(view.textContent).toContain("Aug 3, 2026, 12:13 PM");
+    expect(view.textContent).toContain("Validation passed");
   });
 });
 
