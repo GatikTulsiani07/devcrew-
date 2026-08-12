@@ -1,4 +1,4 @@
-import { CloudCog } from "lucide-react";
+import { CloudCog, Copy } from "lucide-react";
 import type { TaskSnapshot } from "@/lib/api-types";
 import {
   EmptyEvidenceState,
@@ -13,6 +13,8 @@ import {
 
 export function DevopsEvidencePanel({ task }: { task?: TaskSnapshot }) {
   const validation = task?.validation;
+  const screenshot = validation?.browserScreenshot;
+  const screenshotId = screenshot?.id;
 
   return (
     <EvidencePanel icon={CloudCog} title="DevOps evidence" status={validation ? `Validation ${validation.status.toLowerCase()}` : "Not run"}>
@@ -35,6 +37,28 @@ export function DevopsEvidencePanel({ task }: { task?: TaskSnapshot }) {
                   </EvidenceListItem>
                 ))}
               </EvidenceList>
+            </EvidenceSection>
+          )}
+
+          {screenshot && (
+            <EvidenceSection title="Screenshot evidence">
+              <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
+                <p className="min-w-0 break-all font-mono text-[0.8rem] leading-5 text-ink-secondary">{screenshot.id}</p>
+                {screenshotId && (
+                  <button
+                    type="button"
+                    aria-label="Copy screenshot ID"
+                    onClick={() => void navigator.clipboard.writeText(screenshotId)}
+                    className="inline-grid size-7 shrink-0 place-items-center rounded-[var(--radius-small)] bg-panel-strong text-ink-muted outline-none transition-colors hover:bg-surface-hover hover:text-accent focus-visible:ring-2 focus-visible:ring-focus"
+                  >
+                    <Copy aria-hidden="true" className="size-3.5" />
+                  </button>
+                )}
+              </div>
+              <p className="mt-1 break-words text-[0.8rem] leading-5 text-ink-muted">
+                {screenshot.viewport.width}x{screenshot.viewport.height}
+              </p>
+              <EvidenceTimestamp label="Screenshot captured" value={screenshot.capturedAt} />
             </EvidenceSection>
           )}
 
