@@ -17,6 +17,7 @@ export function DevopsEvidencePanel({ task }: { task?: TaskSnapshot }) {
   const screenshotId = screenshot?.id;
   const visualReview = validation?.visualReview;
   const visualReviewSeveritySummary = visualReview ? visualReviewSeveritySummaryLabel(visualReview.findings) : "";
+  const visualReviewFindings = visualReview ? sortVisualReviewFindingsForDisplay(visualReview.findings) : [];
 
   return (
     <EvidencePanel icon={CloudCog} title="DevOps evidence" status={validation ? `Validation ${validation.status.toLowerCase()}` : "Not run"}>
@@ -72,9 +73,9 @@ export function DevopsEvidencePanel({ task }: { task?: TaskSnapshot }) {
                   {visualReviewSeveritySummary}
                 </p>
               )}
-              {visualReview.findings.length > 0 && (
+              {visualReviewFindings.length > 0 && (
                 <EvidenceList label="Visual Review findings">
-                  {visualReview.findings.map((finding, index) => (
+                  {visualReviewFindings.map((finding, index) => (
                     <EvidenceListItem key={`${finding.title}-${index}`}>
                       <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                         <span className="break-words font-medium text-ink">{finding.title}</span>
@@ -114,6 +115,20 @@ function visualReviewSeveritySummaryLabel(findings: readonly VisualReviewFinding
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+function sortVisualReviewFindingsForDisplay(findings: readonly VisualReviewFinding[]): VisualReviewFinding[] {
+  return findings
+    .map((finding, index) => ({ finding, index }))
+    .sort((left, right) => visualReviewSeverityRank(left.finding) - visualReviewSeverityRank(right.finding) || left.index - right.index)
+    .map(({ finding }) => finding);
+}
+
+function visualReviewSeverityRank(finding: VisualReviewFinding): number {
+  if (finding.severity === "ERROR") return 0;
+  if (finding.severity === "WARNING") return 1;
+  if (finding.severity === "INFO") return 2;
+  return 3;
 }
 
 function countLabel(count: number, singular: string, plural: string): string {
