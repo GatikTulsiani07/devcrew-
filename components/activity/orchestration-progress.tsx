@@ -58,7 +58,7 @@ export function OrchestrationProgress({
 
   const currentLabel = model.currentStageId ? model.stages.find((stage) => stage.id === model.currentStageId)?.label : undefined;
   const completed = model.stages.length > 0 && model.stages.every((stage) => stage.state === "completed");
-  const headingLabel = completed ? "Workflow complete" : currentLabel ? `Current stage: ${currentLabel}` : "Workflow stopped at Human Approval";
+  const headingLabel = model.cancelled ? "Workflow cancelled" : completed ? "Workflow complete" : currentLabel ? `Current stage: ${currentLabel}` : "Workflow stopped at Human Approval";
 
   return (
     <section aria-labelledby="orchestration-progress-heading" aria-label={`Orchestration progress. ${headingLabel}.`} className="min-w-0 rounded-[var(--radius-standard)] bg-panel/55 px-5 py-4 sm:px-6">

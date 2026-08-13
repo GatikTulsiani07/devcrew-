@@ -48,6 +48,18 @@ function taskWithPullRequest(): TaskSnapshot {
   };
 }
 
+function taskWithCancellation(status: TaskStatus, cancellationStatus: NonNullable<TaskSnapshot["cancellation"]>["status"]): TaskSnapshot {
+  return {
+    ...task(status),
+    cancellation: {
+      status: cancellationStatus,
+      requestedAt: "2026-08-03T12:30:00.000Z",
+      ...(cancellationStatus === "CANCELLED" ? { cancelledAt: "2026-08-03T12:31:00.000Z" } : {}),
+      summary: `Cancellation ${cancellationStatus.toLowerCase()}.`,
+    },
+  };
+}
+
 async function render(taskSnapshot?: TaskSnapshot, fixtureFallback = false) {
   if (root) await act(async () => root?.unmount());
   container?.remove();
@@ -150,5 +162,75 @@ describe("orchestration progress model", () => {
     const view = await render(taskWithPullRequest());
     expect(view.textContent).toContain("Workflow complete");
     expect(view.querySelector('[aria-label="Pull Request: Completed"]')).not.toBeNull();
+  });
+
+  it("renders Workflow cancelled only from authoritative CANCELLED cancellation evidence", async () => {
+    const view = await render(taskWithCancellation("PLAN_APPROVED", "CANCELLED"));
+    expect(view.textContent).toContain("Workflow cancelled");
+  });
+
+  it("preserves completed stages and leaves remaining stages incomplete after cancellation", () => {
+    const model = getOrchestrationProgress(taskWithCancellation("IMPLEMENTATION_COMPLETED", "CANCELLED"));
+    expect(model.cancelled).toBe(true);
+    expect(model.stages.map((stage) => [stage.id, stage.state])).toEqual([
+      ["manager", "completed"],
+      ["approval", "completed"],
+      ["developer", "completed"],
+      ["devops", "upcoming"],
+      ["reviewer", "upcoming"],
+      ["pullRequest", "upcoming"],
+    ]);
+  });
+
+  it("suppresses later active stages after cancellation", async () => {
+    const model = getOrchestrationProgress(taskWithCancellation("VALIDATION_COMPLETED", "CANCELLED"));
+    expect(model.currentStageId).toBeUndefined();
+    expect(model.stages.some((stage) => stage.state === "current")).toBe(false);
+    expect(model.stages.find((stage) => stage.id === "reviewer")?.state).toBe("upcoming");
+
+    const view = await render(taskWithCancellation("VALIDATION_COMPLETED", "CANCELLED"));
+    expect(view.textContent).toContain("Workflow cancelled");
+    expect(view.querySelector('[aria-label="Reviewer: Current"]')).toBeNull();
+  });
+
+  it("does not render REQUESTED cancellation as Workflow cancelled", async () => {
+    const model = getOrchestrationProgress(taskWithCancellation("PLAN_APPROVED", "REQUESTED"));
+    expect(model.cancelled).toBe(false);
+    expect(model.currentStageId).toBe("developer");
+
+    const view = await render(taskWithCancellation("PLAN_APPROVED", "REQUESTED"));
+    expect(view.textContent).not.toContain("Workflow cancelled");
+    expect(view.textContent).toContain("Current stage: Developer");
+  });
+
+  it("does not render FAILED cancellation as successfully cancelled", async () => {
+    const model = getOrchestrationProgress(taskWithCancellation("IMPLEMENTATION_COMPLETED", "FAILED"));
+    expect(model.cancelled).toBe(false);
+    expect(model.currentStageId).toBe("devops");
+
+    const view = await render(taskWithCancellation("IMPLEMENTATION_COMPLETED", "FAILED"));
+    expect(view.textContent).not.toContain("Workflow cancelled");
+    expect(view.textContent).toContain("Current stage: DevOps");
+  });
+
+  it("preserves existing behavior when cancellation evidence is absent", async () => {
+    const model = getOrchestrationProgress(task("PLAN_APPROVED"));
+    expect(model.cancelled).toBe(false);
+    expect(model.stages.map((stage) => stage.state)).toEqual(["completed", "completed", "current", "upcoming", "upcoming", "upcoming"]);
+
+    const view = await render(task("PLAN_APPROVED"));
+    expect(view.textContent).toContain("Current stage: Developer");
+    expect(view.querySelector('[aria-label="Developer: Current"]')).not.toBeNull();
+  });
+
+  it("does not infer cancelled progress from TASK_CANCELLED event text alone", async () => {
+    const taskWithCancelledEventText = {
+      ...task("PLAN_APPROVED"),
+      events: [{ type: "TASK_CANCELLED", message: "Task cancelled" }],
+    } as TaskSnapshot & { events: readonly { type: "TASK_CANCELLED"; message: string }[] };
+
+    const view = await render(taskWithCancelledEventText);
+    expect(view.textContent).not.toContain("Workflow cancelled");
+    expect(view.textContent).toContain("Current stage: Developer");
   });
 });
