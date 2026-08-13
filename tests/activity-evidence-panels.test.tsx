@@ -5,12 +5,13 @@ import { CancellationEvidencePanel } from "@/components/activity/cancellation-ev
 import { DeveloperEvidencePanel } from "@/components/activity/developer-evidence-panel";
 import { DevopsEvidencePanel } from "@/components/activity/devops-evidence-panel";
 import { PullRequestEvidencePanel } from "@/components/activity/pull-request-evidence-panel";
+import { RetryRecoveryEvidencePanel } from "@/components/activity/retry-recovery-evidence-panel";
 import { ReviewerEvidencePanel } from "@/components/activity/reviewer-evidence-panel";
 import { ActivityWorkspace } from "@/components/activity/activity-workspace";
 import { WorkspaceStateProvider } from "@/components/shell/workspace-state";
 import type { ProjectWorkflowState } from "@/hooks/use-project-workflow";
 import type { ProjectActivityState } from "@/hooks/use-project-activity";
-import type { ProjectSnapshot, TaskSnapshot, VisualReviewFinding } from "@/lib/api-types";
+import type { ProjectSnapshot, RetryAttemptEvidence, TaskSnapshot, VisualReviewFinding } from "@/lib/api-types";
 
 vi.mock("@/hooks/use-project-workflow", () => ({
   useProjectWorkflow: () => workflowState,
@@ -164,6 +165,20 @@ function taskWithVisualReview(findings: readonly VisualReviewFinding[]): TaskSna
     },
   };
   return visualReviewTask;
+}
+
+function retryAttempt(overrides: Partial<RetryAttemptEvidence> = {}): RetryAttemptEvidence {
+  return {
+    stage: "REVIEWER",
+    attempt: 1,
+    status: "FAILED",
+    category: "PROVIDER_TIMEOUT",
+    startedAt: "2026-08-03T12:16:00.000Z",
+    completedAt: "2026-08-03T12:17:00.000Z",
+    retryable: true,
+    summary: "Provider request failed at /Users/suniltulsiani/Desktop/devcrew-ui with TOKEN_SHOULD_NOT_RENDER and stack trace details.",
+    ...overrides,
+  };
 }
 
 function visualReviewFindingTitles(view: HTMLDivElement): string[] {
@@ -789,6 +804,165 @@ describe("Cancellation evidence panel", () => {
   });
 });
 
+describe("Retry recovery evidence panel", () => {
+  it("renders retry-available state from authoritative retry recovery evidence", async () => {
+    const view = await render(
+      <RetryRecoveryEvidencePanel
+        task={task({
+          retryRecovery: {
+            failedStage: "REVIEWER",
+            retryAvailable: true,
+            exhausted: false,
+            attempts: [retryAttempt()],
+          },
+        })}
+      />,
+    );
+
+    expect(view.querySelector("h2")?.textContent).toBe("Retry recovery");
+    expect(view.textContent).toContain("Retry available");
+    expect(view.textContent).toContain("Backend retry evidence shows a retry is available.");
+  });
+
+  it("renders exhausted state as Retry exhausted with priority over retry availability", async () => {
+    const view = await render(
+      <RetryRecoveryEvidencePanel
+        task={task({
+          retryRecovery: {
+            failedStage: "DEVOPS",
+            retryAvailable: true,
+            exhausted: true,
+            attempts: [retryAttempt({ stage: "DEVOPS" }), retryAttempt({ stage: "DEVOPS", attempt: 2 })],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("Retry exhausted");
+    expect(view.textContent).not.toContain("Retry available");
+  });
+
+  it("renders recovered/succeeded retry state only when the latest authoritative attempt succeeded", async () => {
+    const view = await render(
+      <RetryRecoveryEvidencePanel
+        task={task({
+          retryRecovery: {
+            retryAvailable: false,
+            exhausted: false,
+            attempts: [
+              retryAttempt({ attempt: 1, status: "FAILED" }),
+              retryAttempt({ attempt: 2, status: "SUCCEEDED", retryable: false }),
+            ],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("Recovered after retry");
+    expect(view.textContent).toContain("Backend retry evidence shows the latest retry succeeded.");
+  });
+
+  it("renders failed stage when available using safe user-facing labels", async () => {
+    const view = await render(
+      <RetryRecoveryEvidencePanel
+        task={task({
+          retryRecovery: {
+            failedStage: "VISUAL_REVIEW",
+            retryAvailable: true,
+            attempts: [retryAttempt({ stage: "VISUAL_REVIEW" })],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("Failed stage: Visual Review");
+    expect(view.textContent).not.toContain("VISUAL_REVIEW");
+  });
+
+  it("renders attempt count from the authoritative attempts array", async () => {
+    const view = await render(
+      <RetryRecoveryEvidencePanel
+        task={task({
+          retryRecovery: {
+            retryAvailable: false,
+            exhausted: true,
+            attempts: [retryAttempt(), retryAttempt({ attempt: 2 })],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("2 attempts");
+  });
+
+  it("renders singular attempt count correctly", async () => {
+    const view = await render(
+      <RetryRecoveryEvidencePanel
+        task={task({
+          retryRecovery: {
+            retryAvailable: true,
+            attempts: [retryAttempt()],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("1 attempt");
+    expect(view.textContent).not.toContain("1 attempts");
+  });
+
+  it("renders no panel when retryRecovery evidence is missing", async () => {
+    const view = await render(<RetryRecoveryEvidencePanel task={task()} />);
+
+    expect(view.textContent).not.toContain("Retry recovery");
+    expect(view.querySelector("section")).toBeNull();
+  });
+
+  it("uses neutral safe retry text without fabricating success or failure", async () => {
+    const view = await render(
+      <RetryRecoveryEvidencePanel
+        task={task({
+          retryRecovery: {
+            retryAvailable: false,
+            exhausted: false,
+            attempts: [retryAttempt({ status: "FAILED", retryable: false })],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("Retry evidence recorded");
+    expect(view.textContent).not.toContain("Recovered after retry");
+    expect(view.textContent).not.toContain("Retry exhausted");
+  });
+
+  it("does not render raw or internal retry attempt information", async () => {
+    const view = await render(
+      <RetryRecoveryEvidencePanel
+        task={task({
+          retryRecovery: {
+            failedStage: "DEVELOPER",
+            retryAvailable: true,
+            attempts: [
+              retryAttempt({
+                stage: "DEVELOPER",
+                category: "MODEL_OUTPUT_SCHEMA_INVALID",
+                summary: "Raw command npm run secret with /Users/suniltulsiani/Desktop/devcrew-ui and TOKEN_SHOULD_NOT_RENDER",
+              }),
+            ],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("Failed stage: Developer");
+    expect(view.textContent).not.toContain("MODEL_OUTPUT_SCHEMA_INVALID");
+    expect(view.textContent).not.toContain("npm run secret");
+    expect(view.textContent).not.toContain("/Users/suniltulsiani");
+    expect(view.textContent).not.toContain("TOKEN_SHOULD_NOT_RENDER");
+  });
+});
+
 describe("Activity structured evidence placement", () => {
   it("renders semantic panel headings and does not mix fixture evidence into an active backend task", async () => {
     const backendProject = project();
@@ -822,6 +996,43 @@ describe("Activity structured evidence placement", () => {
     expect(view.querySelector('ul[aria-label="Reviewer findings"]')).not.toBeNull();
     expect(view.textContent).toContain("#42");
     expect(view.textContent).toContain("devcrew/task-task_123");
+  });
+
+  it("places retry recovery evidence with existing structured evidence panels unchanged", async () => {
+    workflowState = {
+      project: project(),
+      task: taskWithAllEvidence({
+        retryRecovery: {
+          failedStage: "REVIEWER",
+          retryAvailable: true,
+          exhausted: false,
+          attempts: [retryAttempt()],
+        },
+      }),
+      initializing: false,
+      approve: vi.fn(),
+      reject: vi.fn(),
+      execute: vi.fn(),
+      validate: vi.fn(),
+      review: vi.fn(),
+      fetchTask: vi.fn(),
+    };
+    activityState = { events: [], connection: "connected", lastSequence: 0 };
+
+    const view = await render(
+      <WorkspaceStateProvider>
+        <ActivityWorkspace />
+      </WorkspaceStateProvider>,
+    );
+    const headings = [...view.querySelectorAll("h2")].map((heading) => heading.textContent);
+
+    expect(headings.indexOf("Retry recovery")).toBeGreaterThan(-1);
+    expect(headings.indexOf("Retry recovery")).toBeLessThan(headings.indexOf("Developer evidence"));
+    expect(headings).toEqual(expect.arrayContaining(["Developer evidence", "DevOps evidence", "Reviewer evidence", "Pull Request"]));
+    expect(view.textContent).toContain("Prepared an implementation proposal");
+    expect(view.textContent).toContain("Validation passed");
+    expect(view.textContent).toContain("Review approved the structured evidence presentation.");
+    expect(view.textContent).toContain("#42");
   });
 
   it("places authoritative cancellation state before existing stage evidence panels", async () => {
@@ -898,6 +1109,67 @@ describe("Activity structured evidence placement", () => {
 
     expect(view.textContent).toContain("Task cancelled");
     expect([...view.querySelectorAll("h2")].map((heading) => heading.textContent)).not.toContain("Cancellation");
+  });
+
+  it("does not infer retry state from retry timeline events alone", async () => {
+    workflowState = {
+      project: project(),
+      task: taskWithAllEvidence(),
+      initializing: false,
+      approve: vi.fn(),
+      reject: vi.fn(),
+      execute: vi.fn(),
+      validate: vi.fn(),
+      review: vi.fn(),
+      fetchTask: vi.fn(),
+    };
+    activityState = {
+      events: [
+        {
+          id: "evt_retry_started",
+          sequence: 1,
+          projectId: "proj_1",
+          taskId: "task_1",
+          type: "RETRY_STARTED",
+          actor: { kind: "SYSTEM" },
+          summary: "Retry started for reviewer.",
+          createdAt: "2026-08-03T12:17:00.000Z",
+        },
+        {
+          id: "evt_retry_completed",
+          sequence: 2,
+          projectId: "proj_1",
+          taskId: "task_1",
+          type: "RETRY_COMPLETED",
+          actor: { kind: "SYSTEM" },
+          summary: "Retry completed after recovery.",
+          createdAt: "2026-08-03T12:18:00.000Z",
+        },
+        {
+          id: "evt_retry_exhausted",
+          sequence: 3,
+          projectId: "proj_1",
+          taskId: "task_1",
+          type: "RETRY_EXHAUSTED",
+          actor: { kind: "SYSTEM" },
+          summary: "Retry exhausted.",
+          createdAt: "2026-08-03T12:19:00.000Z",
+        },
+      ],
+      connection: "connected",
+      lastSequence: 3,
+    };
+
+    const view = await render(
+      <WorkspaceStateProvider>
+        <ActivityWorkspace />
+      </WorkspaceStateProvider>,
+    );
+
+    expect(view.textContent).toContain("Retry started");
+    expect(view.textContent).toContain("Retry completed");
+    expect(view.textContent).toContain("Retry exhausted");
+    expect([...view.querySelectorAll("h2")].map((heading) => heading.textContent)).not.toContain("Retry recovery");
   });
 
   it("clearly labels fixture setup mode without fabricating stage evidence", async () => {

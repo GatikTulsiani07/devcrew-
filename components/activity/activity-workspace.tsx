@@ -14,6 +14,7 @@ import { DeveloperEvidencePanel } from "@/components/activity/developer-evidence
 import { DevopsEvidencePanel } from "@/components/activity/devops-evidence-panel";
 import { OrchestrationProgress } from "@/components/activity/orchestration-progress";
 import { PullRequestEvidencePanel } from "@/components/activity/pull-request-evidence-panel";
+import { RetryRecoveryEvidencePanel } from "@/components/activity/retry-recovery-evidence-panel";
 import { ReviewerEvidencePanel } from "@/components/activity/reviewer-evidence-panel";
 
 function visibleStatus(agent: Agent, online: boolean, task?: TaskSnapshot) {
@@ -242,6 +243,11 @@ export function ActivityWorkspace() {
                 {workflow.task?.cancellation && (
                   <div className="min-w-0 md:col-span-2 xl:col-span-4">
                     <CancellationEvidencePanel task={workflow.task} />
+                  </div>
+                )}
+                {workflow.task?.retryRecovery && (
+                  <div className="min-w-0 md:col-span-2 xl:col-span-4">
+                    <RetryRecoveryEvidencePanel task={workflow.task} />
                   </div>
                 )}
                 <DeveloperEvidencePanel task={workflow.task} />
