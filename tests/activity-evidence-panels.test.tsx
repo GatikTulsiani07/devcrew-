@@ -166,6 +166,10 @@ function taskWithVisualReview(findings: readonly VisualReviewFinding[]): TaskSna
   return visualReviewTask;
 }
 
+function visualReviewFindingTitles(view: HTMLDivElement): string[] {
+  return [...view.querySelectorAll('ul[aria-label="Visual Review findings"] li')].map((item) => item.querySelector("span")?.textContent ?? "");
+}
+
 describe("Developer evidence panel", () => {
   it("renders implementation summary, proposed files, verification steps, and timestamp with proposal language", async () => {
     const view = await render(<DeveloperEvidencePanel task={taskWithAllEvidence()} />);
@@ -309,6 +313,100 @@ describe("DevOps evidence panel", () => {
     expect(view.textContent).toContain("Screenshot captured");
     expect(view.textContent).toContain("Aug 3, 2026, 12:13 PM");
     expect(view.textContent).toContain("Validation passed");
+  });
+
+  it("renders Visual Review ERROR findings before WARNING and INFO findings", async () => {
+    const view = await render(
+      <DevopsEvidencePanel
+        task={taskWithVisualReview([
+          { severity: "INFO", category: "typography", title: "Info finding", description: "Informational detail remains visible." },
+          { severity: "WARNING", category: "spacing", title: "Warning finding", description: "Warning detail remains visible." },
+          { severity: "ERROR", category: "layout", title: "Error finding", description: "Error detail remains visible." },
+        ])}
+      />,
+    );
+
+    expect(visualReviewFindingTitles(view)).toEqual(["Error finding", "Warning finding", "Info finding"]);
+  });
+
+  it("renders Visual Review WARNING findings before INFO findings", async () => {
+    const view = await render(
+      <DevopsEvidencePanel
+        task={taskWithVisualReview([
+          { severity: "INFO", category: "typography", title: "Info finding", description: "Informational detail remains visible." },
+          { severity: "WARNING", category: "spacing", title: "Warning finding", description: "Warning detail remains visible." },
+        ])}
+      />,
+    );
+
+    expect(visualReviewFindingTitles(view)).toEqual(["Warning finding", "Info finding"]);
+  });
+
+  it("preserves original order among Visual Review findings with the same severity", async () => {
+    const view = await render(
+      <DevopsEvidencePanel
+        task={taskWithVisualReview([
+          { severity: "WARNING", category: "spacing", title: "First warning", description: "First warning detail." },
+          { severity: "ERROR", category: "layout", title: "First error", description: "First error detail." },
+          { severity: "ERROR", category: "responsive", title: "Second error", description: "Second error detail." },
+          { severity: "WARNING", category: "accessibility", title: "Second warning", description: "Second warning detail." },
+        ])}
+      />,
+    );
+
+    expect(visualReviewFindingTitles(view)).toEqual(["First error", "Second error", "First warning", "Second warning"]);
+  });
+
+  it("does not mutate the source Visual Review findings array while sorting for display", async () => {
+    const findings: VisualReviewFinding[] = [
+      { severity: "INFO", category: "typography", title: "Info finding", description: "Informational detail remains visible." },
+      { severity: "ERROR", category: "layout", title: "Error finding", description: "Error detail remains visible." },
+      { severity: "WARNING", category: "spacing", title: "Warning finding", description: "Warning detail remains visible." },
+    ];
+
+    const view = await render(<DevopsEvidencePanel task={taskWithVisualReview(findings)} />);
+
+    expect(visualReviewFindingTitles(view)).toEqual(["Error finding", "Warning finding", "Info finding"]);
+    expect(findings.map((finding) => finding.title)).toEqual(["Info finding", "Error finding", "Warning finding"]);
+  });
+
+  it("renders unknown Visual Review severities after known severities without crashing", async () => {
+    const view = await render(
+      <DevopsEvidencePanel
+        task={taskWithVisualReview([
+          {
+            severity: "CRITICAL",
+            category: "layout",
+            title: "Unexpected severity finding",
+            description: "Unknown severity detail remains visible.",
+          } as never,
+          { severity: "INFO", category: "other", title: "Info finding", description: "Known severity detail remains visible." },
+          { severity: "ERROR", category: "layout", title: "Error finding", description: "Error detail remains visible." },
+        ])}
+      />,
+    );
+
+    expect(visualReviewFindingTitles(view)).toEqual(["Error finding", "Info finding", "Unexpected severity finding"]);
+    expect(view.textContent).toContain("Severity unknown");
+    expect(view.textContent).toContain("Unknown severity detail remains visible.");
+  });
+
+  it("keeps existing Visual Review finding content visible after presentation sorting", async () => {
+    const view = await render(
+      <DevopsEvidencePanel
+        task={taskWithVisualReview([
+          { severity: "WARNING", category: "spacing", title: "Crowded controls", description: "Toolbar controls need more spacing." },
+          { severity: "ERROR", category: "layout", title: "Panel overlap", description: "The evidence panel overlaps adjacent content." },
+        ])}
+      />,
+    );
+
+    expect(view.textContent).toContain("Panel overlap");
+    expect(view.textContent).toContain("ERROR");
+    expect(view.textContent).toContain("The evidence panel overlaps adjacent content.");
+    expect(view.textContent).toContain("Crowded controls");
+    expect(view.textContent).toContain("WARNING");
+    expect(view.textContent).toContain("Toolbar controls need more spacing.");
   });
 
   it("renders Visual Review ERROR, WARNING, and INFO counts in severity order", async () => {
