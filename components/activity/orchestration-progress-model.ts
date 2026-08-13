@@ -21,6 +21,7 @@ export interface OrchestrationProgressModel {
   hasTask: boolean;
   status?: TaskStatus | string;
   currentStageId?: OrchestrationStageId;
+  cancelled: boolean;
   rejectionReason?: string;
   fallback: boolean;
   stages: readonly OrchestrationStage[];
@@ -98,11 +99,12 @@ const statusMappings: Readonly<Partial<Record<TaskStatus, StageStateMap>>> = {
 };
 
 export function getOrchestrationProgress(
-  task?: Pick<TaskSnapshot, "status" | "planDecision" | "pullRequest">,
+  task?: Pick<TaskSnapshot, "status" | "planDecision" | "pullRequest" | "cancellation">,
 ): OrchestrationProgressModel {
   if (!task) {
     return {
       hasTask: false,
+      cancelled: false,
       fallback: false,
       stages: [],
     };
@@ -113,13 +115,16 @@ export function getOrchestrationProgress(
     return {
       hasTask: true,
       status: task.status,
+      cancelled: false,
       fallback: true,
       stages: [],
     };
   }
 
+  const cancelled = task.cancellation?.status === "CANCELLED";
   const stages = stageIds.map((id) => {
-    const state = id === "pullRequest" && task.status === "REVIEW_COMPLETED" && task.pullRequest ? "completed" : mapping[id];
+    const mappedState = id === "pullRequest" && task.status === "REVIEW_COMPLETED" && task.pullRequest ? "completed" : mapping[id];
+    const state = cancelled && mappedState === "current" ? "upcoming" : mappedState;
     return {
       id,
       label: stageLabels[id],
@@ -131,6 +136,7 @@ export function getOrchestrationProgress(
   return {
     hasTask: true,
     status: task.status,
+    cancelled,
     currentStageId: stages.find((stage) => stage.state === "current")?.id,
     rejectionReason: task.status === "PLAN_REJECTED" ? task.planDecision?.reason : undefined,
     fallback: false,
