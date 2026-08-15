@@ -12,7 +12,7 @@ import { ActivityWorkspace } from "@/components/activity/activity-workspace";
 import { WorkspaceStateProvider } from "@/components/shell/workspace-state";
 import type { ProjectWorkflowState } from "@/hooks/use-project-workflow";
 import type { ProjectActivityState } from "@/hooks/use-project-activity";
-import type { ProjectSnapshot, RetryAttemptEvidence, TaskSnapshot, VisualRepairAttempt, VisualReviewFinding } from "@/lib/api-types";
+import type { ProjectSnapshot, RetryAttemptEvidence, ReviewFinding, TaskSnapshot, VisualRepairAttempt, VisualReviewFinding } from "@/lib/api-types";
 
 vi.mock("@/hooks/use-project-workflow", () => ({
   useProjectWorkflow: () => workflowState,
@@ -212,6 +212,23 @@ function visualRepairAttempt(overrides: Partial<VisualRepairAttempt> = {}): Visu
 
 function visualReviewFindingTitles(view: HTMLDivElement): string[] {
   return [...view.querySelectorAll('ul[aria-label="Visual Review findings"] li')].map((item) => item.querySelector("span")?.textContent ?? "");
+}
+
+function reviewerGroupHeadings(view: HTMLDivElement): string[] {
+  return [...view.querySelectorAll("h4")].map((heading) => heading.textContent ?? "");
+}
+
+function reviewerFindingTitlesForGroup(view: HTMLDivElement, group: string): string[] {
+  return [...view.querySelectorAll(`ul[aria-label="Reviewer ${group} findings"] li`)].map((item) => item.querySelector("span")?.textContent ?? "");
+}
+
+function reviewFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
+  return {
+    severity: "INFO",
+    title: "Finding title",
+    description: "Finding description.",
+    ...overrides,
+  };
 }
 
 describe("Developer evidence panel", () => {
@@ -574,7 +591,7 @@ describe("Reviewer evidence panel", () => {
     expect(view.textContent).toContain("The panels consume the task snapshot");
     expect(view.textContent).toContain("Review completed");
     expect(view.textContent).toContain("Aug 3, 2026, 12:20 PM");
-    expect(view.querySelector('ul[aria-label="Reviewer findings"]')).not.toBeNull();
+    expect(view.querySelector('ul[aria-label="Reviewer Info findings"]')).not.toBeNull();
   });
 
   it("uses a neutral fallback for unknown severities and wraps long finding descriptions", async () => {
@@ -593,7 +610,7 @@ describe("Reviewer evidence panel", () => {
 
     expect(view.textContent).toContain("Severity unknown");
     expect(view.textContent).toContain("identifier_that_should_wrap_safely");
-    expect(view.querySelector('ul[aria-label="Reviewer findings"] p')?.className).toMatch(/break-words/);
+    expect(view.querySelector('ul[aria-label="Reviewer Other findings"] p')?.className).toMatch(/break-words/);
   });
 
   it("shows a safe not-run state and handles missing findings without crashing", async () => {
@@ -610,6 +627,165 @@ describe("Reviewer evidence panel", () => {
     const view = await render(<ReviewerEvidencePanel task={noFindings} />);
     expect(view.textContent).toContain("Review approved the structured evidence presentation.");
     expect(view.textContent).not.toContain("undefined");
+  });
+
+  it("renders ERROR findings before WARNING and INFO groups", async () => {
+    const reviewTask = taskWithAllEvidence();
+    reviewTask.review = {
+      ...reviewTask.review!,
+      findings: [
+        reviewFinding({ severity: "INFO", title: "Info finding", description: "Informational detail remains visible." }),
+        reviewFinding({ severity: "WARNING" as never, title: "Warning finding", description: "Warning detail remains visible." }),
+        reviewFinding({ severity: "ERROR" as never, title: "Error finding", description: "Error detail remains visible." }),
+      ],
+    };
+
+    const view = await render(<ReviewerEvidencePanel task={reviewTask} />);
+
+    expect(reviewerGroupHeadings(view)).toEqual(["Errors", "Warnings", "Info"]);
+    expect(reviewerFindingTitlesForGroup(view, "Errors")).toEqual(["Error finding"]);
+    expect(reviewerFindingTitlesForGroup(view, "Warnings")).toEqual(["Warning finding"]);
+    expect(reviewerFindingTitlesForGroup(view, "Info")).toEqual(["Info finding"]);
+  });
+
+  it("renders WARNING findings before INFO when there are no errors", async () => {
+    const reviewTask = taskWithAllEvidence();
+    reviewTask.review = {
+      ...reviewTask.review!,
+      findings: [
+        reviewFinding({ severity: "INFO", title: "Info finding", description: "Informational detail remains visible." }),
+        reviewFinding({ severity: "WARNING" as never, title: "Warning finding", description: "Warning detail remains visible." }),
+      ],
+    };
+
+    const view = await render(<ReviewerEvidencePanel task={reviewTask} />);
+
+    expect(reviewerGroupHeadings(view)).toEqual(["Warnings", "Info"]);
+  });
+
+  it("omits empty severity groups", async () => {
+    const reviewTask = taskWithAllEvidence();
+    reviewTask.review = {
+      ...reviewTask.review!,
+      findings: [reviewFinding({ severity: "INFO", title: "Only info", description: "Only info detail." })],
+    };
+
+    const view = await render(<ReviewerEvidencePanel task={reviewTask} />);
+
+    expect(reviewerGroupHeadings(view)).toEqual(["Info"]);
+    expect(view.querySelector('ul[aria-label="Reviewer Errors findings"]')).toBeNull();
+    expect(view.querySelector('ul[aria-label="Reviewer Warnings findings"]')).toBeNull();
+    expect(view.querySelector('ul[aria-label="Reviewer Other findings"]')).toBeNull();
+  });
+
+  it("preserves original order among same-severity findings", async () => {
+    const reviewTask = taskWithAllEvidence();
+    reviewTask.review = {
+      ...reviewTask.review!,
+      findings: [
+        reviewFinding({ severity: "WARNING" as never, title: "First warning", description: "First warning detail." }),
+        reviewFinding({ severity: "INFO", title: "Info between warnings", description: "Info detail." }),
+        reviewFinding({ severity: "WARNING" as never, title: "Second warning", description: "Second warning detail." }),
+        reviewFinding({ severity: "WARNING" as never, title: "Third warning", description: "Third warning detail." }),
+      ],
+    };
+
+    const view = await render(<ReviewerEvidencePanel task={reviewTask} />);
+
+    expect(reviewerFindingTitlesForGroup(view, "Warnings")).toEqual(["First warning", "Second warning", "Third warning"]);
+  });
+
+  it("renders unknown severities in the final neutral group without crashing", async () => {
+    const reviewTask = taskWithAllEvidence();
+    reviewTask.review = {
+      ...reviewTask.review!,
+      findings: [
+        reviewFinding({ severity: "CRITICAL" as never, title: "Unexpected severity", description: "Unexpected severity detail remains visible." }),
+        reviewFinding({ severity: "ERROR" as never, title: "Error finding", description: "Error detail remains visible." }),
+      ],
+    };
+
+    const view = await render(<ReviewerEvidencePanel task={reviewTask} />);
+
+    expect(reviewerGroupHeadings(view)).toEqual(["Errors", "Other"]);
+    expect(reviewerFindingTitlesForGroup(view, "Other")).toEqual(["Unexpected severity"]);
+    expect(view.textContent).toContain("Severity unknown");
+    expect(view.textContent).toContain("Unexpected severity detail remains visible.");
+  });
+
+  it("does not mutate the source Reviewer findings array while grouping", async () => {
+    const findings: ReviewFinding[] = [
+      reviewFinding({ severity: "INFO", title: "Info first", description: "Info detail." }),
+      reviewFinding({ severity: "ERROR" as never, title: "Error second", description: "Error detail." }),
+      reviewFinding({ severity: "WARNING" as never, title: "Warning third", description: "Warning detail." }),
+    ];
+    const reviewTask = taskWithAllEvidence();
+    reviewTask.review = { ...reviewTask.review!, findings };
+
+    const view = await render(<ReviewerEvidencePanel task={reviewTask} />);
+
+    expect(reviewerGroupHeadings(view)).toEqual(["Errors", "Warnings", "Info"]);
+    expect(findings.map((finding) => finding.title)).toEqual(["Info first", "Error second", "Warning third"]);
+  });
+
+  it("keeps finding title, description, and severity metadata visible", async () => {
+    const reviewTask = taskWithAllEvidence();
+    reviewTask.review = {
+      ...reviewTask.review!,
+      findings: [
+        reviewFinding({
+          severity: "ERROR" as never,
+          title: "Evidence mismatch",
+          description: "Reviewer description remains visible with identifier_that_should_wrap_safely.",
+        }),
+      ],
+    };
+
+    const view = await render(<ReviewerEvidencePanel task={reviewTask} />);
+
+    expect(view.textContent).toContain("Evidence mismatch");
+    expect(view.textContent).toContain("Reviewer description remains visible");
+    expect(view.textContent).toContain("ERROR");
+    expect(view.querySelector('ul[aria-label="Reviewer Errors findings"] p')?.className).toMatch(/break-words/);
+  });
+
+  it("does not infer severity from finding text", async () => {
+    const reviewTask = taskWithAllEvidence();
+    reviewTask.review = {
+      ...reviewTask.review!,
+      findings: [
+        reviewFinding({
+          severity: "INFO",
+          title: "Title says ERROR and WARNING",
+          description: "Description says error, warning, and info but authoritative severity is INFO.",
+        }),
+      ],
+    };
+
+    const view = await render(<ReviewerEvidencePanel task={reviewTask} />);
+
+    expect(reviewerGroupHeadings(view)).toEqual(["Info"]);
+    expect(reviewerFindingTitlesForGroup(view, "Info")).toEqual(["Title says ERROR and WARNING"]);
+    expect(view.querySelector('ul[aria-label="Reviewer Errors findings"]')).toBeNull();
+    expect(view.querySelector('ul[aria-label="Reviewer Warnings findings"]')).toBeNull();
+  });
+
+  it("keeps Reviewer verdict and summary visible after grouping", async () => {
+    const reviewTask = taskWithAllEvidence();
+    reviewTask.review = {
+      ...reviewTask.review!,
+      findings: [
+        reviewFinding({ severity: "ERROR" as never, title: "Error finding", description: "Error detail." }),
+        reviewFinding({ severity: "INFO", title: "Info finding", description: "Info detail." }),
+      ],
+    };
+
+    const view = await render(<ReviewerEvidencePanel task={reviewTask} />);
+
+    expect(view.textContent).toContain("Verdict approved");
+    expect(view.textContent).toContain("Review approved the structured evidence presentation.");
+    expect(view.textContent).toContain("Review completed");
+    expect(view.textContent).toContain("Aug 3, 2026, 12:20 PM");
   });
 });
 
@@ -1312,7 +1488,7 @@ describe("Activity structured evidence placement", () => {
     );
     expect(view.querySelector('ul[aria-label="Proposed files"]')).not.toBeNull();
     expect(view.querySelector('ul[aria-label="Validation checks"]')).not.toBeNull();
-    expect(view.querySelector('ul[aria-label="Reviewer findings"]')).not.toBeNull();
+    expect(view.querySelector('ul[aria-label="Reviewer Info findings"]')).not.toBeNull();
     expect(view.textContent).toContain("#42");
     expect(view.textContent).toContain("devcrew/task-task_123");
   });
