@@ -37,17 +37,44 @@ function event(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
   };
 }
 
-describe("activity event presentation", () => {
-  it("renders backend events as an ascending semantic timeline", async () => {
-    container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
-    await act(async () => root?.render(<ActivityTimeline events={[event({ sequence: 2, id: "evt_2" }), event({ sequence: 1 })]} />));
+async function renderTimeline(events: readonly ActivityEvent[]) {
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => root?.render(<ActivityTimeline events={events} />));
+  return container;
+}
 
-    expect(container.querySelector("ol")?.getAttribute("aria-label")).toBe("Backend activity events");
-    expect(container.querySelectorAll("li")).toHaveLength(2);
-    expect(container.textContent).toContain("Sequence 1");
-    expect(container.textContent).toContain("Sequence 2");
+async function selectFilter(label: string) {
+  const button = [...container!.querySelectorAll("button")].find((item) => item.textContent?.includes(label));
+  await act(async () => button?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+}
+
+function timelineTitles(view: HTMLDivElement): string[] {
+  return [...view.querySelectorAll("li h3")].map((item) => item.textContent ?? "");
+}
+
+function representativeEvents(): ActivityEvent[] {
+  return [
+    event({ id: "evt_system", sequence: 1, type: "PROJECT_CREATED", actor: { kind: "SYSTEM" }, summary: "Project connected." }),
+    event({ id: "evt_developer", sequence: 2, type: "IMPLEMENTATION_COMPLETED", actor: { kind: "AGENT", role: "FULL_STACK_DEVELOPER" }, summary: "Implementation completed." }),
+    event({ id: "evt_devops", sequence: 3, type: "VALIDATION_COMPLETED", actor: { kind: "AGENT", role: "DEVOPS_ENGINEER" }, summary: "Validation completed." }),
+    event({ id: "evt_visual", sequence: 4, type: "VISUAL_REPAIR_COMPLETED", actor: { kind: "SYSTEM" }, summary: "Visual repair completed." }),
+    event({ id: "evt_review", sequence: 5, type: "REVIEW_COMPLETED", actor: { kind: "AGENT", role: "REVIEWER" }, summary: "Review completed." }),
+    event({ id: "evt_retry", sequence: 6, type: "RETRY_STARTED", actor: { kind: "SYSTEM" }, summary: "Retry started." }),
+  ];
+}
+
+describe("activity event presentation", () => {
+  it("renders backend events as a semantic timeline in the provided authoritative order", async () => {
+    const view = await renderTimeline([event({ sequence: 2, id: "evt_2" }), event({ sequence: 1 })]);
+
+    expect(view.querySelector("ol")?.getAttribute("aria-label")).toBe("Backend activity events");
+    expect(view.querySelectorAll("li")).toHaveLength(2);
+    expect([...view.querySelectorAll("li")].map((item) => item.textContent)).toEqual([
+      expect.stringContaining("Sequence 2"),
+      expect.stringContaining("Sequence 1"),
+    ]);
   });
 
   it("maps every known backend event type", () => {
@@ -125,19 +152,16 @@ describe("activity event presentation", () => {
       createdAt: "not-a-timestamp",
       type: "BACKEND_STEP_RECORDED" as ActivityEventType,
     });
-    container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
-    await act(async () => root?.render(<ActivityTimeline events={[eventWithLongContent]} />));
+    const view = await renderTimeline([eventWithLongContent]);
 
-    expect(container.textContent).toContain("Unknown actor");
-    expect(container.textContent).toContain("Event: backend step recorded");
-    expect(container.textContent).toContain(eventWithLongContent.summary);
-    expect(container.textContent).toContain("Timestamp unavailable");
-    expect(container.textContent).toContain("Sequence 18");
-    expect(container.textContent).toContain(eventWithLongContent.taskId!);
-    expect(container.querySelector("p")?.className).toMatch(/break-words/);
-    expect(container.textContent).not.toContain("{\"id\"");
+    expect(view.textContent).toContain("Unknown actor");
+    expect(view.textContent).toContain("Event: backend step recorded");
+    expect(view.textContent).toContain(eventWithLongContent.summary);
+    expect(view.textContent).toContain("Timestamp unavailable");
+    expect(view.textContent).toContain("Sequence 18");
+    expect(view.textContent).toContain(eventWithLongContent.taskId!);
+    expect(view.querySelector("p")?.className).toMatch(/break-words/);
+    expect(view.textContent).not.toContain("{\"id\"");
   });
 
   it("defines a deliberate empty state for an active workflow with no events", () => {
@@ -147,5 +171,203 @@ describe("activity event presentation", () => {
     act(() => root?.render(<ActivityTimeline events={[]} />));
     expect(container.textContent).toContain("No backend activity yet");
     expect(container.querySelector("ol")).toBeNull();
+  });
+});
+
+describe("activity timeline filters", () => {
+  it("selects All by default and exposes accessible selected state", async () => {
+    const view = await renderTimeline(representativeEvents());
+
+    expect(view.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.textContent).toContain("All");
+    expect(view.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.textContent).toContain("selected");
+  });
+
+  it("shows every existing event under All", async () => {
+    const view = await renderTimeline([
+      ...representativeEvents(),
+      event({ id: "evt_unknown", sequence: 7, type: "BACKEND_STEP_RECORDED" as ActivityEventType, summary: "Unknown runtime event." }),
+    ]);
+
+    expect(view.querySelectorAll("li")).toHaveLength(7);
+    expect(timelineTitles(view)).toEqual([
+      "Project connected",
+      "Implementation completed",
+      "Validation completed",
+      "Visual repair completed",
+      "Review completed",
+      "Retry started",
+      "Event: backend step recorded",
+    ]);
+  });
+
+  it("shows only mapped Developer events", async () => {
+    const view = await renderTimeline(representativeEvents());
+
+    await selectFilter("Developer");
+
+    expect(timelineTitles(view)).toEqual(["Implementation completed"]);
+    expect(view.textContent).not.toContain("Validation completed.");
+    expect(view.textContent).not.toContain("Review completed.");
+  });
+
+  it("shows only mapped DevOps events", async () => {
+    const view = await renderTimeline([
+      ...representativeEvents(),
+      event({ id: "evt_browser", sequence: 7, type: "BROWSER_VERIFICATION_COMPLETED", actor: { kind: "AGENT", role: "DEVOPS_ENGINEER" }, summary: "Browser verified." }),
+      event({ id: "evt_screenshot", sequence: 8, type: "SCREENSHOT_CAPTURED", actor: { kind: "AGENT", role: "DEVOPS_ENGINEER" }, summary: "Screenshot captured." }),
+    ]);
+
+    await selectFilter("DevOps");
+
+    expect(timelineTitles(view)).toEqual(["Validation completed", "Browser verification completed", "Frontend screenshot captured"]);
+  });
+
+  it("shows only mapped Visual events", async () => {
+    const view = await renderTimeline([
+      ...representativeEvents(),
+      event({ id: "evt_visual_review", sequence: 7, type: "VISUAL_REVIEW_COMPLETED", actor: { kind: "SYSTEM" }, summary: "Visual review completed." }),
+      event({ id: "evt_visual_started", sequence: 8, type: "VISUAL_REPAIR_STARTED", actor: { kind: "SYSTEM" }, summary: "Visual repair started." }),
+      event({ id: "evt_visual_exhausted", sequence: 9, type: "VISUAL_REPAIR_EXHAUSTED", actor: { kind: "SYSTEM" }, summary: "Visual repair exhausted." }),
+    ]);
+
+    await selectFilter("Visual");
+
+    expect(timelineTitles(view)).toEqual(["Visual repair completed", "Visual review completed", "Visual repair started", "Visual repair exhausted"]);
+  });
+
+  it("shows only mapped Review events", async () => {
+    const view = await renderTimeline([
+      ...representativeEvents(),
+      event({ id: "evt_pr", sequence: 7, type: "PULL_REQUEST_CREATED", actor: { kind: "SYSTEM" }, summary: "Pull request created." }),
+    ]);
+
+    await selectFilter("Review");
+
+    expect(timelineTitles(view)).toEqual(["Review completed", "Pull request created"]);
+  });
+
+  it("shows only mapped System events", async () => {
+    const view = await renderTimeline([
+      ...representativeEvents(),
+      event({ id: "evt_task", sequence: 7, type: "TASK_CREATED", actor: { kind: "SYSTEM" }, summary: "Task created." }),
+      event({ id: "evt_plan", sequence: 8, type: "PLAN_CREATED", actor: { kind: "AGENT", role: "MANAGER" }, summary: "Plan created." }),
+      event({ id: "evt_approved", sequence: 9, type: "PLAN_APPROVED", actor: { kind: "HUMAN" }, summary: "Plan approved." }),
+      event({ id: "evt_rejected", sequence: 10, type: "PLAN_REJECTED", actor: { kind: "HUMAN" }, summary: "Plan rejected." }),
+      event({ id: "evt_retry_completed", sequence: 11, type: "RETRY_COMPLETED", actor: { kind: "SYSTEM" }, summary: "Retry completed." }),
+      event({ id: "evt_retry_exhausted", sequence: 12, type: "RETRY_EXHAUSTED", actor: { kind: "SYSTEM" }, summary: "Retry exhausted." }),
+      event({ id: "evt_cancelled", sequence: 13, type: "TASK_CANCELLED", actor: { kind: "SYSTEM" }, summary: "Task cancelled." }),
+    ]);
+
+    await selectFilter("System");
+
+    expect(timelineTitles(view)).toEqual([
+      "Project connected",
+      "Retry started",
+      "Task created",
+      "Manager plan created",
+      "Plan approved",
+      "Plan rejected",
+      "Retry completed",
+      "Retry exhausted",
+      "Task cancelled",
+    ]);
+  });
+
+  it("preserves event order after filtering", async () => {
+    const events = [
+      event({ id: "evt_visual_completed", sequence: 30, type: "VISUAL_REPAIR_COMPLETED", summary: "Second visible visual event." }),
+      event({ id: "evt_system", sequence: 10, type: "PROJECT_CREATED", summary: "Intervening system event." }),
+      event({ id: "evt_visual_review", sequence: 20, type: "VISUAL_REVIEW_COMPLETED", summary: "First visible visual event." }),
+    ];
+    const view = await renderTimeline(events);
+
+    await selectFilter("Visual");
+
+    expect(timelineTitles(view)).toEqual(["Visual repair completed", "Visual review completed"]);
+    expect([...view.querySelectorAll("li")].map((item) => item.textContent)).toEqual([
+      expect.stringContaining("Sequence 30"),
+      expect.stringContaining("Sequence 20"),
+    ]);
+  });
+
+  it("switching filters updates visible events correctly", async () => {
+    const view = await renderTimeline(representativeEvents());
+
+    await selectFilter("Developer");
+    expect(timelineTitles(view)).toEqual(["Implementation completed"]);
+
+    await selectFilter("Visual");
+    expect(timelineTitles(view)).toEqual(["Visual repair completed"]);
+
+    await selectFilter("All");
+    expect(view.querySelectorAll("li")).toHaveLength(6);
+  });
+
+  it("does not mutate the source events array", async () => {
+    const events = representativeEvents();
+    const before = events.map((item) => item.id);
+    const view = await renderTimeline(events);
+
+    await selectFilter("Review");
+    await selectFilter("DevOps");
+    await selectFilter("All");
+
+    expect(events.map((item) => item.id)).toEqual(before);
+    expect(view.querySelectorAll("li")).toHaveLength(events.length);
+  });
+
+  it("keeps unknown runtime event types visible under All", async () => {
+    const view = await renderTimeline([
+      event({ id: "evt_known", sequence: 1, type: "IMPLEMENTATION_COMPLETED", summary: "Known event." }),
+      event({ id: "evt_unknown", sequence: 2, type: "BACKEND_STEP_RECORDED" as ActivityEventType, summary: "Unknown runtime event." }),
+    ]);
+
+    expect(timelineTitles(view)).toEqual(["Implementation completed", "Event: backend step recorded"]);
+    expect(view.textContent).toContain("Unknown runtime event.");
+  });
+
+  it("does not assign unknown runtime event types to a category filter", async () => {
+    const view = await renderTimeline([
+      event({ id: "evt_known", sequence: 1, type: "IMPLEMENTATION_COMPLETED", summary: "Known event." }),
+      event({ id: "evt_unknown", sequence: 2, type: "BACKEND_STEP_RECORDED" as ActivityEventType, summary: "Unknown runtime event." }),
+    ]);
+
+    await selectFilter("Developer");
+    expect(timelineTitles(view)).toEqual(["Implementation completed"]);
+    expect(view.textContent).not.toContain("Unknown runtime event.");
+
+    await selectFilter("System");
+    expect(view.textContent).toContain("No events in this category.");
+    expect(view.textContent).not.toContain("Unknown runtime event.");
+  });
+
+  it("renders a safe empty state when the selected filter has no events", async () => {
+    const view = await renderTimeline([event({ id: "evt_developer", sequence: 1, type: "IMPLEMENTATION_COMPLETED" })]);
+
+    await selectFilter("Visual");
+
+    expect(view.textContent).toContain("No events in this category.");
+    expect(view.querySelector("ol")).toBeNull();
+  });
+
+  it("keeps existing event presentation unchanged while filters are visible", async () => {
+    const detailedEvent = event({
+      id: "evt_review",
+      sequence: 42,
+      taskId: "task_42",
+      type: "REVIEW_COMPLETED",
+      actor: { kind: "AGENT", role: "REVIEWER" },
+      summary: "Reviewer approved the workflow evidence.",
+      createdAt: "2026-08-03T12:20:00.000Z",
+    });
+    const view = await renderTimeline([detailedEvent]);
+
+    expect(view.textContent).toContain("Reviewer");
+    expect(view.textContent).toContain("Review completed");
+    expect(view.textContent).toContain("Reviewer approved the workflow evidence.");
+    expect(view.textContent).toContain("Aug 3, 2026, 12:20 PM");
+    expect(view.textContent).toContain("Sequence 42");
+    expect(view.textContent).toContain("Task task_42");
+    expect(view.querySelector('button[aria-pressed="true"]')?.textContent).toContain("All");
   });
 });
