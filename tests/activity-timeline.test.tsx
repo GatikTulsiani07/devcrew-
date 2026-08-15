@@ -5,6 +5,7 @@ import { ActivityTimeline } from "@/components/activity/activity-timeline";
 import {
   formatActivityTimestamp,
   presentActor,
+  presentEventEmphasis,
   presentEventType,
 } from "@/components/activity/activity-event-presentation";
 import { mergeActivityEvents } from "@/hooks/use-project-activity";
@@ -52,6 +53,10 @@ async function selectFilter(label: string) {
 
 function timelineTitles(view: HTMLDivElement): string[] {
   return [...view.querySelectorAll("li h3")].map((item) => item.textContent ?? "");
+}
+
+function eventStateLabels(view: HTMLDivElement): string[] {
+  return [...view.querySelectorAll('[aria-label="Workflow event state"]')].map((item) => item.textContent ?? "");
 }
 
 function representativeEvents(): ActivityEvent[] {
@@ -120,6 +125,7 @@ describe("activity event presentation", () => {
     const presentation = presentEventType("BACKEND_STEP_RECORDED");
     expect(presentation.title).toBe("Event: backend step recorded");
     expect(presentation.tone).toBe("neutral");
+    expect(presentEventEmphasis("BACKEND_STEP_RECORDED")).toBeUndefined();
   });
 
   it("handles invalid timestamps without using the browser clock", () => {
@@ -171,6 +177,150 @@ describe("activity event presentation", () => {
     act(() => root?.render(<ActivityTimeline events={[]} />));
     expect(container.textContent).toContain("No backend activity yet");
     expect(container.querySelector("ol")).toBeNull();
+  });
+});
+
+describe("activity timeline failure event emphasis", () => {
+  it("emphasizes RETRY_EXHAUSTED as an exhausted workflow event", async () => {
+    const view = await renderTimeline([
+      event({ id: "evt_retry_exhausted", sequence: 1, type: "RETRY_EXHAUSTED", summary: "Retry limit reached." }),
+    ]);
+
+    expect(presentEventEmphasis("RETRY_EXHAUSTED")).toEqual({ label: "Exhausted" });
+    expect(timelineTitles(view)).toEqual(["Retry exhausted"]);
+    expect(eventStateLabels(view)).toEqual(["Exhausted"]);
+  });
+
+  it("emphasizes VISUAL_REPAIR_EXHAUSTED as an exhausted workflow event", async () => {
+    const view = await renderTimeline([
+      event({ id: "evt_visual_exhausted", sequence: 1, type: "VISUAL_REPAIR_EXHAUSTED", summary: "Visual repair limit reached." }),
+    ]);
+
+    expect(presentEventEmphasis("VISUAL_REPAIR_EXHAUSTED")).toEqual({ label: "Exhausted" });
+    expect(timelineTitles(view)).toEqual(["Visual repair exhausted"]);
+    expect(eventStateLabels(view)).toEqual(["Exhausted"]);
+  });
+
+  it("keeps RETRY_COMPLETED normal", async () => {
+    const view = await renderTimeline([
+      event({ id: "evt_retry_completed", sequence: 1, type: "RETRY_COMPLETED", summary: "Retry recovered." }),
+    ]);
+
+    expect(presentEventEmphasis("RETRY_COMPLETED")).toBeUndefined();
+    expect(timelineTitles(view)).toEqual(["Retry completed"]);
+    expect(eventStateLabels(view)).toEqual([]);
+  });
+
+  it("keeps VISUAL_REPAIR_COMPLETED normal", async () => {
+    const view = await renderTimeline([
+      event({ id: "evt_visual_completed", sequence: 1, type: "VISUAL_REPAIR_COMPLETED", summary: "Visual repair passed." }),
+    ]);
+
+    expect(presentEventEmphasis("VISUAL_REPAIR_COMPLETED")).toBeUndefined();
+    expect(timelineTitles(view)).toEqual(["Visual repair completed"]);
+    expect(eventStateLabels(view)).toEqual([]);
+  });
+
+  it("keeps normal successful event presentation unchanged", async () => {
+    const view = await renderTimeline([
+      event({
+        id: "evt_validation",
+        sequence: 7,
+        taskId: "task_success",
+        type: "VALIDATION_COMPLETED",
+        actor: { kind: "AGENT", role: "DEVOPS_ENGINEER" },
+        summary: "Validation passed.",
+        createdAt: "2026-08-03T12:14:00.000Z",
+      }),
+    ]);
+
+    expect(view.textContent).toContain("DevOps Engineer");
+    expect(view.textContent).toContain("Validation completed");
+    expect(view.textContent).toContain("Validation passed.");
+    expect(view.textContent).toContain("Aug 3, 2026, 12:14 PM");
+    expect(view.textContent).toContain("Sequence 7");
+    expect(view.textContent).toContain("Task task_success");
+    expect(eventStateLabels(view)).toEqual([]);
+  });
+
+  it("keeps unknown runtime events neutral without failure emphasis", async () => {
+    const view = await renderTimeline([
+      event({
+        id: "evt_unknown",
+        sequence: 1,
+        type: "BACKEND_STEP_RECORDED" as ActivityEventType,
+        summary: "Unknown runtime event.",
+      }),
+    ]);
+
+    expect(timelineTitles(view)).toEqual(["Event: backend step recorded"]);
+    expect(eventStateLabels(view)).toEqual([]);
+  });
+
+  it("does not infer failure emphasis from summary words", async () => {
+    const view = await renderTimeline([
+      event({
+        id: "evt_summary_words",
+        sequence: 1,
+        type: "VALIDATION_COMPLETED",
+        summary: "The summary mentions failed, error, and exhausted but the event type completed successfully.",
+      }),
+    ]);
+
+    expect(view.textContent).toContain("failed, error, and exhausted");
+    expect(eventStateLabels(view)).toEqual([]);
+  });
+
+  it("classifies failure emphasis only from event type", async () => {
+    const view = await renderTimeline([
+      event({
+        id: "evt_retry_exhausted",
+        sequence: 1,
+        type: "RETRY_EXHAUSTED",
+        summary: "Neutral summary without failure keywords.",
+      }),
+    ]);
+
+    expect(view.textContent).toContain("Neutral summary without failure keywords.");
+    expect(eventStateLabels(view)).toEqual(["Exhausted"]);
+  });
+
+  it("keeps existing title, summary, timestamp, actor, sequence, and task metadata visible", async () => {
+    const view = await renderTimeline([
+      event({
+        id: "evt_retry_exhausted",
+        sequence: 12,
+        taskId: "task_retry_12",
+        type: "RETRY_EXHAUSTED",
+        actor: { kind: "SYSTEM" },
+        summary: "Retry attempts were exhausted by backend authority.",
+        createdAt: "2026-08-03T12:19:00.000Z",
+      }),
+    ]);
+
+    expect(view.textContent).toContain("System");
+    expect(view.textContent).toContain("Retry exhausted");
+    expect(view.textContent).toContain("Retry attempts were exhausted by backend authority.");
+    expect(view.textContent).toContain("Aug 3, 2026, 12:19 PM");
+    expect(view.textContent).toContain("Sequence 12");
+    expect(view.textContent).toContain("Task task_retry_12");
+    expect(eventStateLabels(view)).toEqual(["Exhausted"]);
+  });
+
+  it("preserves filtering while showing failure emphasis in the active category", async () => {
+    const view = await renderTimeline([
+      event({ id: "evt_retry_exhausted", sequence: 1, type: "RETRY_EXHAUSTED", summary: "Retry exhausted." }),
+      event({ id: "evt_visual_exhausted", sequence: 2, type: "VISUAL_REPAIR_EXHAUSTED", summary: "Visual repair exhausted." }),
+      event({ id: "evt_success", sequence: 3, type: "REVIEW_COMPLETED", summary: "Review completed." }),
+    ]);
+
+    await selectFilter("System");
+    expect(timelineTitles(view)).toEqual(["Retry exhausted"]);
+    expect(eventStateLabels(view)).toEqual(["Exhausted"]);
+
+    await selectFilter("Visual");
+    expect(timelineTitles(view)).toEqual(["Visual repair exhausted"]);
+    expect(eventStateLabels(view)).toEqual(["Exhausted"]);
   });
 });
 

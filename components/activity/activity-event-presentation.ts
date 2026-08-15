@@ -24,6 +24,10 @@ export interface EventPresentation {
   tone: ActivityTone;
 }
 
+export interface EventEmphasisPresentation {
+  label: "Exhausted";
+}
+
 const actorPresentations: Record<string, ActorPresentation> = {
   HUMAN: { label: "Human approval", icon: UserCheck, tone: "warning" },
   MANAGER: { label: "Manager", icon: Bot, tone: "progress" },
@@ -69,6 +73,14 @@ export function presentEventType(type: ActivityEvent["type"] | string): EventPre
     title: readableUnknownType(type),
     tone: "neutral",
   };
+}
+
+export function presentEventEmphasis(type: ActivityEvent["type"] | string): EventEmphasisPresentation | undefined {
+  if (type === "RETRY_EXHAUSTED" || type === "VISUAL_REPAIR_EXHAUSTED") {
+    return { label: "Exhausted" };
+  }
+
+  return undefined;
 }
 
 export function formatActivityTimestamp(value: string): { label: string; dateTime?: string } {

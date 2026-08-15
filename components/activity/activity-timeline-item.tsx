@@ -5,12 +5,14 @@ import {
   activityToneIcons,
   formatActivityTimestamp,
   presentActor,
+  presentEventEmphasis,
   presentEventType,
 } from "@/components/activity/activity-event-presentation";
 
 export function ActivityTimelineItem({ event, last }: { event: ActivityEvent; last: boolean }) {
   const actor = presentActor(event.actor);
   const presentation = presentEventType(event.type);
+  const emphasis = presentEventEmphasis(event.type);
   const timestamp = formatActivityTimestamp(event.createdAt);
   const Icon = actor.icon;
   const MarkerIcon = activityToneIcons[presentation.tone];
@@ -35,7 +37,14 @@ export function ActivityTimelineItem({ event, last }: { event: ActivityEvent; la
             {timestamp.label}
           </time>
         </div>
-        <h3 className="mt-2 break-words text-[0.98rem] font-medium text-ink">{presentation.title}</h3>
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
+          <h3 className="break-words text-[0.98rem] font-medium text-ink">{presentation.title}</h3>
+          {emphasis && (
+            <span aria-label="Workflow event state" className="inline-flex max-w-full rounded-full bg-error/10 px-2 py-1 text-[0.66rem] font-medium text-error">
+              {emphasis.label}
+            </span>
+          )}
+        </div>
         <p className="mt-1 break-words text-[0.88rem] leading-6 text-ink-secondary">{event.summary}</p>
         <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[0.66rem] text-ink-muted">
           <span>Sequence {event.sequence}</span>
