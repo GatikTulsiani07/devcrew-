@@ -32,7 +32,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function task(status: TaskStatus): TaskSnapshot {
+function task(status: TaskStatus, overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
   return {
     id: "task_1",
     projectId: "proj_1",
@@ -42,10 +42,11 @@ function task(status: TaskStatus): TaskSnapshot {
     plan: { summary: "Implement requested engineering task.", steps: ["Inspect", "Implement"] },
     createdAt: "2026-08-03T00:00:00.000Z",
     updatedAt: "2026-08-03T00:00:00.000Z",
+    ...overrides,
   };
 }
 
-async function render(status: TaskStatus, error?: string) {
+async function render(status: TaskStatus, error?: string, taskOverrides: Partial<TaskSnapshot> = {}) {
   workflowState = {
     project: {
       id: "proj_1",
@@ -59,7 +60,7 @@ async function render(status: TaskStatus, error?: string) {
       createdAt: "2026-08-03T00:00:00.000Z",
       updatedAt: "2026-08-03T00:00:00.000Z",
     },
-    task: task(status),
+    task: task(status, taskOverrides),
     initializing: false,
     error,
     approve: vi.fn(),
@@ -154,5 +155,87 @@ describe("Activity workflow buttons", () => {
   it("surfaces backend errors", async () => {
     const view = await render("PLAN_APPROVED", "INVALID_TASK_TRANSITION: Task is not approved");
     expect(view.textContent).toContain("INVALID_TASK_TRANSITION: Task is not approved");
+  });
+
+  it("shows the authoritative task ID with a copy action", async () => {
+    const view = await render("PLAN_APPROVED", undefined, { id: "task_authoritative_123" });
+
+    expect(view.textContent).toContain("TASK ID");
+    expect(view.textContent).toContain("task_authoritative_123");
+    expect(view.querySelector('button[aria-label="Copy task ID"]')).not.toBeNull();
+  });
+
+  it("copies the exact authoritative task ID", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const view = await render("PLAN_APPROVED", undefined, { id: "task_exact_authoritative_id" });
+
+    view.querySelector<HTMLButtonElement>('button[aria-label="Copy task ID"]')?.click();
+
+    expect(writeText).toHaveBeenCalledWith("task_exact_authoritative_id");
+  });
+
+  it("does not render a task ID copy action when task ID is missing or empty", async () => {
+    const emptyView = await render("PLAN_APPROVED", undefined, { id: "" });
+    expect(emptyView.textContent).toContain("TASK ID");
+    expect(emptyView.textContent).toContain("Pending");
+    expect(emptyView.querySelector('button[aria-label="Copy task ID"]')).toBeNull();
+
+    await act(async () => root?.unmount());
+    root = undefined;
+    container?.remove();
+    container = undefined;
+
+    const missingView = await render("PLAN_APPROVED", undefined, { id: undefined } as never);
+    expect(missingView.querySelector('button[aria-label="Copy task ID"]')).toBeNull();
+  });
+
+  it("keeps existing Activity task context visible beside the task ID", async () => {
+    const view = await render("PLAN_APPROVED", undefined, { id: "task_visible_context" });
+
+    expect(view.textContent).toContain("Full Stack Developer");
+    expect(view.textContent).toContain("Devcrew MVP");
+    expect(view.textContent).toContain("PROJECT ID");
+    expect(view.textContent).toContain("proj_1");
+    expect(view.textContent).toContain("Focused task");
+    expect(view.textContent).toContain("task_visible_context");
+  });
+
+  it("does not derive copied task ID from timeline event text", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const view = await render("PLAN_APPROVED", undefined, { id: "task_from_snapshot_only" });
+    activityState.events = [
+      {
+        id: "evt_route_like_task",
+        sequence: 2,
+        projectId: "proj_1",
+        taskId: "task_from_event_should_not_copy",
+        type: "TASK_CREATED",
+        actor: { kind: "SYSTEM" },
+        summary: "Route text mentions task_from_event_summary_should_not_copy.",
+        createdAt: "2026-08-03T00:01:00.000Z",
+      },
+    ];
+    await act(async () =>
+      root?.render(
+        <WorkspaceStateProvider>
+          <ActivityWorkspace />
+        </WorkspaceStateProvider>,
+      ),
+    );
+
+    expect(view.textContent).toContain("task_from_event_should_not_copy");
+    view.querySelector<HTMLButtonElement>('button[aria-label="Copy task ID"]')?.click();
+
+    expect(writeText).toHaveBeenCalledWith("task_from_snapshot_only");
+    expect(writeText).not.toHaveBeenCalledWith("task_from_event_should_not_copy");
+    expect(writeText).not.toHaveBeenCalledWith("task_from_event_summary_should_not_copy");
   });
 });

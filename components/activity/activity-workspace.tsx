@@ -1,6 +1,6 @@
 "use client";
 
-import { Radio, Send, UserCheck } from "lucide-react";
+import { Copy, Radio, Send, UserCheck } from "lucide-react";
 import { useProjectActivity } from "@/hooks/use-project-activity";
 import type { TaskSnapshot, TaskStatus } from "@/lib/api-types";
 import { agents, type Agent, type AgentStatus } from "@/lib/mock-data";
@@ -194,6 +194,7 @@ export function ActivityWorkspace() {
   const activity = useProjectActivity(workflow.project?.id);
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0];
   const state = visibleStatus(selectedAgent, crewOnline, workflow.task);
+  const taskId = workflow.task?.id ?? "";
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-[78rem] flex-col px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
@@ -222,10 +223,26 @@ export function ActivityWorkspace() {
               <StatusBadge status={state.status} label={state.label} />
             </div>
 
-            <div className="mt-8 grid gap-5 border-t border-border/40 pt-5 text-[0.82rem] text-ink-muted sm:grid-cols-2 lg:grid-cols-4">
+            <div className="mt-8 grid gap-5 border-t border-border/40 pt-5 text-[0.82rem] text-ink-muted sm:grid-cols-2 lg:grid-cols-5">
               <div><span className="font-mono text-[0.7rem] text-ink-muted">MODEL</span><p className="mt-1 text-ink-secondary">{selectedAgent.model}</p></div>
               <div><span className="font-mono text-[0.7rem] text-ink-muted">WORKSPACE</span><p className="mt-1 break-words text-ink-secondary">{workflow.project?.name ?? "Creating backend project"}</p></div>
               <div><span className="font-mono text-[0.7rem] text-ink-muted">PROJECT ID</span><p className="mt-1 truncate font-mono text-ink-secondary">{workflow.project?.id ?? "Pending"}</p></div>
+              <div>
+                <span className="font-mono text-[0.7rem] text-ink-muted">TASK ID</span>
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+                  <p className="min-w-0 break-all font-mono text-ink-secondary">{taskId || "Pending"}</p>
+                  {taskId && (
+                    <button
+                      type="button"
+                      aria-label="Copy task ID"
+                      onClick={() => void navigator.clipboard.writeText(taskId)}
+                      className="inline-grid size-7 shrink-0 place-items-center rounded-[var(--radius-small)] bg-panel-strong text-ink-muted outline-none transition-colors hover:bg-surface-hover hover:text-accent focus-visible:ring-2 focus-visible:ring-focus"
+                    >
+                      <Copy aria-hidden="true" className="size-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
               <div><span className="font-mono text-[0.7rem] text-ink-muted">BOUNDARY</span><p className="mt-1 text-ink-secondary">Backend authoritative</p></div>
             </div>
           </div>
