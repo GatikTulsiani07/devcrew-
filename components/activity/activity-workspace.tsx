@@ -16,6 +16,7 @@ import { OrchestrationProgress } from "@/components/activity/orchestration-progr
 import { PullRequestEvidencePanel } from "@/components/activity/pull-request-evidence-panel";
 import { RetryRecoveryEvidencePanel } from "@/components/activity/retry-recovery-evidence-panel";
 import { ReviewerEvidencePanel } from "@/components/activity/reviewer-evidence-panel";
+import { VisualRepairEvidencePanel } from "@/components/activity/visual-repair-evidence-panel";
 
 function visibleStatus(agent: Agent, online: boolean, task?: TaskSnapshot) {
   if (!online) return { status: "idle" as const, label: "Offline" };
@@ -252,6 +253,11 @@ export function ActivityWorkspace() {
                 )}
                 <DeveloperEvidencePanel task={workflow.task} />
                 <DevopsEvidencePanel task={workflow.task} />
+                {workflow.task?.visualRepair && (
+                  <div className="min-w-0 md:col-span-2 xl:col-span-4">
+                    <VisualRepairEvidencePanel task={workflow.task} />
+                  </div>
+                )}
                 <ReviewerEvidencePanel task={workflow.task} />
                 <PullRequestEvidencePanel task={workflow.task} />
               </div>

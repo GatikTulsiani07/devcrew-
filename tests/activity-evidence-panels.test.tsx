@@ -7,11 +7,12 @@ import { DevopsEvidencePanel } from "@/components/activity/devops-evidence-panel
 import { PullRequestEvidencePanel } from "@/components/activity/pull-request-evidence-panel";
 import { RetryRecoveryEvidencePanel } from "@/components/activity/retry-recovery-evidence-panel";
 import { ReviewerEvidencePanel } from "@/components/activity/reviewer-evidence-panel";
+import { VisualRepairEvidencePanel } from "@/components/activity/visual-repair-evidence-panel";
 import { ActivityWorkspace } from "@/components/activity/activity-workspace";
 import { WorkspaceStateProvider } from "@/components/shell/workspace-state";
 import type { ProjectWorkflowState } from "@/hooks/use-project-workflow";
 import type { ProjectActivityState } from "@/hooks/use-project-activity";
-import type { ProjectSnapshot, RetryAttemptEvidence, TaskSnapshot, VisualReviewFinding } from "@/lib/api-types";
+import type { ProjectSnapshot, RetryAttemptEvidence, TaskSnapshot, VisualRepairAttempt, VisualReviewFinding } from "@/lib/api-types";
 
 vi.mock("@/hooks/use-project-workflow", () => ({
   useProjectWorkflow: () => workflowState,
@@ -177,6 +178,34 @@ function retryAttempt(overrides: Partial<RetryAttemptEvidence> = {}): RetryAttem
     completedAt: "2026-08-03T12:17:00.000Z",
     retryable: true,
     summary: "Provider request failed at /Users/suniltulsiani/Desktop/devcrew-ui with TOKEN_SHOULD_NOT_RENDER and stack trace details.",
+    ...overrides,
+  };
+}
+
+function visualRepairAttempt(overrides: Partial<VisualRepairAttempt> = {}): VisualRepairAttempt {
+  return {
+    attempt: 1,
+    startedAt: "2026-08-03T12:14:00.000Z",
+    completedAt: "2026-08-03T12:18:00.000Z",
+    sourceScreenshotId: "shot_source_1",
+    sourceVisualReview: {
+      status: "FAILED",
+      summary: "Visual Review found layout issues before repair.",
+      findingCount: 2,
+    },
+    developer: {
+      summary: "Adjusted spacing and panel wrapping for the visual repair.",
+      changedFiles: ["components/activity/unsafe-file-path-should-not-render.tsx"],
+    },
+    validation: {
+      status: "PASSED",
+    },
+    screenshotId: "shot_repair_1",
+    visualReview: {
+      status: "PASSED",
+      summary: "Visual Review passed after the repair.",
+      findingCount: 0,
+    },
     ...overrides,
   };
 }
@@ -963,6 +992,257 @@ describe("Retry recovery evidence panel", () => {
   });
 });
 
+describe("Visual Repair evidence panel", () => {
+  it("renders PASSED visual repair clearly", async () => {
+    const view = await render(
+      <VisualRepairEvidencePanel
+        task={task({
+          visualRepair: {
+            maxAttempts: 2,
+            outcome: "PASSED",
+            attempts: [visualRepairAttempt()],
+          },
+        })}
+      />,
+    );
+
+    expect(view.querySelector("h2")?.textContent).toBe("Visual Repair");
+    expect(view.textContent).toContain("Visual repair passed");
+    expect(view.textContent).toContain("Backend visual repair evidence shows the repair passed.");
+  });
+
+  it("renders EXHAUSTED visual repair clearly", async () => {
+    const view = await render(
+      <VisualRepairEvidencePanel
+        task={task({
+          visualRepair: {
+            maxAttempts: 2,
+            outcome: "EXHAUSTED",
+            attempts: [visualRepairAttempt(), visualRepairAttempt({ attempt: 2 })],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("Visual repair exhausted");
+    expect(view.textContent).toContain("Backend visual repair evidence shows repair attempts were exhausted.");
+  });
+
+  it("renders attempt count from the authoritative attempts array", async () => {
+    const view = await render(
+      <VisualRepairEvidencePanel
+        task={task({
+          visualRepair: {
+            maxAttempts: 2,
+            outcome: "EXHAUSTED",
+            attempts: [visualRepairAttempt(), visualRepairAttempt({ attempt: 2 })],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("2 attempts");
+  });
+
+  it("renders singular visual repair attempt count correctly", async () => {
+    const view = await render(
+      <VisualRepairEvidencePanel
+        task={task({
+          visualRepair: {
+            maxAttempts: 2,
+            outcome: "PASSED",
+            attempts: [visualRepairAttempt()],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("1 attempt");
+    expect(view.textContent).not.toContain("1 attempts");
+  });
+
+  it("renders multiple attempts in authoritative order and preserves previous attempts", async () => {
+    const view = await render(
+      <VisualRepairEvidencePanel
+        task={task({
+          visualRepair: {
+            maxAttempts: 2,
+            outcome: "PASSED",
+            attempts: [
+              visualRepairAttempt({
+                attempt: 1,
+                sourceScreenshotId: "shot_first_source",
+                screenshotId: "shot_first_repair",
+                developer: { summary: "First repair summary remains visible.", changedFiles: [] },
+                visualReview: { status: "FAILED", summary: "First repair still failed.", findingCount: 1 },
+              }),
+              visualRepairAttempt({
+                attempt: 2,
+                sourceScreenshotId: "shot_second_source",
+                screenshotId: "shot_second_repair",
+                developer: { summary: "Second repair summary remains visible.", changedFiles: [] },
+                visualReview: { status: "PASSED", summary: "Second repair passed.", findingCount: 0 },
+              }),
+            ],
+          },
+        })}
+      />,
+    );
+
+    expect([...view.querySelectorAll("h4")].map((heading) => heading.textContent)).toEqual(["Attempt 1", "Attempt 2"]);
+    expect(view.textContent).toContain("First repair summary remains visible.");
+    expect(view.textContent).toContain("Second repair summary remains visible.");
+    expect(view.textContent).toContain("shot_first_repair");
+    expect(view.textContent).toContain("shot_second_repair");
+  });
+
+  it("renders safe Developer summary when present", async () => {
+    const view = await render(
+      <VisualRepairEvidencePanel
+        task={task({
+          visualRepair: {
+            maxAttempts: 2,
+            attempts: [
+              visualRepairAttempt({
+                developer: {
+                  summary: "Safe Developer repair summary with long_identifier_that_should_wrap_safely.",
+                  changedFiles: ["components/activity/visual-repair-evidence-panel.tsx"],
+                },
+              }),
+            ],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("Safe Developer repair summary");
+    expect([...view.querySelectorAll("p")].find((item) => item.textContent?.includes("Safe Developer repair summary"))?.className).toMatch(/break-words/);
+  });
+
+  it("renders screenshot references safely when present", async () => {
+    const view = await render(
+      <VisualRepairEvidencePanel
+        task={task({
+          visualRepair: {
+            maxAttempts: 2,
+            attempts: [visualRepairAttempt({ sourceScreenshotId: "shot_source_safe", screenshotId: "shot_repair_safe" })],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("Source screenshot");
+    expect(view.textContent).toContain("shot_source_safe");
+    expect(view.textContent).toContain("Repair screenshot");
+    expect(view.textContent).toContain("shot_repair_safe");
+    expect(view.querySelector("a")).toBeNull();
+  });
+
+  it("renders Visual Review result and safe summary when present", async () => {
+    const view = await render(
+      <VisualRepairEvidencePanel
+        task={task({
+          visualRepair: {
+            maxAttempts: 2,
+            attempts: [
+              visualRepairAttempt({
+                visualReview: {
+                  status: "FAILED",
+                  summary: "Visual Review failed after the first repair.",
+                  findingCount: 3,
+                },
+              }),
+            ],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("Visual Review FAILED");
+    expect(view.textContent).toContain("Visual Review failed after the first repair.");
+    expect(view.textContent).toContain("3 findings");
+  });
+
+  it("renders no panel when visualRepair evidence is missing", async () => {
+    const view = await render(<VisualRepairEvidencePanel task={task()} />);
+
+    expect(view.textContent).not.toContain("Visual Repair");
+    expect(view.querySelector("section")).toBeNull();
+  });
+
+  it("does not render unsafe or internal visual repair fields", async () => {
+    const view = await render(
+      <VisualRepairEvidencePanel
+        task={task({
+          visualRepair: {
+            maxAttempts: 2,
+            attempts: [
+              {
+                ...visualRepairAttempt(),
+                rawPrompt: "RAW_PROMPT_SHOULD_NOT_RENDER",
+                providerPayload: "PROVIDER_PAYLOAD_SHOULD_NOT_RENDER",
+                screenshotPath: "/Users/suniltulsiani/Desktop/devcrew-ui/.artifacts/shot.png",
+                stdout: "STDOUT_SHOULD_NOT_RENDER",
+                stderr: "STDERR_SHOULD_NOT_RENDER",
+                stackTrace: "STACK_TRACE_SHOULD_NOT_RENDER",
+                developer: {
+                  summary: "Safe repair summary.",
+                  changedFiles: ["/Users/suniltulsiani/Desktop/devcrew-ui/secret.ts"],
+                  rawModelResponse: "RAW_MODEL_RESPONSE_SHOULD_NOT_RENDER",
+                },
+              } as never,
+            ],
+          },
+        })}
+      />,
+    );
+
+    expect(view.textContent).toContain("Safe repair summary.");
+    expect(view.textContent).not.toContain("RAW_PROMPT_SHOULD_NOT_RENDER");
+    expect(view.textContent).not.toContain("PROVIDER_PAYLOAD_SHOULD_NOT_RENDER");
+    expect(view.textContent).not.toContain("/Users/suniltulsiani");
+    expect(view.textContent).not.toContain("STDOUT_SHOULD_NOT_RENDER");
+    expect(view.textContent).not.toContain("STDERR_SHOULD_NOT_RENDER");
+    expect(view.textContent).not.toContain("STACK_TRACE_SHOULD_NOT_RENDER");
+    expect(view.textContent).not.toContain("RAW_MODEL_RESPONSE_SHOULD_NOT_RENDER");
+    expect(view.textContent).not.toContain("secret.ts");
+  });
+
+  it("uses neutral safe fallback text for unknown or missing outcome", async () => {
+    const missingOutcomeView = await render(
+      <VisualRepairEvidencePanel
+        task={task({
+          visualRepair: {
+            maxAttempts: 2,
+            attempts: [visualRepairAttempt()],
+          },
+        })}
+      />,
+    );
+    expect(missingOutcomeView.textContent).toContain("Visual repair recorded");
+    expect(missingOutcomeView.textContent).not.toContain("Visual repair passed");
+
+    await act(async () => root?.unmount());
+    root = undefined;
+    container?.remove();
+    container = undefined;
+
+    const unknownOutcomeView = await render(
+      <VisualRepairEvidencePanel
+        task={task({
+          visualRepair: {
+            maxAttempts: 2,
+            outcome: "PARTIAL",
+            attempts: [visualRepairAttempt()],
+          } as never,
+        })}
+      />,
+    );
+    expect(unknownOutcomeView.textContent).toContain("Visual repair recorded");
+    expect(unknownOutcomeView.textContent).not.toContain("Visual repair exhausted");
+  });
+});
+
 describe("Activity structured evidence placement", () => {
   it("renders semantic panel headings and does not mix fixture evidence into an active backend task", async () => {
     const backendProject = project();
@@ -1029,6 +1309,57 @@ describe("Activity structured evidence placement", () => {
     expect(headings.indexOf("Retry recovery")).toBeGreaterThan(-1);
     expect(headings.indexOf("Retry recovery")).toBeLessThan(headings.indexOf("Developer evidence"));
     expect(headings).toEqual(expect.arrayContaining(["Developer evidence", "DevOps evidence", "Reviewer evidence", "Pull Request"]));
+    expect(view.textContent).toContain("Prepared an implementation proposal");
+    expect(view.textContent).toContain("Validation passed");
+    expect(view.textContent).toContain("Review approved the structured evidence presentation.");
+    expect(view.textContent).toContain("#42");
+  });
+
+  it("places visual repair history with existing structured evidence panels unchanged", async () => {
+    workflowState = {
+      project: project(),
+      task: taskWithAllEvidence({
+        visualRepair: {
+          maxAttempts: 2,
+          outcome: "PASSED",
+          attempts: [
+            visualRepairAttempt({
+              attempt: 1,
+              developer: { summary: "First repair attempt stays visible in Activity.", changedFiles: [] },
+              visualReview: { status: "FAILED", summary: "First repair still had visual issues.", findingCount: 1 },
+            }),
+            visualRepairAttempt({
+              attempt: 2,
+              developer: { summary: "Second repair attempt passed in Activity.", changedFiles: [] },
+              visualReview: { status: "PASSED", summary: "Second repair passed visual review.", findingCount: 0 },
+            }),
+          ],
+        },
+      }),
+      initializing: false,
+      approve: vi.fn(),
+      reject: vi.fn(),
+      execute: vi.fn(),
+      validate: vi.fn(),
+      review: vi.fn(),
+      fetchTask: vi.fn(),
+    };
+    activityState = { events: [], connection: "connected", lastSequence: 0 };
+
+    const view = await render(
+      <WorkspaceStateProvider>
+        <ActivityWorkspace />
+      </WorkspaceStateProvider>,
+    );
+    const headings = [...view.querySelectorAll("h2")].map((heading) => heading.textContent);
+
+    expect(headings.indexOf("Visual Repair")).toBeGreaterThan(headings.indexOf("DevOps evidence"));
+    expect(headings.indexOf("Visual Repair")).toBeLessThan(headings.indexOf("Reviewer evidence"));
+    expect(headings).toEqual(expect.arrayContaining(["Developer evidence", "DevOps evidence", "Reviewer evidence", "Pull Request"]));
+    expect(view.textContent).toContain("Visual repair passed");
+    expect(view.textContent).toContain("2 attempts");
+    expect(view.textContent).toContain("First repair attempt stays visible in Activity.");
+    expect(view.textContent).toContain("Second repair attempt passed in Activity.");
     expect(view.textContent).toContain("Prepared an implementation proposal");
     expect(view.textContent).toContain("Validation passed");
     expect(view.textContent).toContain("Review approved the structured evidence presentation.");
@@ -1170,6 +1501,67 @@ describe("Activity structured evidence placement", () => {
     expect(view.textContent).toContain("Retry completed");
     expect(view.textContent).toContain("Retry exhausted");
     expect([...view.querySelectorAll("h2")].map((heading) => heading.textContent)).not.toContain("Retry recovery");
+  });
+
+  it("does not infer visual repair state from visual repair timeline events alone", async () => {
+    workflowState = {
+      project: project(),
+      task: taskWithAllEvidence(),
+      initializing: false,
+      approve: vi.fn(),
+      reject: vi.fn(),
+      execute: vi.fn(),
+      validate: vi.fn(),
+      review: vi.fn(),
+      fetchTask: vi.fn(),
+    };
+    activityState = {
+      events: [
+        {
+          id: "evt_visual_repair_started",
+          sequence: 1,
+          projectId: "proj_1",
+          taskId: "task_1",
+          type: "VISUAL_REPAIR_STARTED",
+          actor: { kind: "SYSTEM" },
+          summary: "Visual repair started.",
+          createdAt: "2026-08-03T12:14:00.000Z",
+        },
+        {
+          id: "evt_visual_repair_completed",
+          sequence: 2,
+          projectId: "proj_1",
+          taskId: "task_1",
+          type: "VISUAL_REPAIR_COMPLETED",
+          actor: { kind: "SYSTEM" },
+          summary: "Visual repair completed.",
+          createdAt: "2026-08-03T12:18:00.000Z",
+        },
+        {
+          id: "evt_visual_repair_exhausted",
+          sequence: 3,
+          projectId: "proj_1",
+          taskId: "task_1",
+          type: "VISUAL_REPAIR_EXHAUSTED",
+          actor: { kind: "SYSTEM" },
+          summary: "Visual repair exhausted.",
+          createdAt: "2026-08-03T12:20:00.000Z",
+        },
+      ],
+      connection: "connected",
+      lastSequence: 3,
+    };
+
+    const view = await render(
+      <WorkspaceStateProvider>
+        <ActivityWorkspace />
+      </WorkspaceStateProvider>,
+    );
+
+    expect(view.textContent).toContain("Visual repair started");
+    expect(view.textContent).toContain("Visual repair completed");
+    expect(view.textContent).toContain("Visual repair exhausted");
+    expect([...view.querySelectorAll("h2")].map((heading) => heading.textContent)).not.toContain("Visual Repair");
   });
 
   it("clearly labels fixture setup mode without fabricating stage evidence", async () => {
