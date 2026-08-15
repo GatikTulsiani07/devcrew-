@@ -84,8 +84,10 @@ function optionalTitle(pullRequest: TaskPullRequestEvidence): string | undefined
 }
 
 function stateLabel(state: TaskPullRequestEvidence["state"] | string): string {
-  if (state === "OPEN" || state === "CLOSED" || state === "MERGED") return state;
-  return "STATE UNKNOWN";
+  if (state === "OPEN") return "Open";
+  if (state === "CLOSED") return "Closed";
+  if (state === "MERGED") return "Merged";
+  return "PR state unavailable";
 }
 
 function safeGitHubUrl(value: unknown): string | undefined {

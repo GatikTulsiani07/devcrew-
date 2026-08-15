@@ -619,7 +619,7 @@ describe("Pull Request evidence panel", () => {
 
     expect(view.querySelector("h2")?.textContent).toBe("Pull Request");
     expect(view.textContent).toContain("#42");
-    expect(view.textContent).toContain("OPEN");
+    expect(view.textContent).toContain("Open");
     expect(view.textContent).toContain("devcrew/task-task_123");
     expect(view.textContent).toContain("main");
     expect(view.textContent).toContain("a84f72c");
@@ -649,6 +649,26 @@ describe("Pull Request evidence panel", () => {
     view.querySelector<HTMLButtonElement>('button[aria-label="Copy commit SHA"]')?.click();
 
     expect(writeText).toHaveBeenCalledWith("0123456789abcdef0123456789abcdef01234567");
+  });
+
+  it("renders CLOSED pull request state as Closed", async () => {
+    const closedTask = taskWithAllEvidence();
+    closedTask.pullRequest = { ...closedTask.pullRequest!, state: "CLOSED" };
+
+    const view = await render(<PullRequestEvidencePanel task={closedTask} />);
+
+    expect(view.textContent).toContain("Closed");
+    expect(view.textContent).toContain("#42");
+  });
+
+  it("renders MERGED pull request state as Merged", async () => {
+    const mergedTask = taskWithAllEvidence();
+    mergedTask.pullRequest = { ...mergedTask.pullRequest!, state: "MERGED" };
+
+    const view = await render(<PullRequestEvidencePanel task={mergedTask} />);
+
+    expect(view.textContent).toContain("Merged");
+    expect(view.textContent).toContain("#42");
   });
 
   it("renders an optional backend title when the current contract provides one", async () => {
@@ -685,7 +705,7 @@ describe("Pull Request evidence panel", () => {
 
     const view = await render(<PullRequestEvidencePanel task={missingFields} />);
     expect(view.textContent).toContain("#7");
-    expect(view.textContent).toContain("OPEN");
+    expect(view.textContent).toContain("Open");
     expect(view.textContent).toContain("Timestamp unavailable");
     expect(view.textContent).not.toContain("undefined");
     expect(view.querySelector('button[aria-label="Copy commit SHA"]')).toBeNull();
@@ -720,10 +740,29 @@ describe("Pull Request evidence panel", () => {
     } as never;
 
     const view = await render(<PullRequestEvidencePanel task={longBranchTask} />);
-    expect(view.textContent).toContain("STATE UNKNOWN");
+    expect(view.textContent).toContain("PR state unavailable");
     expect(view.textContent).toContain("very-long-source-branch-name");
     expect(view.textContent).toContain("very-long-target-branch-name");
     expect([...view.querySelectorAll("span")].find((item) => item.textContent?.includes("very-long-source-branch-name"))?.className).toMatch(/break-all/);
+  });
+
+  it("preserves branch metadata, commit copy action, timestamp, and link while highlighting state", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const view = await render(<PullRequestEvidencePanel task={taskWithAllEvidence()} />);
+
+    expect(view.textContent).toContain("Open");
+    expect(view.textContent).toContain("devcrew/task-task_123");
+    expect(view.textContent).toContain("main");
+    expect(view.textContent).toContain("a84f72c");
+    expect(view.textContent).toContain("Aug 3, 2026, 12:25 PM");
+    expect(view.querySelector('a[aria-label="View pull request #42 on GitHub"]')).not.toBeNull();
+
+    view.querySelector<HTMLButtonElement>('button[aria-label="Copy commit SHA"]')?.click();
+    expect(writeText).toHaveBeenCalledWith("a84f72c");
   });
 });
 
@@ -1562,6 +1601,51 @@ describe("Activity structured evidence placement", () => {
     expect(view.textContent).toContain("Visual repair completed");
     expect(view.textContent).toContain("Visual repair exhausted");
     expect([...view.querySelectorAll("h2")].map((heading) => heading.textContent)).not.toContain("Visual Repair");
+  });
+
+  it("does not infer pull request state from PULL_REQUEST_CREATED timeline events alone", async () => {
+    workflowState = {
+      project: project(),
+      task: taskWithAllEvidence({ pullRequest: undefined }),
+      initializing: false,
+      approve: vi.fn(),
+      reject: vi.fn(),
+      execute: vi.fn(),
+      validate: vi.fn(),
+      review: vi.fn(),
+      fetchTask: vi.fn(),
+    };
+    activityState = {
+      events: [
+        {
+          id: "evt_pr_created",
+          sequence: 1,
+          projectId: "proj_1",
+          taskId: "task_1",
+          type: "PULL_REQUEST_CREATED",
+          actor: { kind: "SYSTEM" },
+          summary: "Pull request created with event text that says OPEN.",
+          createdAt: "2026-08-03T12:25:00.000Z",
+        },
+      ],
+      connection: "connected",
+      lastSequence: 1,
+    };
+
+    const view = await render(
+      <WorkspaceStateProvider>
+        <ActivityWorkspace />
+      </WorkspaceStateProvider>,
+    );
+    const pullRequestHeading = [...view.querySelectorAll("h2")].find((heading) => heading.textContent === "Pull Request");
+    const pullRequestPanel = pullRequestHeading?.closest("section");
+
+    expect(view.textContent).toContain("Pull request created with event text that says OPEN.");
+    expect(pullRequestPanel?.textContent).toContain("Not created");
+    expect(pullRequestPanel?.textContent).toContain("Pull request has not been created yet.");
+    expect(pullRequestPanel?.textContent).not.toContain("Open");
+    expect(pullRequestPanel?.textContent).not.toContain("Closed");
+    expect(pullRequestPanel?.textContent).not.toContain("Merged");
   });
 
   it("clearly labels fixture setup mode without fabricating stage evidence", async () => {
