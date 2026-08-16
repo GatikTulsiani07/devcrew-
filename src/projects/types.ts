@@ -1,9 +1,12 @@
+import type { RepositoryCapabilities } from "../repositories/repository-capabilities.js";
+
 export type ProjectStatus = "REPOSITORY_CONNECTED";
 
 export interface ProjectRepositorySnapshot {
   id: string;
   publicRepositoryUrl: string;
   preparedRepositoryId: string;
+  capabilities?: RepositoryCapabilities;
 }
 
 export interface ProjectSnapshot {

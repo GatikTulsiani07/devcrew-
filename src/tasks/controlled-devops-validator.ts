@@ -138,7 +138,10 @@ export function createControlledDevOpsValidator({
       let browserVerification: BrowserVerificationEvidence | undefined;
       let browserScreenshot: BrowserScreenshotEvidence | undefined;
       let visualReview: VisualReviewEvidence | undefined;
-      const browserProfileId = repository.browserVerificationProfileId;
+      const browserProfileId =
+        repository.capabilities?.browserVerificationEligible === false
+          ? undefined
+          : repository.browserVerificationProfileId;
 
       if (browserProfileId !== undefined) {
         const browserProfile = browserVerificationProfiles.find(

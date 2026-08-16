@@ -577,6 +577,41 @@ describe("controlled DevOps validator", () => {
     });
   });
 
+  it("skips browser verification when detected capabilities mark the repo ineligible", async () => {
+    const browserRepository: PreparedRepository = {
+      ...repository,
+      browserVerificationProfileId: "next_localhost",
+      capabilities: {
+        nodeProject: true,
+        frontendApplication: false,
+        hasDevScript: true,
+        hasTestScript: true,
+        hasBuildScript: true,
+        typescriptProject: true,
+        browserVerificationEligible: false,
+      },
+    };
+
+    const validation = await createControlledDevOpsValidator({
+      projectService: projectService(),
+      preparedRepositories: [browserRepository],
+      runner: passingRunner(),
+      checkpointService: checkpointService(),
+      remotePushService: remotePushService(),
+      devServer: {
+        async start() {
+          throw new Error("browser server should not start");
+        },
+      },
+      generateValidationId: () => "val_000001",
+      now: () => new Date("2026-08-03T10:00:00.000Z"),
+    }).validate(task);
+
+    assert.equal(validation.browserVerification, undefined);
+    assert.equal(validation.browserScreenshot, undefined);
+    assert.equal(validation.visualReview, undefined);
+  });
+
   it("does not run screenshot capture when browser verification fails and still stops the server", async () => {
     const events: string[] = [];
 

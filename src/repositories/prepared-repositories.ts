@@ -1,3 +1,5 @@
+import type { RepositoryCapabilities } from "./repository-capabilities.js";
+
 export interface PreparedRepository {
   id: string;
   publicRepositoryUrl: string;
@@ -5,6 +7,7 @@ export interface PreparedRepository {
   validationProfileId?: string;
   defaultBranch?: string;
   browserVerificationProfileId?: string;
+  capabilities?: RepositoryCapabilities;
 }
 
 export const preparedRepositories: readonly PreparedRepository[] = [
