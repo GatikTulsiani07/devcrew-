@@ -24,6 +24,7 @@ import type {
   DevOpsValidator,
   ManagerPlanner,
   TaskExecution,
+  TaskPullRequestCreator,
   TaskValidation,
   TaskReviewer,
 } from "../src/tasks/types.js";
@@ -52,6 +53,7 @@ interface TestAppOptions {
   developerExecutor?: DeveloperExecutor;
   devOpsValidator?: DevOpsValidator;
   taskReviewer?: TaskReviewer;
+  pullRequestCreator?: TaskPullRequestCreator;
   activityService?: ActivityService;
   dates?: readonly string[];
 }
@@ -80,6 +82,7 @@ function createTestApp({
   developerExecutor,
   devOpsValidator,
   taskReviewer,
+  pullRequestCreator,
   activityService,
   dates = ["2026-08-03T01:00:00.000Z"],
 }: TestAppOptions = {}) {
@@ -129,6 +132,7 @@ function createTestApp({
           },
           now: nextDate,
         }),
+      ...(pullRequestCreator === undefined ? {} : { pullRequestCreator }),
       store: new InMemoryTaskStore(),
       generateTaskId: () => {
         taskCount += 1;
@@ -261,6 +265,21 @@ async function cancelTask(
 ) {
   return app.request(
     `/api/v1/projects/${projectId}/tasks/${taskId}/cancel`,
+    {
+      method: "POST",
+      ...init,
+    },
+  );
+}
+
+async function createPullRequest(
+  app: ReturnType<typeof createTestApp>,
+  projectId = "proj_000001",
+  taskId = "task_000001",
+  init: RequestInit = {},
+) {
+  return app.request(
+    `/api/v1/projects/${projectId}/tasks/${taskId}/pull-request`,
     {
       method: "POST",
       ...init,
@@ -2409,6 +2428,261 @@ describe("task manager planning API", () => {
     assert.equal(body.includes("stack"), false);
   });
 
+  it("rejects a concurrent workflow mutation for the same task without blocking reads", async () => {
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    const developerExecutor: DeveloperExecutor = {
+      async execute(): Promise<TaskExecution> {
+        started.resolve();
+        await finish.promise;
+        return developerExecution("exec_lock");
+      },
+    };
+    const app = createTestApp({ developerExecutor });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const first = executeTask(app);
+    await started.promise;
+
+    const second = await executeTask(app);
+    const taskRead = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const activityRead = await app.request("/api/v1/projects/proj_000001/activity");
+
+    assert.equal(second.status, 409);
+    assert.deepEqual(await second.json(), {
+      requestId: "req_task_test",
+      status: "error",
+      error: {
+        code: "TASK_EXECUTION_IN_PROGRESS",
+        message: "Task execution is already in progress",
+      },
+    });
+    assert.equal(taskRead.status, 200);
+    assert.equal(activityRead.status, 200);
+
+    finish.resolve();
+    assert.equal((await first).status, 200);
+
+    const afterRelease = await executeTask(app);
+    assert.equal(afterRelease.status, 409);
+    assert.equal(
+      (await afterRelease.json()).error.code,
+      "INVALID_TASK_TRANSITION",
+    );
+  });
+
+  it("does not accept client-controlled lock identity fields", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const response = await executeTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lockKey: "proj_000002:task_000001",
+        ownerId: "browser-owned",
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+
+  it("allows different task IDs to mutate concurrently", async () => {
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    const completedTasks: string[] = [];
+    const developerExecutor: DeveloperExecutor = {
+      async execute(input): Promise<TaskExecution> {
+        if (input.task.id === "task_000001") {
+          started.resolve();
+          await finish.promise;
+        }
+
+        completedTasks.push(input.task.id);
+        return developerExecution(`exec_${input.task.id}`);
+      },
+    };
+    const app = createTestApp({ developerExecutor });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal(
+      (await decidePlan(app, { decision: "APPROVE" }, "proj_000001", "task_000002"))
+        .status,
+      200,
+    );
+
+    const first = executeTask(app, "proj_000001", "task_000001");
+    await started.promise;
+    const second = await executeTask(app, "proj_000001", "task_000002");
+
+    assert.equal(second.status, 200);
+    finish.resolve();
+    assert.equal((await first).status, 200);
+    assert.deepEqual(completedTasks, ["task_000002", "task_000001"]);
+  });
+
+  it("releases the lock after a thrown workflow failure so retry can proceed", async () => {
+    let calls = 0;
+    const developerExecutor: DeveloperExecutor = {
+      async execute(): Promise<TaskExecution> {
+        calls += 1;
+        if (calls === 1) {
+          throw createRetryStageFailure(
+            "DEVELOPER",
+            "PROVIDER_TIMEOUT",
+            true,
+          );
+        }
+
+        return developerExecution("exec_after_failure");
+      },
+    };
+    const app = createTestApp({ developerExecutor });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const failed = await executeTask(app);
+    assert.equal(failed.status, 500);
+
+    const retried = await retryTask(app);
+    assert.equal(retried.status, 200);
+    assert.equal((await retried.json()).task.execution.id, "exec_after_failure");
+    assert.equal(calls, 2);
+  });
+
+  it("keeps cancellation callable while a task execution lock is held and releases after abort", async () => {
+    const started = deferred<void>();
+    const developerExecutor: DeveloperExecutor = {
+      async execute(input) {
+        started.resolve();
+        return await new Promise<TaskExecution>((_resolve, reject) => {
+          input.signal?.addEventListener(
+            "abort",
+            () => reject(input.signal?.reason ?? new Error("cancelled")),
+            { once: true },
+          );
+        });
+      },
+    };
+    const app = createTestApp({ developerExecutor });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const executing = executeTask(app);
+    await started.promise;
+
+    const cancellation = await cancelTask(app);
+    assert.equal(cancellation.status, 200);
+    assert.equal((await cancellation.json()).task.cancellation.status, "REQUESTED");
+    assert.equal((await executing).status, 409);
+
+    const afterAbort = await executeTask(app);
+    assert.equal(afterAbort.status, 409);
+    assert.equal((await afterAbort.json()).error.code, "INVALID_TASK_TRANSITION");
+  });
+
+  it("does not deadlock retry or visual repair nested orchestration", async () => {
+    let developerCalls = 0;
+    let validationCalls = 0;
+    const developerExecutor: DeveloperExecutor = {
+      async execute(input): Promise<TaskExecution> {
+        developerCalls += 1;
+        if (developerCalls === 1) {
+          throw createRetryStageFailure(
+            "DEVELOPER",
+            "PROVIDER_TIMEOUT",
+            true,
+          );
+        }
+
+        return developerExecution(
+          input.repairContext === undefined ? "exec_retry" : "exec_repair",
+        );
+      },
+    };
+    const devOpsValidator: DevOpsValidator = {
+      async validate(): Promise<TaskValidation> {
+        validationCalls += 1;
+        if (validationCalls === 1) {
+          return validationWithFailedVisualReviewScreenshot();
+        }
+
+        return validationWithPassedVisualReview();
+      },
+    };
+    const app = createTestApp({ developerExecutor, devOpsValidator });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 500);
+    assert.equal((await retryTask(app)).status, 200);
+
+    const validated = await validateTask(app);
+    const body = await validated.json();
+
+    assert.equal(validated.status, 200);
+    assert.equal(body.task.visualRepair.outcome, "PASSED");
+    assert.equal(body.task.visualRepair.attempts.length, 1);
+    assert.equal(developerCalls, 3);
+    assert.equal(validationCalls, 2);
+  });
+
+  it("rejects concurrent PR creation before duplicate side effects can run", async () => {
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    let pullRequestCalls = 0;
+    const pullRequestCreator: TaskPullRequestCreator = {
+      async createPullRequest() {
+        pullRequestCalls += 1;
+        started.resolve();
+        await finish.promise;
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: "devcrew/task-task_000001",
+            baseBranch: "main",
+            commitSha: "0123456789abcdef0123456789abcdef01234567",
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+    };
+    const app = createTestApp({ pullRequestCreator });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+
+    const first = createPullRequest(app);
+    await started.promise;
+    const duplicate = await createPullRequest(app);
+
+    assert.equal(duplicate.status, 409);
+    assert.equal(
+      (await duplicate.json()).error.code,
+      "TASK_EXECUTION_IN_PROGRESS",
+    );
+    assert.equal(pullRequestCalls, 1);
+
+    finish.resolve();
+    assert.equal((await first).status, 200);
+  });
+
   it("records a retryable Developer failure and retries through the controlled endpoint", async () => {
     let calls = 0;
     const developerExecutor: DeveloperExecutor = {
@@ -2617,4 +2891,99 @@ function validationWithFailedVisualReview(): TaskValidation {
       reviewedAt: "2026-08-03T04:01:00.000Z",
     },
   };
+}
+
+function validationWithFailedVisualReviewScreenshot(): TaskValidation {
+  return {
+    ...validationWithFailedVisualReview(),
+    browserVerification: {
+      status: "PASSED",
+      url: "http://127.0.0.1:3000/",
+      pageTitle: "Devcrew",
+      verifiedAt: "2026-08-03T04:00:30.000Z",
+    },
+    browserScreenshot: {
+      status: "CAPTURED",
+      id: "shot_before_repair",
+      url: "http://127.0.0.1:3000/",
+      viewport: {
+        width: 1440,
+        height: 900,
+      },
+      capturedAt: "2026-08-03T04:00:45.000Z",
+    },
+    visualReview: {
+      status: "FAILED",
+      summary: "The requested UI is visibly incomplete.",
+      findings: [
+        {
+          severity: "ERROR",
+          category: "missing-element",
+          title: "Panel missing",
+          description: "The required panel is not visible.",
+        },
+      ],
+      screenshotId: "shot_before_repair",
+      reviewedAt: "2026-08-03T04:01:00.000Z",
+    },
+  };
+}
+
+function validationWithPassedVisualReview(): TaskValidation {
+  return {
+    id: "val_visual_passed",
+    role: "DEVOPS_ENGINEER",
+    status: "PASSED",
+    attempt: 1,
+    startedAt: "2026-08-03T05:00:00.000Z",
+    completedAt: "2026-08-03T05:01:00.000Z",
+    checks: [
+      {
+        name: "typecheck",
+        status: "PASSED",
+        summary: "Type checking completed successfully.",
+      },
+    ],
+    summary: "Validation passed after visual repair.",
+    browserVerification: {
+      status: "PASSED",
+      url: "http://127.0.0.1:3000/",
+      pageTitle: "Devcrew",
+      verifiedAt: "2026-08-03T05:00:30.000Z",
+    },
+    browserScreenshot: {
+      status: "CAPTURED",
+      id: "shot_after_repair",
+      url: "http://127.0.0.1:3000/",
+      viewport: {
+        width: 1440,
+        height: 900,
+      },
+      capturedAt: "2026-08-03T05:00:45.000Z",
+    },
+    visualReview: {
+      status: "PASSED",
+      summary: "The visual repair resolved the issue.",
+      findings: [],
+      screenshotId: "shot_after_repair",
+      reviewedAt: "2026-08-03T05:01:00.000Z",
+    },
+  };
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(reason?: unknown): void;
+}
+
+function deferred<T = void>(): Deferred<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, resolve, reject };
 }
