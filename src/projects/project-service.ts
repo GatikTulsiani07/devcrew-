@@ -9,6 +9,7 @@ import {
   findPreparedRepository,
   type PreparedRepository,
 } from "../repositories/prepared-repositories.js";
+import { detectRepositoryCapabilities } from "../repositories/repository-capabilities.js";
 import type {
   CreateProjectInput,
   ProjectSnapshot,
@@ -85,6 +86,7 @@ export function createProjectService({
         throw duplicateRepositoryError();
       }
 
+      const capabilities = await prepareCapabilities(preparedRepository);
       const timestamp = now().toISOString();
       const project: StoredProject = {
         id: generateProjectId(),
@@ -94,6 +96,7 @@ export function createProjectService({
           id: generateRepositoryId(),
           publicRepositoryUrl: canonicalRepositoryUrl,
           preparedRepositoryId: input.preparedRepositoryId,
+          ...(capabilities === undefined ? {} : { capabilities }),
         },
         canonicalRepositoryUrl,
         createdAt: timestamp,
@@ -127,6 +130,21 @@ export function createProjectService({
   };
 }
 
+async function prepareCapabilities(
+  preparedRepository: PreparedRepository,
+) {
+  if (preparedRepository.capabilities !== undefined) {
+    return preparedRepository.capabilities;
+  }
+
+  const capabilities = await detectRepositoryCapabilities(preparedRepository);
+  if (capabilities !== undefined) {
+    preparedRepository.capabilities = capabilities;
+  }
+
+  return capabilities;
+}
+
 export function canonicalizeRepositoryUrl(repositoryUrl: string): string {
   const url = new URL(repositoryUrl);
   url.hash = "";
@@ -154,7 +172,12 @@ function toProjectSnapshot(project: StoredProject): ProjectSnapshot {
     id: project.id,
     name: project.name,
     status: project.status,
-    repository: { ...project.repository },
+    repository: {
+      ...project.repository,
+      ...(project.repository.capabilities === undefined
+        ? {}
+        : { capabilities: { ...project.repository.capabilities } }),
+    },
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   };
