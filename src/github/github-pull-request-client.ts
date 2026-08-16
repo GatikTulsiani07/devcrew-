@@ -10,6 +10,7 @@ export interface GitHubPullRequest {
   url: string;
   state: GitHubPullRequestState;
   headRef: string;
+  headSha: string;
   baseRef: string;
   repository: GitHubRepositoryRef;
   createdAt: string;
@@ -28,10 +29,15 @@ export interface GitHubPullRequestCreateInput
   body: string;
 }
 
+export interface GitHubPullRequestGetInput extends GitHubPullRequestLookupInput {
+  number: number;
+}
+
 export interface GitHubPullRequestClient {
   findOpenPullRequest(
     input: GitHubPullRequestLookupInput,
   ): Promise<GitHubPullRequest | undefined>;
+  getPullRequest(input: GitHubPullRequestGetInput): Promise<GitHubPullRequest>;
   createPullRequest(
     input: GitHubPullRequestCreateInput,
   ): Promise<GitHubPullRequest>;
@@ -76,6 +82,19 @@ export function createGitHubPullRequestClient({
       }
 
       return parsePullRequestResponse(response[0], input);
+    },
+
+    async getPullRequest(input) {
+      const response = await requestJson({
+        token,
+        fetchImpl,
+        timeoutMs,
+        method: "GET",
+        url: repositoryUrl(input.repository, `/pulls/${input.number}`),
+        signal: input.signal,
+      });
+
+      return parsePullRequestResponse(response, input);
     },
 
     async createPullRequest(input) {
@@ -150,7 +169,7 @@ export function sameGitHubRepository(
 
 export function parsePullRequestResponse(
   response: unknown,
-  expected: GitHubPullRequestLookupInput,
+  expected: GitHubPullRequestLookupInput | GitHubPullRequestGetInput,
 ): GitHubPullRequest {
   if (!isRecord(response)) {
     throw new GitHubPullRequestClientError("malformed provider response");
@@ -160,6 +179,7 @@ export function parsePullRequestResponse(
   const url = response.html_url;
   const state = parseState(response.state, response.merged);
   const head = isRecord(response.head) ? response.head.ref : undefined;
+  const headSha = isRecord(response.head) ? response.head.sha : undefined;
   const base = isRecord(response.base) ? response.base.ref : undefined;
   const baseRepo = isRecord(response.base)
     ? parseProviderRepository(response.base.repo)
@@ -174,8 +194,11 @@ export function parsePullRequestResponse(
     !isSafePullRequestUrl(url, expected.repository, number) ||
     typeof head !== "string" ||
     head !== expected.head ||
+    typeof headSha !== "string" ||
+    !isSha(headSha) ||
     typeof base !== "string" ||
     base !== expected.base ||
+    ("number" in expected && number !== expected.number) ||
     baseRepo === undefined ||
     !sameGitHubRepository(baseRepo, expected.repository) ||
     typeof createdAt !== "string" ||
@@ -189,10 +212,15 @@ export function parsePullRequestResponse(
     url,
     state,
     headRef: head,
+    headSha: headSha.toLowerCase(),
     baseRef: base,
     repository: expected.repository,
     createdAt,
   };
+}
+
+function isSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(value);
 }
 
 async function requestJson({

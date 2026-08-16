@@ -49,6 +49,10 @@ export const createPullRequestPathParamsSchema = getTaskPathParamsSchema;
 
 export const createPullRequestRequestSchema = z.object({}).strict();
 
+export const refreshPullRequestPathParamsSchema = getTaskPathParamsSchema;
+
+export const refreshPullRequestRequestSchema = z.object({}).strict();
+
 export const retryTaskPathParamsSchema = getTaskPathParamsSchema;
 
 export const retryTaskRequestSchema = z.object({}).strict();
@@ -64,6 +68,9 @@ export type ValidateTaskRequest = z.infer<typeof validateTaskRequestSchema>;
 export type ReviewTaskRequest = z.infer<typeof reviewTaskRequestSchema>;
 export type CreatePullRequestRequest = z.infer<
   typeof createPullRequestRequestSchema
+>;
+export type RefreshPullRequestRequest = z.infer<
+  typeof refreshPullRequestRequestSchema
 >;
 export type RetryTaskRequest = z.infer<typeof retryTaskRequestSchema>;
 export type CancelTaskRequest = z.infer<typeof cancelTaskRequestSchema>;

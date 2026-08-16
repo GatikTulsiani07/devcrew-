@@ -335,4 +335,7 @@ export interface TaskPullRequestCreator {
   createPullRequest(
     input: TaskPullRequestCreatorInput,
   ): Promise<TaskPullRequestCreatorResult>;
+  refreshPullRequest?(
+    input: TaskPullRequestCreatorInput,
+  ): Promise<TaskPullRequestEvidence>;
 }

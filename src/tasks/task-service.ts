@@ -74,6 +74,7 @@ export interface TaskService {
   retryTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   cancelTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   createPullRequest(projectId: string, taskId: string): Promise<TaskSnapshot>;
+  refreshPullRequest(projectId: string, taskId: string): Promise<TaskSnapshot>;
 }
 
 export function createTaskService({
@@ -435,6 +436,38 @@ export function createTaskService({
         }
       });
     },
+
+    async refreshPullRequest(projectId, taskId) {
+      const project = await projectService.getProject(projectId);
+
+      await assertTaskExists(projectId, taskId);
+
+      return executionLock.withLock(projectId, taskId, async () => {
+        const task = await requireTask(projectId, taskId);
+
+        assertNoPendingRetry(task);
+        assertTaskNotCancelled(task);
+
+        if (task.pullRequest === undefined) {
+          throw new ApplicationError(
+            "INVALID_TASK_TRANSITION",
+            409,
+            "Task pull request has not been created",
+          );
+        }
+
+        const pullRequest = await refreshPullRequestEvidence(project, task);
+        const timestamp = now().toISOString();
+
+        return copyTask(
+          await store.update({
+            ...copyTask(task),
+            pullRequest,
+            updatedAt: timestamp,
+          }),
+        );
+      });
+    },
   };
 
   async function assertTaskExists(
@@ -633,6 +666,24 @@ export function createTaskService({
     return taskWithPullRequest;
   }
 
+  async function refreshPullRequestEvidence(
+    project: Awaited<ReturnType<ProjectService["getProject"]>>,
+    task: TaskSnapshot,
+  ) {
+    if (pullRequestCreator.refreshPullRequest === undefined) {
+      throw new ApplicationError(
+        "PULL_REQUEST_UNAVAILABLE",
+        503,
+        "Pull request refresh is not configured",
+      );
+    }
+
+    return pullRequestCreator.refreshPullRequest({
+      project,
+      task: copyTask(task),
+    });
+  }
+
   async function maybePublishValidatedTask(
     task: TaskSnapshot,
     active?: ActiveTaskExecution,
@@ -814,6 +865,13 @@ function unavailablePullRequestCreator(): TaskPullRequestCreator {
         "PULL_REQUEST_UNAVAILABLE",
         503,
         "Pull request creation is not configured",
+      );
+    },
+    async refreshPullRequest() {
+      throw new ApplicationError(
+        "PULL_REQUEST_UNAVAILABLE",
+        503,
+        "Pull request refresh is not configured",
       );
     },
   };

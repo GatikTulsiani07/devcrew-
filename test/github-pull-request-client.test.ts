@@ -12,7 +12,10 @@ const providerPullRequest = {
   number: 42,
   html_url: "https://github.com/example/devcrew/pull/42",
   state: "open",
-  head: { ref: "devcrew/task-task_000001" },
+  head: {
+    ref: "devcrew/task-task_000001",
+    sha: "0123456789abcdef0123456789abcdef01234567",
+  },
   base: {
     ref: "main",
     repo: { full_name: "example/devcrew" },
@@ -49,6 +52,7 @@ describe("GitHub pull request client", () => {
       url: "https://github.com/example/devcrew/pull/42",
       state: "OPEN",
       headRef: "devcrew/task-task_000001",
+      headSha: "0123456789abcdef0123456789abcdef01234567",
       baseRef: "main",
       repository: { owner: "example", repo: "devcrew" },
       createdAt: "2026-08-03T08:00:00.000Z",
@@ -59,9 +63,24 @@ describe("GitHub pull request client", () => {
         parsePullRequestResponse(
           {
             ...providerPullRequest,
-            head: { ref: "main" },
+            head: {
+              ref: "main",
+              sha: "0123456789abcdef0123456789abcdef01234567",
+            },
           },
           lookup,
+        ),
+      GitHubPullRequestClientError,
+    );
+
+    assert.throws(
+      () =>
+        parsePullRequestResponse(
+          {
+            ...providerPullRequest,
+            number: 99,
+          },
+          { ...lookup, number: 42 },
         ),
       GitHubPullRequestClientError,
     );
@@ -120,6 +139,33 @@ describe("GitHub pull request client", () => {
       true,
     );
     assert.equal(requests[0].includes("base=main"), true);
+  });
+
+  it("reads a specific pull request and maps merged provider state", async () => {
+    const requests: Array<{ url: string; method?: string }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      requests.push({ url: String(url), method: init?.method });
+      return new Response(
+        JSON.stringify({
+          ...providerPullRequest,
+          state: "closed",
+          merged: true,
+        }),
+        { status: 200 },
+      );
+    };
+
+    const pulled = await createGitHubPullRequestClient({
+      token: "ghp_SERVER_TOKEN",
+      fetchImpl,
+    }).getPullRequest({ ...lookup, number: 42 });
+
+    assert.equal(pulled.state, "MERGED");
+    assert.equal(requests[0].method, "GET");
+    assert.equal(
+      requests[0].url,
+      "https://api.github.com/repos/example/devcrew/pulls/42",
+    );
   });
 
   it("sanitizes missing token, provider failure, malformed response, and timeout", async () => {

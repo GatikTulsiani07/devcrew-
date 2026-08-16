@@ -20,6 +20,8 @@ import {
   planDecisionRequestSchema,
   reviewTaskPathParamsSchema,
   reviewTaskRequestSchema,
+  refreshPullRequestPathParamsSchema,
+  refreshPullRequestRequestSchema,
   retryTaskPathParamsSchema,
   retryTaskRequestSchema,
   validateTaskPathParamsSchema,
@@ -190,6 +192,25 @@ export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
     }
 
     const task = await taskService.createPullRequest(
+      params.data.projectId,
+      params.data.taskId,
+    );
+    return c.json({ task });
+  });
+
+  routes.post("/:projectId/tasks/:taskId/pull-request/refresh", async (c) => {
+    const params = refreshPullRequestPathParamsSchema.safeParse({
+      projectId: c.req.param("projectId"),
+      taskId: c.req.param("taskId"),
+    });
+    const body = await readOptionalJsonBody(c.req.text.bind(c.req));
+    const request = refreshPullRequestRequestSchema.safeParse(body);
+
+    if (!params.success || !request.success) {
+      throw validationError();
+    }
+
+    const task = await taskService.refreshPullRequest(
       params.data.projectId,
       params.data.taskId,
     );
