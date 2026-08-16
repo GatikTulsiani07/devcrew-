@@ -20,6 +20,10 @@ import {
   type ActiveTaskExecution,
   type TaskCancellationRegistry,
 } from "./task-cancellation.js";
+import {
+  createTaskExecutionLock,
+  type TaskExecutionLock,
+} from "./task-execution-lock.js";
 import type {
   CancellationStage,
   CreateTaskInput,
@@ -50,6 +54,7 @@ export interface TaskServiceDependencies {
   now?: TaskClock;
   activityService?: ActivityService;
   cancellationRegistry?: TaskCancellationRegistry;
+  executionLock?: TaskExecutionLock;
 }
 
 export interface TaskService {
@@ -83,6 +88,7 @@ export function createTaskService({
   now = () => new Date(),
   activityService = createNoopActivityService(),
   cancellationRegistry = createTaskCancellationRegistry(),
+  executionLock = createTaskExecutionLock(),
 }: TaskServiceDependencies): TaskService {
   const retryOrchestrator = createRetryOrchestrator({
     store,
@@ -142,213 +148,213 @@ export function createTaskService({
     async decidePlan(projectId, taskId, input) {
       await projectService.getProject(projectId);
 
-      const task = await store.findByProjectAndId(projectId, taskId);
+      await assertTaskExists(projectId, taskId);
 
-      if (task === undefined) {
-        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
-      }
+      return executionLock.withLock(projectId, taskId, async () => {
+        const task = await requireTask(projectId, taskId);
 
-      if (task.status !== "WAITING_FOR_APPROVAL") {
-        throw new ApplicationError(
-          "INVALID_TASK_TRANSITION",
-          409,
-          "Task plan has already been decided",
-        );
-      }
+        if (task.status !== "WAITING_FOR_APPROVAL") {
+          throw new ApplicationError(
+            "INVALID_TASK_TRANSITION",
+            409,
+            "Task plan has already been decided",
+          );
+        }
 
-      const timestamp = now().toISOString();
-      const updatedTask: TaskSnapshot = {
-        ...copyTask(task),
-        status:
-          input.decision === "APPROVE" ? "PLAN_APPROVED" : "PLAN_REJECTED",
-        planDecision: {
-          decision: input.decision,
-          ...(input.reason === undefined ? {} : { reason: input.reason }),
-          decidedAt: timestamp,
-        },
-        updatedAt: timestamp,
-      };
+        const timestamp = now().toISOString();
+        const updatedTask: TaskSnapshot = {
+          ...copyTask(task),
+          status:
+            input.decision === "APPROVE" ? "PLAN_APPROVED" : "PLAN_REJECTED",
+          planDecision: {
+            decision: input.decision,
+            ...(input.reason === undefined ? {} : { reason: input.reason }),
+            decidedAt: timestamp,
+          },
+          updatedAt: timestamp,
+        };
 
-      const decidedTask = copyTask(await store.update(updatedTask));
-      await activityService.append({
-        projectId,
-        taskId,
-        type:
-          input.decision === "APPROVE" ? "PLAN_APPROVED" : "PLAN_REJECTED",
-        actor: { kind: "HUMAN" },
-        summary:
-          input.decision === "APPROVE"
-            ? "Plan approved for implementation."
-            : "Plan rejected by human reviewer.",
+        const decidedTask = copyTask(await store.update(updatedTask));
+        await activityService.append({
+          projectId,
+          taskId,
+          type:
+            input.decision === "APPROVE" ? "PLAN_APPROVED" : "PLAN_REJECTED",
+          actor: { kind: "HUMAN" },
+          summary:
+            input.decision === "APPROVE"
+              ? "Plan approved for implementation."
+              : "Plan rejected by human reviewer.",
+        });
+
+        return decidedTask;
       });
-
-      return decidedTask;
     },
 
     async executeTask(projectId, taskId) {
       const project = await projectService.getProject(projectId);
 
-      const task = await store.findByProjectAndId(projectId, taskId);
+      await assertTaskExists(projectId, taskId);
 
-      if (task === undefined) {
-        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
-      }
+      return executionLock.withLock(projectId, taskId, async () => {
+        const task = await requireTask(projectId, taskId);
 
-      if (task.status !== "PLAN_APPROVED" || task.execution !== undefined) {
-        throw new ApplicationError(
-          "INVALID_TASK_TRANSITION",
-          409,
-          "Task is not approved for implementation",
-        );
-      }
-
-      assertNoPendingRetry(task);
-      assertTaskNotCancelled(task);
-
-      const active = cancellationRegistry.register({
-        projectId,
-        taskId,
-        stage: "DEVELOPER",
-      });
-      try {
-        return await runDeveloperStage(project, task, active);
-      } catch (error) {
-        if (isTaskCancellationError(error)) {
-          await completeCancellation(await latestTaskOr(task), active.stage);
-          throw error;
+        if (task.status !== "PLAN_APPROVED" || task.execution !== undefined) {
+          throw new ApplicationError(
+            "INVALID_TASK_TRANSITION",
+            409,
+            "Task is not approved for implementation",
+          );
         }
-        const latest = await latestTaskOr(task);
-        await retryOrchestrator.recordFailure(latest, "DEVELOPER", error);
-        throw sanitizeStageError("DEVELOPER");
-      } finally {
-        active.unregister();
-      }
+
+        assertNoPendingRetry(task);
+        assertTaskNotCancelled(task);
+
+        const active = cancellationRegistry.register({
+          projectId,
+          taskId,
+          stage: "DEVELOPER",
+        });
+        try {
+          return await runDeveloperStage(project, task, active);
+        } catch (error) {
+          if (isTaskCancellationError(error)) {
+            await completeCancellation(await latestTaskOr(task), active.stage);
+            throw error;
+          }
+          const latest = await latestTaskOr(task);
+          await retryOrchestrator.recordFailure(latest, "DEVELOPER", error);
+          throw sanitizeStageError("DEVELOPER");
+        } finally {
+          active.unregister();
+        }
+      });
     },
 
     async validateTask(projectId, taskId) {
       const project = await projectService.getProject(projectId);
 
-      const task = await store.findByProjectAndId(projectId, taskId);
+      await assertTaskExists(projectId, taskId);
 
-      if (task === undefined) {
-        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
-      }
+      return executionLock.withLock(projectId, taskId, async () => {
+        const task = await requireTask(projectId, taskId);
 
-      if (
-        task.status !== "IMPLEMENTATION_COMPLETED" ||
-        task.validation !== undefined
-      ) {
-        throw new ApplicationError(
-          "INVALID_TASK_TRANSITION",
-          409,
-          "Task implementation is not ready for validation",
-        );
-      }
-
-      assertNoPendingRetry(task);
-      assertTaskNotCancelled(task);
-
-      const active = cancellationRegistry.register({
-        projectId,
-        taskId,
-        stage: "DEVOPS",
-      });
-      try {
-        return await runValidationWorkflow(project, task, active);
-      } catch (error) {
-        if (isTaskCancellationError(error)) {
-          await completeCancellation(await latestTaskOr(task), active.stage);
-          throw error;
+        if (
+          task.status !== "IMPLEMENTATION_COMPLETED" ||
+          task.validation !== undefined
+        ) {
+          throw new ApplicationError(
+            "INVALID_TASK_TRANSITION",
+            409,
+            "Task implementation is not ready for validation",
+          );
         }
-        const latest = await latestTaskOr(task);
-        await retryOrchestrator.recordFailure(latest, "DEVOPS", error);
-        throw sanitizeStageError("DEVOPS");
-      } finally {
-        active.unregister();
-      }
+
+        assertNoPendingRetry(task);
+        assertTaskNotCancelled(task);
+
+        const active = cancellationRegistry.register({
+          projectId,
+          taskId,
+          stage: "DEVOPS",
+        });
+        try {
+          return await runValidationWorkflow(project, task, active);
+        } catch (error) {
+          if (isTaskCancellationError(error)) {
+            await completeCancellation(await latestTaskOr(task), active.stage);
+            throw error;
+          }
+          const latest = await latestTaskOr(task);
+          await retryOrchestrator.recordFailure(latest, "DEVOPS", error);
+          throw sanitizeStageError("DEVOPS");
+        } finally {
+          active.unregister();
+        }
+      });
     },
 
     async reviewTask(projectId, taskId) {
       const project = await projectService.getProject(projectId);
 
-      const task = await store.findByProjectAndId(projectId, taskId);
+      await assertTaskExists(projectId, taskId);
 
-      if (task === undefined) {
-        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
-      }
+      return executionLock.withLock(projectId, taskId, async () => {
+        const task = await requireTask(projectId, taskId);
 
-      if (task.status !== "VALIDATION_COMPLETED" || task.review !== undefined) {
-        throw new ApplicationError(
-          "INVALID_TASK_TRANSITION",
-          409,
-          "Task validation is not ready for review",
-        );
-      }
-
-      if (
-        task.validation?.visualReview?.status === "FAILED" ||
-        task.visualRepair?.outcome === "EXHAUSTED"
-      ) {
-        throw new ApplicationError(
-          "INVALID_TASK_TRANSITION",
-          409,
-          "Task visual review is not approved for review",
-        );
-      }
-
-      assertNoPendingRetry(task);
-      assertTaskNotCancelled(task);
-
-      const active = cancellationRegistry.register({
-        projectId,
-        taskId,
-        stage: "REVIEWER",
-      });
-      try {
-        return await runReviewerStage(project, task, active);
-      } catch (error) {
-        if (isTaskCancellationError(error)) {
-          await completeCancellation(await latestTaskOr(task), active.stage);
-          throw error;
+        if (task.status !== "VALIDATION_COMPLETED" || task.review !== undefined) {
+          throw new ApplicationError(
+            "INVALID_TASK_TRANSITION",
+            409,
+            "Task validation is not ready for review",
+          );
         }
-        const latest = await latestTaskOr(task);
-        await retryOrchestrator.recordFailure(latest, "REVIEWER", error);
-        throw sanitizeStageError("REVIEWER");
-      } finally {
-        active.unregister();
-      }
+
+        if (
+          task.validation?.visualReview?.status === "FAILED" ||
+          task.visualRepair?.outcome === "EXHAUSTED"
+        ) {
+          throw new ApplicationError(
+            "INVALID_TASK_TRANSITION",
+            409,
+            "Task visual review is not approved for review",
+          );
+        }
+
+        assertNoPendingRetry(task);
+        assertTaskNotCancelled(task);
+
+        const active = cancellationRegistry.register({
+          projectId,
+          taskId,
+          stage: "REVIEWER",
+        });
+        try {
+          return await runReviewerStage(project, task, active);
+        } catch (error) {
+          if (isTaskCancellationError(error)) {
+            await completeCancellation(await latestTaskOr(task), active.stage);
+            throw error;
+          }
+          const latest = await latestTaskOr(task);
+          await retryOrchestrator.recordFailure(latest, "REVIEWER", error);
+          throw sanitizeStageError("REVIEWER");
+        } finally {
+          active.unregister();
+        }
+      });
     },
 
     async retryTask(projectId, taskId) {
       await projectService.getProject(projectId);
 
-      const task = await store.findByProjectAndId(projectId, taskId);
+      await assertTaskExists(projectId, taskId);
 
-      if (task === undefined) {
-        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
-      }
+      return executionLock.withLock(projectId, taskId, async () => {
+        const task = await requireTask(projectId, taskId);
 
-      assertTaskNotCancelled(task);
+        assertTaskNotCancelled(task);
 
-      const stage = task.retryRecovery?.failedStage ?? "RETRY_WAIT";
-      const active = cancellationRegistry.register({
-        projectId,
-        taskId,
-        stage,
-      });
-      try {
-        return await retryOrchestrator.retry(copyTask(task), {
-          signal: active.signal,
-          setStage: active.setStage,
+        const stage = task.retryRecovery?.failedStage ?? "RETRY_WAIT";
+        const active = cancellationRegistry.register({
+          projectId,
+          taskId,
+          stage,
         });
-      } catch (error) {
-        if (isTaskCancellationError(error)) {
-          await completeCancellation(await latestTaskOr(task), active.stage);
+        try {
+          return await retryOrchestrator.retry(copyTask(task), {
+            signal: active.signal,
+            setStage: active.setStage,
+          });
+        } catch (error) {
+          if (isTaskCancellationError(error)) {
+            await completeCancellation(await latestTaskOr(task), active.stage);
+          }
+          throw error;
+        } finally {
+          active.unregister();
         }
-        throw error;
-      } finally {
-        active.unregister();
-      }
+      });
     },
 
     async cancelTask(projectId, taskId) {
@@ -401,35 +407,55 @@ export function createTaskService({
     async createPullRequest(projectId, taskId) {
       const project = await projectService.getProject(projectId);
 
-      const task = await store.findByProjectAndId(projectId, taskId);
+      await assertTaskExists(projectId, taskId);
 
-      if (task === undefined) {
-        throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
-      }
+      return executionLock.withLock(projectId, taskId, async () => {
+        const task = await requireTask(projectId, taskId);
 
-      assertNoPendingRetry(task);
-      assertTaskNotCancelled(task);
+        assertNoPendingRetry(task);
+        assertTaskNotCancelled(task);
 
-      const active = cancellationRegistry.register({
-        projectId,
-        taskId,
-        stage: "PULL_REQUEST",
-      });
-      try {
-        return await runPullRequestStage(project, task, active);
-      } catch (error) {
-        if (isTaskCancellationError(error)) {
-          await completeCancellation(await latestTaskOr(task), active.stage);
-          throw error;
+        const active = cancellationRegistry.register({
+          projectId,
+          taskId,
+          stage: "PULL_REQUEST",
+        });
+        try {
+          return await runPullRequestStage(project, task, active);
+        } catch (error) {
+          if (isTaskCancellationError(error)) {
+            await completeCancellation(await latestTaskOr(task), active.stage);
+            throw error;
+          }
+          const latest = await latestTaskOr(task);
+          await retryOrchestrator.recordFailure(latest, "PULL_REQUEST", error);
+          throw sanitizeStageError("PULL_REQUEST");
+        } finally {
+          active.unregister();
         }
-        const latest = await latestTaskOr(task);
-        await retryOrchestrator.recordFailure(latest, "PULL_REQUEST", error);
-        throw sanitizeStageError("PULL_REQUEST");
-      } finally {
-        active.unregister();
-      }
+      });
     },
   };
+
+  async function assertTaskExists(
+    projectId: string,
+    taskId: string,
+  ): Promise<void> {
+    await requireTask(projectId, taskId);
+  }
+
+  async function requireTask(
+    projectId: string,
+    taskId: string,
+  ): Promise<TaskSnapshot> {
+    const task = await store.findByProjectAndId(projectId, taskId);
+
+    if (task === undefined) {
+      throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
+    }
+
+    return task;
+  }
 
   async function retryStage(
     stage: RetryStage,
