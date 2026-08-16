@@ -102,6 +102,7 @@ export interface TaskExecution {
   attempt: 1;
   startedAt: string;
   completedAt: string;
+  durationMs?: number;
   result: ImplementationResult;
 }
 
@@ -130,6 +131,7 @@ export interface VisualRepairAttempt {
   attempt: number;
   startedAt: string;
   completedAt?: string;
+  durationMs?: number;
   sourceScreenshotId: string;
   sourceVisualReview: VisualRepairSourceReview;
   developer?: VisualRepairAttemptDeveloperEvidence;
@@ -151,6 +153,7 @@ export interface RetryAttemptEvidence {
   category: RetryFailureCategory;
   startedAt: string;
   completedAt: string;
+  durationMs?: number;
   retryable: boolean;
   summary: string;
 }
@@ -190,6 +193,7 @@ export interface TaskValidation {
   attempt: 1;
   startedAt: string;
   completedAt: string;
+  durationMs?: number;
   checks: readonly ValidationCheck[];
   summary: string;
   checkpoint?: GitCheckpointEvidence;
@@ -213,6 +217,7 @@ export interface TaskReview {
   attempt: 1;
   startedAt: string;
   completedAt: string;
+  durationMs?: number;
   summary: string;
   findings: readonly ReviewFinding[];
 }
@@ -225,6 +230,7 @@ export interface TaskPullRequestEvidence {
   baseBranch: string;
   commitSha: string;
   createdAt: string;
+  durationMs?: number;
 }
 
 export interface TaskSnapshot {

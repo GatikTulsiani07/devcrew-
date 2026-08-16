@@ -7,6 +7,10 @@ import {
   isTaskCancellationError,
   throwIfSignalCancelled,
 } from "../tasks/task-cancellation.js";
+import {
+  startWorkflowDurationTimer,
+  type MonotonicClock,
+} from "../tasks/workflow-duration.js";
 import type {
   CancellationStage,
   DeveloperExecutor,
@@ -35,6 +39,7 @@ export interface VisualRepairOrchestratorDependencies {
   store: TaskStore;
   now?: () => Date;
   activityService: ActivityService;
+  durationClock?: MonotonicClock;
   signal?: AbortSignal;
   setStage?: (stage: CancellationStage) => void;
 }
@@ -50,6 +55,7 @@ export function createVisualRepairOrchestrator({
   store,
   now = () => new Date(),
   activityService,
+  durationClock,
   signal,
   setStage,
 }: VisualRepairOrchestratorDependencies): VisualRepairOrchestrator {
@@ -98,6 +104,7 @@ export function createVisualRepairOrchestrator({
 
         const attemptNumber = existingAttempts.length + 1;
         const startedAt = now().toISOString();
+        const attemptTimer = startWorkflowDurationTimer(durationClock);
         let attempt: VisualRepairAttempt = {
           attempt: attemptNumber,
           startedAt,
@@ -123,7 +130,9 @@ export function createVisualRepairOrchestrator({
         try {
           setStage?.("DEVELOPER");
           throwIfSignalCancelled(signal);
-          execution = await developerExecutor.execute({
+          const developerTimer = startWorkflowDurationTimer(durationClock);
+          execution = withDuration(
+            await developerExecutor.execute({
             project,
             task: repairTaskForDeveloper(current, sourceVisualReview, sourceScreenshot),
             repairContext: buildRepairContext(
@@ -133,7 +142,9 @@ export function createVisualRepairOrchestrator({
               attemptNumber,
             ),
             signal,
-          });
+            }),
+            developerTimer.finish(),
+          );
           throwIfSignalCancelled(signal);
 
           const taskWithRepairExecution: TaskSnapshot = {
@@ -147,10 +158,14 @@ export function createVisualRepairOrchestrator({
           };
 
           setStage?.("DEVOPS");
-          validation = await devOpsValidator.validate(taskWithRepairExecution, {
+          const validationTimer = startWorkflowDurationTimer(durationClock);
+          validation = withDuration(
+            await devOpsValidator.validate(taskWithRepairExecution, {
             signal,
             setStage,
-          });
+            }),
+            validationTimer.finish(),
+          );
           throwIfSignalCancelled(signal);
           if (
             validation.browserScreenshot === undefined ||
@@ -169,6 +184,7 @@ export function createVisualRepairOrchestrator({
         attempt = {
           ...attempt,
           completedAt: now().toISOString(),
+          durationMs: attemptTimer.finish(),
           developer: {
             summary: safeText(execution.result.summary, MAX_TEXT),
             changedFiles: execution.result.changedFiles
@@ -437,6 +453,13 @@ function safeText(value: string, maxLength: number): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maxLength);
+}
+
+function withDuration<T extends object>(evidence: T, durationMs: number): T & { durationMs: number } {
+  return {
+    ...evidence,
+    durationMs,
+  };
 }
 
 function copyTask(task: TaskSnapshot): TaskSnapshot {

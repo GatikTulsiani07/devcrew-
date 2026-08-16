@@ -43,6 +43,7 @@ export const visualReviewEvidenceSchema = z.object({
   findings: z.array(visualReviewFindingSchema).max(VISUAL_REVIEW_MAX_FINDINGS),
   screenshotId: z.string().trim().min(1).max(96),
   reviewedAt: z.string().datetime(),
+  durationMs: z.number().int().min(0).optional(),
 });
 
 export type VisualReviewFinding = z.infer<typeof visualReviewFindingSchema>;
@@ -146,7 +147,7 @@ export function createVisualReviewService({
       throwIfSignalCancelled(input.signal);
 
       const parsed = visualReviewEvidenceSchema
-        .omit({ screenshotId: true, reviewedAt: true })
+        .omit({ screenshotId: true, reviewedAt: true, durationMs: true })
         .safeParse(output);
 
       if (!parsed.success || containsUnsafeOutput(parsed.data)) {
@@ -271,6 +272,9 @@ function copyVisualReviewEvidence(
     findings: evidence.findings.map((finding) => ({ ...finding })),
     screenshotId: evidence.screenshotId,
     reviewedAt: evidence.reviewedAt,
+    ...(evidence.durationMs === undefined
+      ? {}
+      : { durationMs: evidence.durationMs }),
   };
 }
 

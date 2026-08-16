@@ -24,6 +24,7 @@ import {
   type TaskExecutionBudget,
 } from "../src/tasks/task-execution-budget.js";
 import { createTaskService } from "../src/tasks/task-service.js";
+import type { MonotonicClock } from "../src/tasks/workflow-duration.js";
 import type {
   DeveloperExecutor,
   DevOpsPublisher,
@@ -63,6 +64,7 @@ interface TestAppOptions {
   activityService?: ActivityService;
   dates?: readonly string[];
   createExecutionBudget?: () => TaskExecutionBudget;
+  durationClock?: MonotonicClock;
 }
 
 function createDeterministicProjectService(): ProjectService {
@@ -93,6 +95,7 @@ function createTestApp({
   activityService,
   dates = ["2026-08-03T01:00:00.000Z"],
   createExecutionBudget,
+  durationClock,
 }: TestAppOptions = {}) {
   const projectService = createDeterministicProjectService();
   let taskCount = 0;
@@ -149,6 +152,7 @@ function createTestApp({
       now: nextDate,
       ...(activityService === undefined ? {} : { activityService }),
       ...(createExecutionBudget === undefined ? {} : { createExecutionBudget }),
+      ...(durationClock === undefined ? {} : { durationClock }),
     }),
     ...(activityService === undefined ? {} : { activityService }),
   });
@@ -1021,6 +1025,7 @@ describe("task manager planning API", () => {
           attempt: 1,
           startedAt: "2026-08-03T03:00:00.000Z",
           completedAt: "2026-08-03T04:00:00.000Z",
+          durationMs: 0,
           result: {
             summary: "Implemented the approved engineering task.",
             changedFiles: [],
@@ -1476,6 +1481,7 @@ describe("task manager planning API", () => {
           attempt: 1,
           startedAt: "2026-08-03T03:00:00.000Z",
           completedAt: "2026-08-03T04:00:00.000Z",
+          durationMs: 0,
           result: {
             summary: "Implemented the approved engineering task.",
             changedFiles: [],
@@ -1491,6 +1497,7 @@ describe("task manager planning API", () => {
           attempt: 1,
           startedAt: "2026-08-03T06:00:00.000Z",
           completedAt: "2026-08-03T07:00:00.000Z",
+          durationMs: 0,
           checks: [
             {
               name: "typecheck",
@@ -2046,6 +2053,7 @@ describe("task manager planning API", () => {
           attempt: 1,
           startedAt: "2026-08-03T03:00:00.000Z",
           completedAt: "2026-08-03T04:00:00.000Z",
+          durationMs: 0,
           result: {
             summary: "Implemented the approved engineering task.",
             changedFiles: [],
@@ -2061,6 +2069,7 @@ describe("task manager planning API", () => {
           attempt: 1,
           startedAt: "2026-08-03T06:00:00.000Z",
           completedAt: "2026-08-03T07:00:00.000Z",
+          durationMs: 0,
           checks: [
             {
               name: "typecheck",
@@ -2088,6 +2097,7 @@ describe("task manager planning API", () => {
           attempt: 1,
           startedAt: "2026-08-03T09:00:00.000Z",
           completedAt: "2026-08-03T10:00:00.000Z",
+          durationMs: 0,
           summary: "Deterministic review completed successfully.",
           findings: [
             {
@@ -2379,7 +2389,14 @@ describe("task manager planning API", () => {
         throw new Error(sensitiveMessage);
       },
     };
-    const app = createTestApp({ taskReviewer });
+    const app = createTestApp({
+      taskReviewer,
+      durationClock: (() => {
+        const ticks = [0, 1, 2, 3, 4, 10, 20, 35];
+        let index = 0;
+        return () => ticks[Math.min(index++, ticks.length - 1)];
+      })(),
+    });
     assert.equal((await createProject(app)).status, 201);
     assert.equal((await createTask(app)).status, 201);
     assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
@@ -2647,6 +2664,74 @@ describe("task manager planning API", () => {
     assert.equal(validationCalls, 2);
   });
 
+  it("persists independent Visual Repair attempt durations and repair-stage evidence durations", async () => {
+    let validationCalls = 0;
+    const failedVisualValidation = (
+      id: string,
+      screenshotId: string,
+    ): TaskValidation => ({
+      ...validationWithFailedVisualReviewScreenshot(),
+      id,
+      browserScreenshot: {
+        status: "CAPTURED",
+        id: screenshotId,
+        url: "http://127.0.0.1:3000/",
+        viewport: { width: 1440, height: 900 },
+        capturedAt: "2026-08-03T04:00:45.000Z",
+      },
+      visualReview: {
+        status: "FAILED",
+        summary: `Visible issue remains in ${screenshotId}.`,
+        findings: [
+          {
+            severity: "ERROR",
+            category: "missing-element",
+            title: "Panel missing",
+            description: "The required panel is not visible.",
+          },
+        ],
+        screenshotId,
+        reviewedAt: "2026-08-03T04:01:00.000Z",
+      },
+    });
+    const devOpsValidator: DevOpsValidator = {
+      async validate(): Promise<TaskValidation> {
+        validationCalls += 1;
+        if (validationCalls === 1) {
+          return failedVisualValidation("val_initial", "shot_initial");
+        }
+        if (validationCalls === 2) {
+          return failedVisualValidation("val_attempt_1", "shot_attempt_1");
+        }
+        return failedVisualValidation("val_attempt_2", "shot_attempt_2");
+      },
+    };
+    const ticks = [0, 1, 10, 11, 20, 21, 23, 24, 27, 30, 40, 41, 45, 46, 52, 60];
+    let index = 0;
+    const app = createTestApp({
+      devOpsValidator,
+      durationClock: () => ticks[Math.min(index++, ticks.length - 1)],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const validated = await validateTask(app);
+    const body = await validated.json();
+
+    assert.equal(validated.status, 200);
+    assert.equal(body.task.visualRepair.outcome, "EXHAUSTED");
+    assert.equal(body.task.visualRepair.attempts.length, 2);
+    assert.equal(body.task.visualRepair.attempts[0].attempt, 1);
+    assert.equal(body.task.visualRepair.attempts[1].attempt, 2);
+    assert.equal(body.task.visualRepair.attempts[0].durationMs, 10);
+    assert.equal(body.task.visualRepair.attempts[1].durationMs, 20);
+    assert.equal(body.task.execution.durationMs, 4);
+    assert.equal(body.task.validation.durationMs, 6);
+    assert.equal(body.task.validation.visualReview.status, "FAILED");
+  });
+
   it("rejects concurrent PR creation before duplicate side effects can run", async () => {
     const started = deferred<void>();
     const finish = deferred<void>();
@@ -2691,6 +2776,162 @@ describe("task manager planning API", () => {
 
     finish.resolve();
     assert.equal((await first).status, 200);
+  });
+
+  it("persists server-owned durations for successful Developer, DevOps, Reviewer, and Pull Request stages", async () => {
+    const ticks = [0, 7, 10, 29, 30, 35, 40, 45];
+    let index = 0;
+    let pullRequestCalls = 0;
+    const app = createTestApp({
+      durationClock: () => ticks[Math.min(index++, ticks.length - 1)],
+      pullRequestCreator: {
+        async createPullRequest() {
+          pullRequestCalls += 1;
+          return {
+            created: true,
+            evidence: {
+              number: 42,
+              url: "https://github.com/example/devcrew/pull/42",
+              state: "OPEN",
+              headBranch: "devcrew/task-task_000001",
+              baseBranch: "main",
+              commitSha: "0123456789abcdef0123456789abcdef01234567",
+              createdAt: "2026-08-03T07:00:00.000Z",
+              durationMs: 999_999,
+            },
+          };
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+    const pr = await createPullRequest(app);
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const body = await read.json();
+
+    assert.equal(pr.status, 200);
+    assert.equal(read.status, 200);
+    assert.equal(body.task.execution.durationMs, 7);
+    assert.equal(body.task.validation.durationMs, 19);
+    assert.equal(body.task.review.durationMs, 5);
+    assert.equal(body.task.pullRequest.durationMs, 5);
+    assert.equal(pullRequestCalls, 1);
+    assert.equal(JSON.stringify(body).includes("999999"), false);
+  });
+
+  it("rejects client duration input and overwrites task/provider duration claims", async () => {
+    const developerExecutor: DeveloperExecutor = {
+      async execute(): Promise<TaskExecution> {
+        return {
+          ...developerExecution("exec_duration_claim"),
+          durationMs: 123_456,
+        };
+      },
+    };
+    const ticks = [0, 3];
+    let index = 0;
+    const app = createTestApp({
+      developerExecutor,
+      durationClock: () => ticks[Math.min(index++, ticks.length - 1)],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const rejected = await executeTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ durationMs: 123_456 }),
+    });
+    const executed = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001/execute?durationMs=123456",
+      { method: "POST" },
+    );
+    const body = await executed.json();
+
+    assert.equal(rejected.status, 400);
+    assert.equal(executed.status, 200);
+    assert.equal(body.task.execution.durationMs, 3);
+    assert.equal(JSON.stringify(body).includes("123456"), false);
+  });
+
+  it("bounds duration values to safe integer milliseconds and preserves them on reads", async () => {
+    const ticks = [Number.NaN, Number.POSITIVE_INFINITY, 0, 1_000_000_000];
+    let index = 0;
+    const app = createTestApp({
+      durationClock: () => ticks[Math.min(index++, ticks.length - 1)],
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const executed = await executeTask(app);
+    const validated = await validateTask(app);
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const body = await read.json();
+
+    assert.equal(executed.status, 200);
+    assert.equal(validated.status, 200);
+    assert.equal(Number.isInteger(body.task.execution.durationMs), true);
+    assert.equal(Number.isInteger(body.task.validation.durationMs), true);
+    assert.equal(body.task.execution.durationMs, 0);
+    assert.equal(body.task.validation.durationMs, 600_000);
+    assert.deepEqual(body, await (await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    )).json());
+    assert.equal(JSON.stringify(body).includes("Infinity"), false);
+    assert.equal(JSON.stringify(body).includes("NaN"), false);
+  });
+
+  it("keeps original Pull Request creation duration on the idempotent path", async () => {
+    const ticks = [0, 2, 4, 8, 10, 13, 20, 25, 100, 150];
+    let index = 0;
+    let pullRequestCalls = 0;
+    const app = createTestApp({
+      durationClock: () => ticks[Math.min(index++, ticks.length - 1)],
+      pullRequestCreator: {
+        async createPullRequest() {
+          pullRequestCalls += 1;
+          return {
+            created: pullRequestCalls === 1,
+            evidence: {
+              number: 42,
+              url: "https://github.com/example/devcrew/pull/42",
+              state: "OPEN",
+              headBranch: "devcrew/task-task_000001",
+              baseBranch: "main",
+              commitSha: "0123456789abcdef0123456789abcdef01234567",
+              createdAt: "2026-08-03T07:00:00.000Z",
+            },
+          };
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+
+    const first = await createPullRequest(app);
+    const firstBody = await first.json();
+    const second = await createPullRequest(app);
+    const secondBody = await second.json();
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(firstBody.task.pullRequest.durationMs, 5);
+    assert.equal(secondBody.task.pullRequest.durationMs, 5);
+    assert.equal(pullRequestCalls, 2);
   });
 
   it("records workflowFailure and prevents late Developer evidence after total budget expiration", async () => {
@@ -2915,6 +3156,11 @@ describe("task manager planning API", () => {
     };
     const app = createTestApp({
       developerExecutor,
+      durationClock: (() => {
+        const ticks = [0, 10, 20, 25, 35];
+        let index = 0;
+        return () => ticks[Math.min(index++, ticks.length - 1)];
+      })(),
       dates: [
         "2026-08-03T01:00:00.000Z",
         "2026-08-03T02:00:00.000Z",
@@ -2967,10 +3213,12 @@ describe("task manager planning API", () => {
     const body = await retried.json();
     assert.equal(body.task.status, "IMPLEMENTATION_COMPLETED");
     assert.equal(body.task.execution.id, "exec_retry");
+    assert.equal(body.task.execution.durationMs, 5);
     assert.equal(body.task.retryRecovery.retryAvailable, false);
     assert.equal(body.task.retryRecovery.failedStage, undefined);
     assert.equal(body.task.retryRecovery.attempts.length, 2);
     assert.equal(body.task.retryRecovery.attempts[1].status, "SUCCEEDED");
+    assert.equal(body.task.retryRecovery.attempts[1].durationMs, 25);
     assert.equal(body.task.workflowFailure, undefined);
     assert.equal(calls, 2);
 
@@ -3156,7 +3404,14 @@ describe("task manager planning API", () => {
         throw createRetryStageFailure("REVIEWER", "PROVIDER_NETWORK", true);
       },
     };
-    const app = createTestApp({ taskReviewer });
+    let durationTick = 0;
+    const app = createTestApp({
+      taskReviewer,
+      durationClock: () => {
+        durationTick += 5;
+        return durationTick;
+      },
+    });
     assert.equal((await createProject(app)).status, 201);
     assert.equal((await createTask(app)).status, 201);
     assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
@@ -3178,6 +3433,7 @@ describe("task manager planning API", () => {
     assert.equal(task.task.retryRecovery.attempts.length, 2);
     assert.equal(task.task.retryRecovery.attempts[0].status, "FAILED");
     assert.equal(task.task.retryRecovery.attempts[1].status, "FAILED");
+    assert.equal(task.task.retryRecovery.attempts[1].durationMs, 10);
     assert.equal(calls, 2);
 
     const third = await retryTask(app);

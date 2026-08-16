@@ -5,6 +5,7 @@ export interface BrowserVerificationEvidence {
   url: string;
   pageTitle?: string;
   verifiedAt: string;
+  durationMs?: number;
 }
 
 export interface ScreenshotViewport {
@@ -18,6 +19,7 @@ export interface BrowserScreenshotEvidence {
   url: string;
   viewport: ScreenshotViewport;
   capturedAt: string;
+  durationMs?: number;
 }
 
 export interface BrowserVerificationProfile {

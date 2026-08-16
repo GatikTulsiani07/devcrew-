@@ -8,6 +8,10 @@ import {
   createRetryStageFailure,
 } from "../orchestration/retry-orchestrator.js";
 import {
+  startWorkflowDurationTimer,
+  type MonotonicClock,
+} from "./workflow-duration.js";
+import {
   isTaskCancellationError,
   throwIfSignalCancelled,
 } from "./task-cancellation.js";
@@ -80,6 +84,7 @@ export interface ControlledDevOpsValidatorDependencies {
   browserVerifier?: ControlledBrowserVerifier;
   screenshotCapture?: ControlledScreenshotCapture;
   visualReviewer?: VisualReviewer;
+  durationClock?: MonotonicClock;
 }
 
 export function createControlledDevOpsValidator({
@@ -97,6 +102,7 @@ export function createControlledDevOpsValidator({
   browserVerifier = createControlledBrowserVerifier(),
   screenshotCapture = createControlledScreenshotCapture(),
   visualReviewer = createVisualReviewerFromEnv(),
+  durationClock,
 }: ControlledDevOpsValidatorDependencies): DevOpsValidator & DevOpsPublisher {
   const runner = injectedRunner ?? createControlledCommandRunner(runnerOptions);
 
@@ -172,29 +178,41 @@ export function createControlledDevOpsValidator({
           });
           throwIfSignalCancelled(options.signal);
           options.setStage?.("BROWSER");
-          browserVerification = await browserVerifier.verify({
+          const browserTimer = startWorkflowDurationTimer(durationClock);
+          browserVerification = withDuration(
+            await browserVerifier.verify({
             profile: browserProfile,
             url: server.url,
             signal: options.signal,
-          });
+            }),
+            browserTimer.finish(),
+          );
           throwIfSignalCancelled(options.signal);
           options.setStage?.("SCREENSHOT");
-          browserScreenshot = await screenshotCapture.capture({
+          const screenshotTimer = startWorkflowDurationTimer(durationClock);
+          browserScreenshot = withDuration(
+            await screenshotCapture.capture({
             projectId: task.projectId,
             taskId: task.id,
             profile: browserProfile,
             browserVerification,
             repositoryRoot: repository.localCheckoutPath,
             signal: options.signal,
-          });
+            }),
+            screenshotTimer.finish(),
+          );
           throwIfSignalCancelled(options.signal);
           options.setStage?.("VISUAL_REVIEW");
-          visualReview = await visualReviewer.review({
+          const visualReviewTimer = startWorkflowDurationTimer(durationClock);
+          visualReview = withDuration(
+            await visualReviewer.review({
             task,
             browserVerification,
             browserScreenshot,
             signal: options.signal,
-          });
+            }),
+            visualReviewTimer.finish(),
+          );
           throwIfSignalCancelled(options.signal);
         } catch (error) {
           if (isTaskCancellationError(error)) {
@@ -333,6 +351,13 @@ export function createControlledDevOpsValidator({
 
     return { project, repository, profile };
   }
+}
+
+function withDuration<T extends object>(evidence: T, durationMs: number): T & { durationMs: number } {
+  return {
+    ...evidence,
+    durationMs,
+  };
 }
 
 function isValidRepository(repository: PreparedRepository): repository is PreparedRepository & {

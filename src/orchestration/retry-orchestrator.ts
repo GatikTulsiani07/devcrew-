@@ -9,6 +9,10 @@ import { GitRemotePushError } from "../repositories/git-remote-push.js";
 import type { ActivityService } from "../activity/activity-service.js";
 import { PullRequestServiceError } from "../tasks/pull-request-service.js";
 import {
+  startWorkflowDurationTimer,
+  type MonotonicClock,
+} from "../tasks/workflow-duration.js";
+import {
   isTaskCancellationError,
   throwIfSignalCancelled,
 } from "../tasks/task-cancellation.js";
@@ -50,6 +54,7 @@ export interface RetryOrchestratorDependencies {
   now?: () => Date;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   activityService: ActivityService;
+  durationClock?: MonotonicClock;
   runStage(
     stage: RetryStage,
     task: TaskSnapshot,
@@ -77,6 +82,7 @@ export function createRetryOrchestrator({
   now = () => new Date(),
   sleep = abortableSleep,
   activityService,
+  durationClock,
   runStage,
 }: RetryOrchestratorDependencies): RetryOrchestrator {
   return {
@@ -157,15 +163,18 @@ export function createRetryOrchestrator({
       });
 
       const startedAt = now().toISOString();
+      const timer = startWorkflowDurationTimer(durationClock);
       try {
         const retried = await runStage(stage, copyTask(task), options.signal);
         throwIfSignalCancelled(options.signal);
         const completedAt = now().toISOString();
+        const durationMs = timer.finish();
         const success = successAttemptEvidence({
           stage,
           attempt: attemptNumber,
           startedAt,
           completedAt,
+          durationMs,
           previousCategory: previousStageAttempts.at(-1)?.category,
         });
         const updated = await store.update({
@@ -194,12 +203,14 @@ export function createRetryOrchestrator({
         }
         const classification = classifyRetryFailure(error, stage);
         const completedAt = now().toISOString();
+        const durationMs = timer.finish();
         const exhausted = attemptNumber >= policy.maxAttempts;
         const failure = failureAttemptEvidence({
           classification,
           attempt: attemptNumber,
           startedAt,
           completedAt,
+          durationMs,
         });
         const latest =
           (await store.findByProjectAndId(task.projectId, task.id)) ?? task;
@@ -464,6 +475,7 @@ function failureAttemptEvidence(input: {
   attempt: number;
   startedAt: string;
   completedAt: string;
+  durationMs?: number;
 }): RetryAttemptEvidence {
   return {
     stage: input.classification.stage,
@@ -472,6 +484,7 @@ function failureAttemptEvidence(input: {
     category: input.classification.category,
     startedAt: input.startedAt,
     completedAt: input.completedAt,
+    ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
     retryable: input.classification.retryable,
     summary: safeText(input.classification.summary, 300),
   };
@@ -482,6 +495,7 @@ function successAttemptEvidence(input: {
   attempt: number;
   startedAt: string;
   completedAt: string;
+  durationMs?: number;
   previousCategory?: RetryFailureCategory;
 }): RetryAttemptEvidence {
   return {
@@ -491,6 +505,7 @@ function successAttemptEvidence(input: {
     category: input.previousCategory ?? "UNKNOWN_FAILURE",
     startedAt: input.startedAt,
     completedAt: input.completedAt,
+    ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
     retryable: true,
     summary: `${stageLabel(input.stage)} retry succeeded.`,
   };
@@ -508,6 +523,7 @@ function boundedRecovery(recovery: RetryRecoveryEvidence): RetryRecoveryEvidence
       category: attempt.category,
       startedAt: attempt.startedAt,
       completedAt: attempt.completedAt,
+      ...(attempt.durationMs === undefined ? {} : { durationMs: attempt.durationMs }),
       retryable: attempt.retryable,
       summary: safeText(attempt.summary, 300),
     })),
