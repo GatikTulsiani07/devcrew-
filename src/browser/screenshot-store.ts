@@ -1,11 +1,23 @@
 import { randomUUID } from "node:crypto";
-import { link, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  link,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 import type {
   LoadedScreenshotArtifact,
-  ScreenshotArtifactStore,
+  ManagedScreenshotArtifactStore,
+  ScreenshotArtifactMetadata,
   StoredScreenshotArtifact,
 } from "./browser-types.js";
 
@@ -31,6 +43,7 @@ export interface ScreenshotArtifactStoreDependencies {
   artifactRoot?: string;
   maxBytes?: number;
   generateArtifactId?: () => string;
+  now?: () => Date;
 }
 
 export function createScreenshotArtifactStore({
@@ -38,7 +51,8 @@ export function createScreenshotArtifactStore({
     DEFAULT_SCREENSHOT_ARTIFACT_ROOT,
   maxBytes = SCREENSHOT_MAX_BYTES,
   generateArtifactId = () => `shot_${randomUUID()}`,
-}: ScreenshotArtifactStoreDependencies = {}): ScreenshotArtifactStore {
+  now = () => new Date(),
+}: ScreenshotArtifactStoreDependencies = {}): ManagedScreenshotArtifactStore {
   return {
     async store(input): Promise<StoredScreenshotArtifact> {
       const root = resolveArtifactRoot(artifactRoot);
@@ -51,7 +65,9 @@ export function createScreenshotArtifactStore({
       const filename = `${artifactId}.png`;
       const directory = resolve(root, projectSegment, taskSegment);
       const absolutePath = resolve(directory, filename);
+      const metadataPath = metadataPathForArtifact(root, projectSegment, taskSegment, artifactId);
       assertWithinRoot(absolutePath, root);
+      assertWithinRoot(metadataPath, root);
 
       if (input.repositoryRoot !== undefined) {
         assertOutsideRepository(absolutePath, input.repositoryRoot);
@@ -69,8 +85,16 @@ export function createScreenshotArtifactStore({
         await writeFile(temporaryPath, input.pngBytes, { flag: "wx" });
         await link(temporaryPath, absolutePath);
         await rm(temporaryPath, { force: true });
+        await writeMetadata(metadataPath, {
+          artifactId,
+          projectId: input.projectId,
+          taskId: input.taskId,
+          createdAt: now().toISOString(),
+          byteCount: input.pngBytes.byteLength,
+        });
       } catch (error) {
         await rm(temporaryPath, { force: true }).catch(() => undefined);
+        await rm(metadataPath, { force: true }).catch(() => undefined);
         if (error instanceof ScreenshotArtifactStoreError) {
           throw error;
         }
@@ -112,7 +136,151 @@ export function createScreenshotArtifactStore({
         throw new ScreenshotArtifactStoreError("artifact read failed");
       }
     },
+
+    async list(): Promise<ScreenshotArtifactMetadata[]> {
+      const root = resolveArtifactRoot(artifactRoot);
+      const realRoot = await ensureRoot(root);
+      const artifacts: ScreenshotArtifactMetadata[] = [];
+
+      for (const projectId of await safeReadDir(realRoot)) {
+        if (!SAFE_SEGMENT_PATTERN.test(projectId) || projectId.includes("..")) {
+          continue;
+        }
+        const projectPath = resolve(realRoot, projectId);
+        if (!(await isDirectory(projectPath))) continue;
+
+        for (const taskId of await safeReadDir(projectPath)) {
+          if (!SAFE_SEGMENT_PATTERN.test(taskId) || taskId.includes("..")) {
+            continue;
+          }
+          const taskPath = resolve(projectPath, taskId);
+          if (!(await isDirectory(taskPath))) continue;
+
+          for (const entry of await safeReadDir(taskPath)) {
+            if (!entry.endsWith(".json")) continue;
+            const metadata = await readMetadata(resolve(taskPath, entry), realRoot);
+            if (
+              metadata !== undefined &&
+              metadata.projectId === projectId &&
+              metadata.taskId === taskId &&
+              entry === `${metadata.artifactId}.json`
+            ) {
+              artifacts.push(metadata);
+            }
+          }
+        }
+      }
+
+      return artifacts;
+    },
+
+    async delete(input): Promise<"DELETED" | "MISSING" | "FAILED"> {
+      const root = resolveArtifactRoot(artifactRoot);
+      const realRoot = await ensureRoot(root);
+      const projectSegment = safePathSegment(input.projectId, "project id");
+      const taskSegment = safePathSegment(input.taskId, "task id");
+      const artifactId = safeArtifactId(input.artifactId);
+      const artifactPath = resolve(realRoot, projectSegment, taskSegment, `${artifactId}.png`);
+      const metadataPath = metadataPathForArtifact(
+        realRoot,
+        projectSegment,
+        taskSegment,
+        artifactId,
+      );
+
+      assertWithinRoot(artifactPath, realRoot);
+      assertWithinRoot(metadataPath, realRoot);
+
+      let artifactMissing = false;
+      try {
+        const artifactStat = await lstat(artifactPath);
+        if (!artifactStat.isFile() || artifactStat.isSymbolicLink()) {
+          return "FAILED";
+        }
+        const realArtifact = await realpath(artifactPath);
+        assertWithinRoot(realArtifact, realRoot);
+        await unlink(artifactPath);
+      } catch (error) {
+        if (error instanceof ScreenshotArtifactStoreError) {
+          return "FAILED";
+        }
+        artifactMissing = true;
+      }
+
+      await rm(metadataPath, { force: true }).catch(() => undefined);
+      return artifactMissing ? "MISSING" : "DELETED";
+    },
   };
+}
+
+async function ensureRoot(root: string): Promise<string> {
+  await mkdir(root, { recursive: true });
+  return realpath(root);
+}
+
+async function writeMetadata(
+  metadataPath: string,
+  metadata: ScreenshotArtifactMetadata,
+): Promise<void> {
+  await writeFile(metadataPath, JSON.stringify(metadata), { flag: "wx" });
+}
+
+async function readMetadata(
+  metadataPath: string,
+  root: string,
+): Promise<ScreenshotArtifactMetadata | undefined> {
+  try {
+    const realMetadata = await realpath(metadataPath);
+    assertWithinRoot(realMetadata, root);
+    const parsed = JSON.parse(await readFile(realMetadata, "utf8")) as unknown;
+    if (!isMetadata(parsed)) return undefined;
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+async function safeReadDir(path: string): Promise<string[]> {
+  try {
+    return await readdir(path);
+  } catch {
+    return [];
+  }
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function metadataPathForArtifact(
+  root: string,
+  projectId: string,
+  taskId: string,
+  artifactId: string,
+): string {
+  return resolve(root, projectId, taskId, `${artifactId}.json`);
+}
+
+function isMetadata(value: unknown): value is ScreenshotArtifactMetadata {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as ScreenshotArtifactMetadata).artifactId === "string" &&
+    SAFE_ARTIFACT_ID_PATTERN.test((value as ScreenshotArtifactMetadata).artifactId) &&
+    typeof (value as ScreenshotArtifactMetadata).projectId === "string" &&
+    SAFE_SEGMENT_PATTERN.test((value as ScreenshotArtifactMetadata).projectId) &&
+    typeof (value as ScreenshotArtifactMetadata).taskId === "string" &&
+    SAFE_SEGMENT_PATTERN.test((value as ScreenshotArtifactMetadata).taskId) &&
+    typeof (value as ScreenshotArtifactMetadata).createdAt === "string" &&
+    !Number.isNaN(Date.parse((value as ScreenshotArtifactMetadata).createdAt)) &&
+    Number.isInteger((value as ScreenshotArtifactMetadata).byteCount) &&
+    (value as ScreenshotArtifactMetadata).byteCount > 0
+  );
 }
 
 function resolveArtifactRoot(value: string): string {

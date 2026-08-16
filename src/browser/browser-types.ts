@@ -82,6 +82,14 @@ export interface StoredScreenshotArtifact {
   byteCount: number;
 }
 
+export interface ScreenshotArtifactMetadata {
+  artifactId: string;
+  projectId: string;
+  taskId: string;
+  createdAt: string;
+  byteCount: number;
+}
+
 export interface LoadedScreenshotArtifact {
   artifactId: string;
   pngBytes: Uint8Array;
@@ -100,6 +108,15 @@ export interface ScreenshotArtifactStore {
     taskId: string;
     artifactId: string;
   }): Promise<LoadedScreenshotArtifact>;
+}
+
+export interface ManagedScreenshotArtifactStore extends ScreenshotArtifactStore {
+  list(): Promise<ScreenshotArtifactMetadata[]>;
+  delete(input: {
+    projectId: string;
+    taskId: string;
+    artifactId: string;
+  }): Promise<"DELETED" | "MISSING" | "FAILED">;
 }
 
 export interface DevServerChildProcess {
