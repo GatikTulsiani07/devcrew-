@@ -16,6 +16,12 @@ import { ApplicationError } from "../src/errors.js";
 import { createNoopActivityService } from "../src/activity/activity-service.js";
 import { TaskCancellationError } from "../src/tasks/task-cancellation.js";
 import type { TaskSnapshot, TaskStore } from "../src/tasks/types.js";
+import {
+  createWorkflowFailureEvidence,
+  MAX_WORKFLOW_FAILURE_SUMMARY_LENGTH,
+  safeWorkflowFailureSummary,
+  workflowFailureStageForRetryStage,
+} from "../src/tasks/workflow-failure.js";
 
 function retryableTask(): TaskSnapshot {
   return {
@@ -224,5 +230,156 @@ describe("retry failure classification", () => {
     assert.equal(stageRuns, 0);
     assert.deepEqual(events, []);
     assert.deepEqual(read().retryRecovery, initial.retryRecovery);
+    assert.equal(read().workflowFailure, undefined);
+  });
+
+  it("records workflow failure evidence when retryable failure is recorded", async () => {
+    const initial = retryableTask();
+    const { store, read } = memoryStore(initial);
+
+    await createRetryOrchestrator({
+      store,
+      now: () => new Date("2026-08-03T03:00:00.000Z"),
+      activityService: createNoopActivityService(),
+      runStage: async () => initial,
+    }).recordFailure(
+      initial,
+      "BROWSER",
+      new ControlledDevServerError("server startup timed out"),
+    );
+
+    assert.deepEqual(read().workflowFailure, {
+      stage: "BROWSER_VERIFICATION",
+      category: "LOCALHOST_STARTUP_TIMEOUT",
+      summary:
+        "Browser failed with retryable category LOCALHOST_STARTUP_TIMEOUT.",
+      failedAt: "2026-08-03T03:00:00.000Z",
+    });
+  });
+
+  it("clears workflow failure after successful retry while preserving retry history", async () => {
+    const initial: TaskSnapshot = {
+      ...retryableTask(),
+      workflowFailure: {
+        stage: "VISUAL_REVIEW_PROVIDER",
+        category: "PROVIDER_TIMEOUT",
+        summary: "Visual Review failed with retryable category PROVIDER_TIMEOUT.",
+        failedAt: "2026-08-03T02:00:00.000Z",
+      },
+    };
+    const { store, read } = memoryStore(initial);
+
+    await createRetryOrchestrator({
+      store,
+      now: () => new Date("2026-08-03T03:00:00.000Z"),
+      activityService: createNoopActivityService(),
+      runStage: async () => ({
+        ...initial,
+        status: "VALIDATION_COMPLETED",
+      }),
+    }).retry(initial);
+
+    assert.equal(read().workflowFailure, undefined);
+    assert.equal(read().retryRecovery?.attempts.length, 2);
+    assert.equal(read().retryRecovery?.attempts[1].status, "SUCCEEDED");
+  });
+
+  it("keeps workflow failure after failed retry exhaustion", async () => {
+    const initial: TaskSnapshot = {
+      ...retryableTask(),
+      workflowFailure: {
+        stage: "REVIEWER",
+        category: "PROVIDER_NETWORK",
+        summary: "Reviewer failed with retryable category PROVIDER_NETWORK.",
+        failedAt: "2026-08-03T02:00:00.000Z",
+      },
+      retryRecovery: {
+        failedStage: "REVIEWER",
+        retryAvailable: true,
+        exhausted: false,
+        attempts: [
+          {
+            stage: "REVIEWER",
+            attempt: 1,
+            status: "FAILED",
+            category: "PROVIDER_NETWORK",
+            retryable: true,
+            startedAt: "2026-08-03T02:00:00.000Z",
+            completedAt: "2026-08-03T02:00:00.000Z",
+            summary: "Reviewer failed with retryable category PROVIDER_NETWORK.",
+          },
+        ],
+      },
+    };
+    const { store, read } = memoryStore(initial);
+
+    await assert.rejects(
+      createRetryOrchestrator({
+        store,
+        now: () => new Date("2026-08-03T03:00:00.000Z"),
+        activityService: createNoopActivityService(),
+        runStage: async () => {
+          throw classifyProviderFailure("REVIEWER", new Error("network socket closed"));
+        },
+      }).retry(initial),
+      { name: "ApplicationError" },
+    );
+
+    assert.equal(read().workflowFailure?.stage, "REVIEWER");
+    assert.equal(read().workflowFailure?.category, "PROVIDER_NETWORK");
+    assert.equal(read().retryRecovery?.exhausted, true);
+    assert.equal(read().retryRecovery?.attempts.length, 2);
+  });
+});
+
+describe("workflow failure evidence helpers", () => {
+  it("maps retry stages to controlled workflow failure stages", () => {
+    assert.equal(workflowFailureStageForRetryStage("DEVELOPER"), "DEVELOPER");
+    assert.equal(workflowFailureStageForRetryStage("DEVOPS"), "DEVOPS");
+    assert.equal(workflowFailureStageForRetryStage("BROWSER"), "BROWSER_VERIFICATION");
+    assert.equal(workflowFailureStageForRetryStage("SCREENSHOT"), "SCREENSHOT_CAPTURE");
+    assert.equal(workflowFailureStageForRetryStage("VISUAL_REVIEW"), "VISUAL_REVIEW_PROVIDER");
+    assert.equal(workflowFailureStageForRetryStage("CHECKPOINT"), "GIT_CHECKPOINT");
+    assert.equal(workflowFailureStageForRetryStage("REMOTE_PUSH"), "GIT_PUSH");
+    assert.equal(workflowFailureStageForRetryStage("REVIEWER"), "REVIEWER");
+    assert.equal(workflowFailureStageForRetryStage("PULL_REQUEST"), "GITHUB_PULL_REQUEST");
+  });
+
+  it("uses controlled categories and bounded safe summaries", () => {
+    const evidence = createWorkflowFailureEvidence(
+      {
+        stage: "DEVELOPER",
+        category: "MODEL_OUTPUT_SCHEMA_INVALID",
+        retryable: false,
+        summary: [
+          "Developer failed at /Users/suniltulsiani/Desktop/devcrew-backend/file.ts",
+          "C:\\secret\\repo\\file.ts",
+          "OPENAI_API_KEY sk-secret ghp_secret",
+          "Authorization: Bearer token",
+          "stdout=private output",
+          "stderr=private error",
+          "stack line 1\nstack line 2",
+          "x".repeat(500),
+        ].join(" "),
+      },
+      "2026-08-03T03:00:00.000Z",
+    );
+
+    assert.equal(evidence.stage, "DEVELOPER");
+    assert.equal(evidence.category, "MODEL_OUTPUT_SCHEMA_INVALID");
+    assert.equal(evidence.summary.length <= MAX_WORKFLOW_FAILURE_SUMMARY_LENGTH, true);
+    assert.equal(evidence.summary.includes("/Users/"), false);
+    assert.equal(evidence.summary.includes("C:\\secret"), false);
+    assert.equal(evidence.summary.includes("OPENAI_API_KEY"), false);
+    assert.equal(evidence.summary.includes("sk-secret"), false);
+    assert.equal(evidence.summary.includes("ghp_secret"), false);
+    assert.equal(evidence.summary.includes("Bearer token"), false);
+    assert.equal(evidence.summary.includes("private output"), false);
+    assert.equal(evidence.summary.includes("private error"), false);
+    assert.equal(evidence.summary.includes("\n"), false);
+  });
+
+  it("falls back to a fixed summary for empty unsafe text", () => {
+    assert.equal(safeWorkflowFailureSummary("\n\t"), "Workflow stage failed.");
   });
 });

@@ -471,15 +471,70 @@ describe("pull request task route", () => {
       { method: "POST" },
     );
     const body = await response.text();
+    const task = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
     const activity = await app.request("/api/v1/projects/proj_000001/activity");
 
     assert.equal(response.status, 500);
     assert.equal(body.includes("SENSITIVE_GITHUB_TOKEN_FAILURE"), false);
     assert.equal(JSON.parse(body).error.code, "INTERNAL_ERROR");
+    const taskBody = await task.json();
+    assert.equal(taskBody.task.workflowFailure.stage, "GITHUB_PULL_REQUEST");
+    assert.equal(taskBody.task.workflowFailure.category, "UNKNOWN_FAILURE");
     assert.equal(
       ((await activity.json()).events as Array<{ type: string }>).some(
         (event) => event.type === "PULL_REQUEST_CREATED",
       ),
+      false,
+    );
+  });
+
+  it("records workflowFailure when PR refresh fails", async () => {
+    const app = createTestApp({
+      async createPullRequest() {
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: branch,
+            baseBranch: "main",
+            commitSha: checkpointSha,
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+      async refreshPullRequest() {
+        throw new Error(
+          "SENSITIVE_REFRESH_FAILURE /Users/suniltulsiani/Desktop/devcrew-backend",
+        );
+      },
+    });
+    await reachReviewCompleted(app);
+    assert.equal(
+      (
+        await app.request(
+          "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+          { method: "POST" },
+        )
+      ).status,
+      200,
+    );
+
+    const response = await refreshPullRequest(app);
+    const body = await response.text();
+    const task = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+
+    assert.equal(response.status, 500);
+    assert.equal(body.includes("SENSITIVE_REFRESH_FAILURE"), false);
+    assert.equal(task.task.workflowFailure.stage, "GITHUB_PULL_REQUEST_REFRESH");
+    assert.equal(task.task.workflowFailure.category, "UNKNOWN_FAILURE");
+    assert.equal(
+      task.task.workflowFailure.summary.includes("/Users/suniltulsiani"),
       false,
     );
   });
