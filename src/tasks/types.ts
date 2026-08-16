@@ -63,6 +63,7 @@ export type RetryFailureCategory =
   | "REVIEWER_REJECTED_VERDICT"
   | "MODEL_OUTPUT_SCHEMA_INVALID"
   | "UNSUPPORTED_CONFIGURATION"
+  | "TASK_EXECUTION_TIMEOUT"
   | "UNKNOWN_FAILURE";
 export type WorkflowFailureStage =
   | "DEVELOPER"

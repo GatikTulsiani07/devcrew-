@@ -12,6 +12,7 @@ import {
   isTaskCancellationError,
   throwIfSignalCancelled,
 } from "../tasks/task-cancellation.js";
+import { TaskExecutionTimeoutError } from "../tasks/task-execution-budget.js";
 import type { CancellationStage } from "../tasks/types.js";
 import type {
   RetryAttemptEvidence,
@@ -49,7 +50,11 @@ export interface RetryOrchestratorDependencies {
   now?: () => Date;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   activityService: ActivityService;
-  runStage(stage: RetryStage, task: TaskSnapshot): Promise<TaskSnapshot>;
+  runStage(
+    stage: RetryStage,
+    task: TaskSnapshot,
+    signal?: AbortSignal,
+  ): Promise<TaskSnapshot>;
 }
 
 export interface RetryOrchestrator {
@@ -153,7 +158,7 @@ export function createRetryOrchestrator({
 
       const startedAt = now().toISOString();
       try {
-        const retried = await runStage(stage, copyTask(task));
+        const retried = await runStage(stage, copyTask(task), options.signal);
         throwIfSignalCancelled(options.signal);
         const completedAt = now().toISOString();
         const success = successAttemptEvidence({
@@ -250,6 +255,10 @@ export function classifyRetryFailure(
 ): RetryClassification {
   if (error instanceof RetryStageFailureError) {
     return error.classification;
+  }
+
+  if (error instanceof TaskExecutionTimeoutError) {
+    return classification(error.stage, "TASK_EXECUTION_TIMEOUT", false);
   }
 
   if (error instanceof ControlledDevServerError) {

@@ -71,6 +71,9 @@ export function createTaskCancellationRegistry(): TaskCancellationRegistry {
 
 export function throwIfSignalCancelled(signal?: AbortSignal): void {
   if (signal?.aborted === true) {
+    if (signal.reason instanceof ApplicationError) {
+      throw signal.reason;
+    }
     throw new TaskCancellationError();
   }
 }
