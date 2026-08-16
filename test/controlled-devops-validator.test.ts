@@ -481,6 +481,8 @@ describe("controlled DevOps validator", () => {
 
   it("captures screenshot evidence after passed browser verification and stops the owned server", async () => {
     const events: string[] = [];
+    const ticks = [0, 4, 10, 17, 20, 29];
+    let tickIndex = 0;
     const browserRepository: PreparedRepository = {
       ...repository,
       browserVerificationProfileId: "next_localhost",
@@ -511,6 +513,7 @@ describe("controlled DevOps validator", () => {
             status: "PASSED",
             url: input.url,
             verifiedAt: "2026-08-03T08:00:00.000Z",
+            durationMs: 999_999,
           };
         },
       },
@@ -528,6 +531,7 @@ describe("controlled DevOps validator", () => {
             url: input.browserVerification.url,
             viewport: { width: 1440, height: 900 },
             capturedAt: "2026-08-03T09:00:00.000Z",
+            durationMs: 999_999,
           };
         },
       },
@@ -542,11 +546,13 @@ describe("controlled DevOps validator", () => {
             findings: [],
             screenshotId: input.browserScreenshot!.id,
             reviewedAt: "2026-08-03T09:30:00.000Z",
+            durationMs: 999_999,
           };
         },
       },
       generateValidationId: () => "val_000001",
       now: () => new Date("2026-08-03T10:00:00.000Z"),
+      durationClock: () => ticks[Math.min(tickIndex++, ticks.length - 1)],
     }).validate(task);
 
     assert.deepEqual(events, [
@@ -560,6 +566,7 @@ describe("controlled DevOps validator", () => {
       status: "PASSED",
       url: "http://127.0.0.1:43117/",
       verifiedAt: "2026-08-03T08:00:00.000Z",
+      durationMs: 4,
     });
     assert.deepEqual(validation.browserScreenshot, {
       status: "CAPTURED",
@@ -567,6 +574,7 @@ describe("controlled DevOps validator", () => {
       url: "http://127.0.0.1:43117/",
       viewport: { width: 1440, height: 900 },
       capturedAt: "2026-08-03T09:00:00.000Z",
+      durationMs: 7,
     });
     assert.deepEqual(validation.visualReview, {
       status: "PASSED",
@@ -574,6 +582,7 @@ describe("controlled DevOps validator", () => {
       findings: [],
       screenshotId: "shot_123e4567-e89b-42d3-a456-426614174000",
       reviewedAt: "2026-08-03T09:30:00.000Z",
+      durationMs: 9,
     });
   });
 

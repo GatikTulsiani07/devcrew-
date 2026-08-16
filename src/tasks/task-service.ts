@@ -31,6 +31,10 @@ import {
   TaskExecutionTimeoutError,
   type TaskExecutionBudget,
 } from "./task-execution-budget.js";
+import {
+  startWorkflowDurationTimer,
+  type MonotonicClock,
+} from "./workflow-duration.js";
 import { createWorkflowFailureEvidence } from "./workflow-failure.js";
 import type {
   CancellationStage,
@@ -64,6 +68,7 @@ export interface TaskServiceDependencies {
   cancellationRegistry?: TaskCancellationRegistry;
   executionLock?: TaskExecutionLock;
   createExecutionBudget?: () => TaskExecutionBudget;
+  durationClock?: MonotonicClock;
 }
 
 export interface TaskService {
@@ -100,12 +105,14 @@ export function createTaskService({
   cancellationRegistry = createTaskCancellationRegistry(),
   executionLock = createTaskExecutionLock(),
   createExecutionBudget = () => createTaskExecutionBudget(),
+  durationClock,
 }: TaskServiceDependencies): TaskService {
   const retryOrchestrator = createRetryOrchestrator({
     store,
     now,
     activityService,
     runStage: retryStage,
+    durationClock,
   });
 
   return {
@@ -605,14 +612,18 @@ export function createTaskService({
     budget?.throwIfExpired("DEVELOPER");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
-    const execution = await developerExecutor.execute({
+    const timer = startWorkflowDurationTimer(durationClock);
+    const execution = withDuration(
+      await developerExecutor.execute({
       project,
       task: copyTask(task),
       signal:
         signal ??
         budget?.composeSignal(active?.signal, "DEVELOPER") ??
         active?.signal,
-    });
+      }),
+      timer.finish(),
+    );
     budget?.throwIfExpired("DEVELOPER");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -648,7 +659,9 @@ export function createTaskService({
     budget?.throwIfExpired("DEVOPS");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
-    const validation = await devOpsValidator.validate(copyTask(task), {
+    const timer = startWorkflowDurationTimer(durationClock);
+    const validation = withDuration(
+      await devOpsValidator.validate(copyTask(task), {
       signal:
         signal ??
         budget?.composeSignal(active?.signal, "DEVOPS") ??
@@ -659,7 +672,9 @@ export function createTaskService({
           budget?.setStage(stage);
         }
       },
-    });
+      }),
+      timer.finish(),
+    );
     budget?.throwIfExpired(currentWorkflowStage(active, "DEVOPS"));
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -682,6 +697,7 @@ export function createTaskService({
       store,
       now,
       activityService,
+      durationClock,
       signal:
         signal ??
         budget?.composeSignal(active?.signal, currentWorkflowStage(active, "DEVOPS")) ??
@@ -711,12 +727,16 @@ export function createTaskService({
     budget?.throwIfExpired("REVIEWER");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
-    const review = await taskReviewer.review(copyTask(task), project, {
+    const timer = startWorkflowDurationTimer(durationClock);
+    const review = withDuration(
+      await taskReviewer.review(copyTask(task), project, {
       signal:
         signal ??
         budget?.composeSignal(active?.signal, "REVIEWER") ??
         active?.signal,
-    });
+      }),
+      timer.finish(),
+    );
     budget?.throwIfExpired("REVIEWER");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -752,6 +772,7 @@ export function createTaskService({
     budget?.throwIfExpired("PULL_REQUEST");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
+    const timer = startWorkflowDurationTimer(durationClock);
     const result = await pullRequestCreator.createPullRequest({
       project,
       task: copyTask(task),
@@ -768,6 +789,7 @@ export function createTaskService({
       return copyTask(task);
     }
 
+    const durationMs = timer.finish();
     const timestamp = now().toISOString();
     const updatedTask: TaskSnapshot = {
       ...copyTask(task),
@@ -779,6 +801,7 @@ export function createTaskService({
         baseBranch: result.evidence.baseBranch,
         commitSha: result.evidence.commitSha,
         createdAt: result.evidence.createdAt,
+        durationMs,
       },
       workflowFailure: undefined,
       updatedAt: timestamp,
@@ -1008,6 +1031,13 @@ function isDevOpsPublisher(
   return "publishValidatedTask" in devOpsValidator;
 }
 
+function withDuration<T extends object>(evidence: T, durationMs: number): T & { durationMs: number } {
+  return {
+    ...evidence,
+    durationMs,
+  };
+}
+
 function currentWorkflowStage(
   active: ActiveTaskExecution | undefined,
   fallback: RetryStage,
@@ -1078,6 +1108,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
             attempt: task.execution.attempt,
             startedAt: task.execution.startedAt,
             completedAt: task.execution.completedAt,
+            ...(task.execution.durationMs === undefined
+              ? {}
+              : { durationMs: task.execution.durationMs }),
             result: {
               summary: task.execution.result.summary,
               changedFiles: [...task.execution.result.changedFiles],
@@ -1102,6 +1135,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
             attempt: task.validation.attempt,
             startedAt: task.validation.startedAt,
             completedAt: task.validation.completedAt,
+            ...(task.validation.durationMs === undefined
+              ? {}
+              : { durationMs: task.validation.durationMs }),
             checks: task.validation.checks.map((check) => ({
               name: check.name,
               status: check.status,
@@ -1142,6 +1178,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                             task.validation.browserVerification.pageTitle,
                         }),
                     verifiedAt: task.validation.browserVerification.verifiedAt,
+                    ...(task.validation.browserVerification.durationMs === undefined
+                      ? {}
+                      : {
+                          durationMs:
+                            task.validation.browserVerification.durationMs,
+                        }),
                   },
                 }),
             ...(task.validation.browserScreenshot === undefined
@@ -1156,6 +1198,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                       height: task.validation.browserScreenshot.viewport.height,
                     },
                     capturedAt: task.validation.browserScreenshot.capturedAt,
+                    ...(task.validation.browserScreenshot.durationMs === undefined
+                      ? {}
+                      : {
+                          durationMs:
+                            task.validation.browserScreenshot.durationMs,
+                        }),
                   },
                 }),
             ...(task.validation.visualReview === undefined
@@ -1169,6 +1217,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                     ),
                     screenshotId: task.validation.visualReview.screenshotId,
                     reviewedAt: task.validation.visualReview.reviewedAt,
+                    ...(task.validation.visualReview.durationMs === undefined
+                      ? {}
+                      : { durationMs: task.validation.visualReview.durationMs }),
                   },
             }),
           },
@@ -1187,6 +1238,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               ...(attempt.completedAt === undefined
                 ? {}
                 : { completedAt: attempt.completedAt }),
+              ...(attempt.durationMs === undefined
+                ? {}
+                : { durationMs: attempt.durationMs }),
               sourceScreenshotId: attempt.sourceScreenshotId,
               sourceVisualReview: {
                 status: attempt.sourceVisualReview.status,
@@ -1241,6 +1295,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               category: attempt.category,
               startedAt: attempt.startedAt,
               completedAt: attempt.completedAt,
+              ...(attempt.durationMs === undefined
+                ? {}
+                : { durationMs: attempt.durationMs }),
               retryable: attempt.retryable,
               summary: attempt.summary,
             })),
@@ -1284,6 +1341,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
             attempt: task.review.attempt,
             startedAt: task.review.startedAt,
             completedAt: task.review.completedAt,
+            ...(task.review.durationMs === undefined
+              ? {}
+              : { durationMs: task.review.durationMs }),
             summary: task.review.summary,
             findings: task.review.findings.map((finding) => ({
               severity: finding.severity,
@@ -1303,6 +1363,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
             baseBranch: task.pullRequest.baseBranch,
             commitSha: task.pullRequest.commitSha,
             createdAt: task.pullRequest.createdAt,
+            ...(task.pullRequest.durationMs === undefined
+              ? {}
+              : { durationMs: task.pullRequest.durationMs }),
           },
         }),
     createdAt: task.createdAt,

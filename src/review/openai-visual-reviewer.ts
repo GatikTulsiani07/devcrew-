@@ -86,6 +86,7 @@ export function createOpenAIVisualReviewClient({
                 visualReviewEvidenceSchema.omit({
                   screenshotId: true,
                   reviewedAt: true,
+                  durationMs: true,
                 }),
                 "visual_review",
               ),

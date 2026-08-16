@@ -242,6 +242,7 @@ describe("pull request task route", () => {
       baseBranch: "main",
       commitSha: checkpointSha,
       createdAt: "2026-08-03T07:00:00.000Z",
+      durationMs: 0,
     });
     assert.equal(retried.status, 200);
     assert.equal(callCount, 2);
