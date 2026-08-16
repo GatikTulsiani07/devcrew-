@@ -18,6 +18,11 @@ import { createDeterministicDevOpsValidator } from "../src/tasks/deterministic-d
 import { createDeterministicPlanner } from "../src/tasks/deterministic-planner.js";
 import { createDeterministicReviewer } from "../src/tasks/deterministic-reviewer.js";
 import { InMemoryTaskStore } from "../src/tasks/in-memory-task-store.js";
+import {
+  createTaskExecutionBudget,
+  DEFAULT_TASK_EXECUTION_TIMEOUT_MS,
+  type TaskExecutionBudget,
+} from "../src/tasks/task-execution-budget.js";
 import { createTaskService } from "../src/tasks/task-service.js";
 import type {
   DeveloperExecutor,
@@ -57,6 +62,7 @@ interface TestAppOptions {
   pullRequestCreator?: TaskPullRequestCreator;
   activityService?: ActivityService;
   dates?: readonly string[];
+  createExecutionBudget?: () => TaskExecutionBudget;
 }
 
 function createDeterministicProjectService(): ProjectService {
@@ -86,6 +92,7 @@ function createTestApp({
   pullRequestCreator,
   activityService,
   dates = ["2026-08-03T01:00:00.000Z"],
+  createExecutionBudget,
 }: TestAppOptions = {}) {
   const projectService = createDeterministicProjectService();
   let taskCount = 0;
@@ -141,6 +148,7 @@ function createTestApp({
       },
       now: nextDate,
       ...(activityService === undefined ? {} : { activityService }),
+      ...(createExecutionBudget === undefined ? {} : { createExecutionBudget }),
     }),
     ...(activityService === undefined ? {} : { activityService }),
   });
@@ -2683,6 +2691,210 @@ describe("task manager planning API", () => {
 
     finish.resolve();
     assert.equal((await first).status, 200);
+  });
+
+  it("records workflowFailure and prevents late Developer evidence after total budget expiration", async () => {
+    let clock = 0;
+    const developerExecutor: DeveloperExecutor = {
+      async execute(): Promise<TaskExecution> {
+        clock = 20;
+        return developerExecution("exec_late");
+      },
+    };
+    const app = createTestApp({
+      developerExecutor,
+      createExecutionBudget: () =>
+        createTaskExecutionBudget({
+          now: () => clock,
+          timeoutMs: 10,
+        }),
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const rejectedBody = await executeTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ timeoutMs: DEFAULT_TASK_EXECUTION_TIMEOUT_MS * 10 }),
+    });
+
+    assert.equal(rejectedBody.status, 400);
+
+    const timedOut = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001/execute?timeoutMs=999999",
+      { method: "POST" },
+    );
+    assert.equal(timedOut.status, 500);
+    const read = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+    assert.equal(read.task.execution, undefined);
+    assert.equal(read.task.cancellation, undefined);
+    assert.equal(read.task.workflowFailure.stage, "DEVELOPER");
+    assert.equal(read.task.workflowFailure.category, "TASK_EXECUTION_TIMEOUT");
+    assert.equal(read.task.workflowFailure.summary.length <= 300, true);
+    assert.equal(read.task.workflowFailure.summary.includes("timeoutMs"), false);
+  });
+
+  it("keeps manual cancellation distinct from timeout with the composed signal", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const developerExecutor: DeveloperExecutor = {
+      async execute(input): Promise<TaskExecution> {
+        capturedSignal = input.signal;
+        await new Promise<void>((_resolve, reject) => {
+          input.signal?.addEventListener(
+            "abort",
+            () => reject(input.signal?.reason),
+            { once: true },
+          );
+        });
+        return developerExecution("exec_never");
+      },
+    };
+    const app = createTestApp({
+      developerExecutor,
+      createExecutionBudget: () =>
+        createTaskExecutionBudget({
+          now: () => 0,
+          timeoutMs: DEFAULT_TASK_EXECUTION_TIMEOUT_MS,
+        }),
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const running = executeTask(app);
+    while (capturedSignal === undefined) {
+      await Promise.resolve();
+    }
+    const cancelled = await cancelTask(app);
+    const completed = await running;
+    const task = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+
+    assert.equal(cancelled.status, 200);
+    assert.equal(completed.status, 409);
+    assert.equal(task.task.cancellation.status, "CANCELLED");
+    assert.equal(task.task.workflowFailure, undefined);
+  });
+
+  it("preserves completed validation evidence and prevents Reviewer start after expiration", async () => {
+    let budgetCount = 0;
+    let reviewerCalls = 0;
+    const taskReviewer: TaskReviewer = {
+      async review() {
+        reviewerCalls += 1;
+        throw new Error("reviewer should not start");
+      },
+    };
+    const app = createTestApp({
+      taskReviewer,
+      createExecutionBudget: () => {
+        budgetCount += 1;
+        return createTaskExecutionBudget({
+          now: () => 0,
+          timeoutMs: budgetCount === 3 ? 0 : DEFAULT_TASK_EXECUTION_TIMEOUT_MS,
+        });
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const review = await reviewTask(app);
+    const task = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+
+    assert.equal(review.status, 500);
+    assert.equal(reviewerCalls, 0);
+    assert.equal(task.task.validation.status, "PASSED");
+    assert.equal(task.task.review, undefined);
+    assert.equal(task.task.workflowFailure.stage, "REVIEWER");
+    assert.equal(task.task.workflowFailure.category, "TASK_EXECUTION_TIMEOUT");
+  });
+
+  it("prevents Pull Request creation after expiration", async () => {
+    let budgetCount = 0;
+    let pullRequestCalls = 0;
+    const app = createTestApp({
+      pullRequestCreator: {
+        async createPullRequest() {
+          pullRequestCalls += 1;
+          return {
+            created: true,
+            evidence: {
+              number: 42,
+              url: "https://github.com/example/devcrew/pull/42",
+              state: "OPEN",
+              headBranch: "devcrew/task-task_000001",
+              baseBranch: "main",
+              commitSha: "0123456789abcdef0123456789abcdef01234567",
+              createdAt: "2026-08-03T07:00:00.000Z",
+            },
+          };
+        },
+      },
+      createExecutionBudget: () => {
+        budgetCount += 1;
+        return createTaskExecutionBudget({
+          now: () => 0,
+          timeoutMs: budgetCount === 4 ? 0 : DEFAULT_TASK_EXECUTION_TIMEOUT_MS,
+        });
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+
+    const pr = await createPullRequest(app);
+    const task = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+
+    assert.equal(pr.status, 500);
+    assert.equal(pullRequestCalls, 0);
+    assert.equal(task.task.pullRequest, undefined);
+    assert.equal(task.task.workflowFailure.stage, "GITHUB_PULL_REQUEST");
+    assert.equal(task.task.workflowFailure.category, "TASK_EXECUTION_TIMEOUT");
+  });
+
+  it("does not reset total timeout during retry backoff", async () => {
+    const developerExecutor: DeveloperExecutor = {
+      async execute(): Promise<TaskExecution> {
+        throw createRetryStageFailure("DEVELOPER", "PROVIDER_TIMEOUT", true);
+      },
+    };
+    let budgetCount = 0;
+    const app = createTestApp({
+      developerExecutor,
+      createExecutionBudget: () => {
+        budgetCount += 1;
+        return createTaskExecutionBudget({
+          now: () => 0,
+          timeoutMs: budgetCount === 2 ? 1 : DEFAULT_TASK_EXECUTION_TIMEOUT_MS,
+        });
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 500);
+
+    const retried = await retryTask(app);
+    const task = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+
+    assert.equal(retried.status, 500);
+    assert.equal(task.task.retryRecovery.attempts.length, 2);
+    assert.equal(task.task.workflowFailure.category, "TASK_EXECUTION_TIMEOUT");
   });
 
   it("records a retryable Developer failure and retries through the controlled endpoint", async () => {

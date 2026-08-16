@@ -18,6 +18,7 @@ import {
 import {
   createTaskCancellationRegistry,
   isTaskCancellationError,
+  throwIfSignalCancelled,
   type ActiveTaskExecution,
   type TaskCancellationRegistry,
 } from "./task-cancellation.js";
@@ -25,6 +26,11 @@ import {
   createTaskExecutionLock,
   type TaskExecutionLock,
 } from "./task-execution-lock.js";
+import {
+  createTaskExecutionBudget,
+  TaskExecutionTimeoutError,
+  type TaskExecutionBudget,
+} from "./task-execution-budget.js";
 import { createWorkflowFailureEvidence } from "./workflow-failure.js";
 import type {
   CancellationStage,
@@ -57,6 +63,7 @@ export interface TaskServiceDependencies {
   activityService?: ActivityService;
   cancellationRegistry?: TaskCancellationRegistry;
   executionLock?: TaskExecutionLock;
+  createExecutionBudget?: () => TaskExecutionBudget;
 }
 
 export interface TaskService {
@@ -92,6 +99,7 @@ export function createTaskService({
   activityService = createNoopActivityService(),
   cancellationRegistry = createTaskCancellationRegistry(),
   executionLock = createTaskExecutionLock(),
+  createExecutionBudget = () => createTaskExecutionBudget(),
 }: TaskServiceDependencies): TaskService {
   const retryOrchestrator = createRetryOrchestrator({
     store,
@@ -218,17 +226,23 @@ export function createTaskService({
           taskId,
           stage: "DEVELOPER",
         });
+        const budget = createExecutionBudget();
         try {
-          return await runDeveloperStage(project, task, active);
+          return await runDeveloperStage(project, task, active, budget);
         } catch (error) {
           if (isTaskCancellationError(error)) {
             await completeCancellation(await latestTaskOr(task), active.stage);
             throw error;
           }
           const latest = await latestTaskOr(task);
-          await retryOrchestrator.recordFailure(latest, "DEVELOPER", error);
+          await retryOrchestrator.recordFailure(
+            latest,
+            currentWorkflowStage(active, "DEVELOPER"),
+            error,
+          );
           throw sanitizeStageError("DEVELOPER");
         } finally {
+          budget.dispose();
           active.unregister();
         }
       });
@@ -261,17 +275,23 @@ export function createTaskService({
           taskId,
           stage: "DEVOPS",
         });
+        const budget = createExecutionBudget();
         try {
-          return await runValidationWorkflow(project, task, active);
+          return await runValidationWorkflow(project, task, active, budget);
         } catch (error) {
           if (isTaskCancellationError(error)) {
             await completeCancellation(await latestTaskOr(task), active.stage);
             throw error;
           }
           const latest = await latestTaskOr(task);
-          await retryOrchestrator.recordFailure(latest, "DEVOPS", error);
+          await retryOrchestrator.recordFailure(
+            latest,
+            currentWorkflowStage(active, "DEVOPS"),
+            error,
+          );
           throw sanitizeStageError("DEVOPS");
         } finally {
+          budget.dispose();
           active.unregister();
         }
       });
@@ -312,17 +332,23 @@ export function createTaskService({
           taskId,
           stage: "REVIEWER",
         });
+        const budget = createExecutionBudget();
         try {
-          return await runReviewerStage(project, task, active);
+          return await runReviewerStage(project, task, active, budget);
         } catch (error) {
           if (isTaskCancellationError(error)) {
             await completeCancellation(await latestTaskOr(task), active.stage);
             throw error;
           }
           const latest = await latestTaskOr(task);
-          await retryOrchestrator.recordFailure(latest, "REVIEWER", error);
+          await retryOrchestrator.recordFailure(
+            latest,
+            currentWorkflowStage(active, "REVIEWER"),
+            error,
+          );
           throw sanitizeStageError("REVIEWER");
         } finally {
+          budget.dispose();
           active.unregister();
         }
       });
@@ -344,17 +370,32 @@ export function createTaskService({
           taskId,
           stage,
         });
+        const budget = createExecutionBudget();
         try {
           return await retryOrchestrator.retry(copyTask(task), {
-            signal: active.signal,
-            setStage: active.setStage,
+            signal: budget.composeSignal(
+              active.signal,
+              stage === "RETRY_WAIT" ? "DEVELOPER" : stage,
+            ),
+            setStage: (nextStage) => {
+              active.setStage(nextStage);
+              if (nextStage !== "RETRY_WAIT") {
+                budget.setStage(nextStage);
+              }
+            },
           });
         } catch (error) {
           if (isTaskCancellationError(error)) {
             await completeCancellation(await latestTaskOr(task), active.stage);
           }
+          if (error instanceof TaskExecutionTimeoutError) {
+            const latest = await latestTaskOr(task);
+            await retryOrchestrator.recordFailure(latest, error.stage, error);
+            throw sanitizeStageError(error.stage);
+          }
           throw error;
         } finally {
+          budget.dispose();
           active.unregister();
         }
       });
@@ -423,17 +464,23 @@ export function createTaskService({
           taskId,
           stage: "PULL_REQUEST",
         });
+        const budget = createExecutionBudget();
         try {
-          return await runPullRequestStage(project, task, active);
+          return await runPullRequestStage(project, task, active, budget);
         } catch (error) {
           if (isTaskCancellationError(error)) {
             await completeCancellation(await latestTaskOr(task), active.stage);
             throw error;
           }
           const latest = await latestTaskOr(task);
-          await retryOrchestrator.recordFailure(latest, "PULL_REQUEST", error);
+          await retryOrchestrator.recordFailure(
+            latest,
+            currentWorkflowStage(active, "PULL_REQUEST"),
+            error,
+          );
           throw sanitizeStageError("PULL_REQUEST");
         } finally {
+          budget.dispose();
           active.unregister();
         }
       });
@@ -460,9 +507,16 @@ export function createTaskService({
 
         const timestamp = now().toISOString();
         let pullRequest;
+        const budget = createExecutionBudget();
 
         try {
-          pullRequest = await refreshPullRequestEvidence(project, task);
+          budget.throwIfExpired("PULL_REQUEST");
+          pullRequest = await refreshPullRequestEvidence(
+            project,
+            task,
+            budget.composeSignal(undefined, "PULL_REQUEST"),
+          );
+          budget.throwIfExpired("PULL_REQUEST");
         } catch (error) {
           const latest = await latestTaskOr(task);
           const failedAt = now().toISOString();
@@ -477,6 +531,8 @@ export function createTaskService({
             updatedAt: failedAt,
           });
           throw sanitizeStageError("PULL_REQUEST");
+        } finally {
+          budget.dispose();
         }
 
         return copyTask(
@@ -514,6 +570,7 @@ export function createTaskService({
   async function retryStage(
     stage: RetryStage,
     task: TaskSnapshot,
+    signal?: AbortSignal,
   ): Promise<TaskSnapshot> {
     const project = await projectService.getProject(task.projectId);
     const active = cancellationRegistry.find(task.projectId, task.id);
@@ -521,19 +578,19 @@ export function createTaskService({
 
     switch (stage) {
       case "DEVELOPER":
-        return runDeveloperStage(project, task, active);
+        return runDeveloperStage(project, task, active, undefined, signal);
       case "DEVOPS":
       case "BROWSER":
       case "SCREENSHOT":
       case "VISUAL_REVIEW":
-        return runValidationWorkflow(project, task, active);
+        return runValidationWorkflow(project, task, active, undefined, signal);
       case "CHECKPOINT":
       case "REMOTE_PUSH":
-        return maybePublishValidatedTask(task, active);
+        return maybePublishValidatedTask(task, active, undefined, signal);
       case "REVIEWER":
-        return runReviewerStage(project, task, active);
+        return runReviewerStage(project, task, active, undefined, signal);
       case "PULL_REQUEST":
-        return runPullRequestStage(project, task, active);
+        return runPullRequestStage(project, task, active, undefined, signal);
     }
   }
 
@@ -541,14 +598,23 @@ export function createTaskService({
     project: Awaited<ReturnType<ProjectService["getProject"]>>,
     task: TaskSnapshot,
     active?: ActiveTaskExecution,
+    budget?: TaskExecutionBudget,
+    signal?: AbortSignal,
   ): Promise<TaskSnapshot> {
     active?.setStage("DEVELOPER");
+    budget?.throwIfExpired("DEVELOPER");
+    throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const execution = await developerExecutor.execute({
       project,
       task: copyTask(task),
-      signal: active?.signal,
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "DEVELOPER") ??
+        active?.signal,
     });
+    budget?.throwIfExpired("DEVELOPER");
+    throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const timestamp = now().toISOString();
     const updatedTask: TaskSnapshot = {
@@ -575,13 +641,27 @@ export function createTaskService({
     project: Awaited<ReturnType<ProjectService["getProject"]>>,
     task: TaskSnapshot,
     active?: ActiveTaskExecution,
+    budget?: TaskExecutionBudget,
+    signal?: AbortSignal,
   ): Promise<TaskSnapshot> {
     active?.setStage("DEVOPS");
+    budget?.throwIfExpired("DEVOPS");
+    throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const validation = await devOpsValidator.validate(copyTask(task), {
-      signal: active?.signal,
-      setStage: active?.setStage,
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "DEVOPS") ??
+        active?.signal,
+      setStage: (stage) => {
+        active?.setStage(stage);
+        if (stage !== "RETRY_WAIT") {
+          budget?.setStage(stage);
+        }
+      },
     });
+    budget?.throwIfExpired(currentWorkflowStage(active, "DEVOPS"));
+    throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const timestamp = now().toISOString();
     const updatedTask: TaskSnapshot = {
@@ -602,24 +682,43 @@ export function createTaskService({
       store,
       now,
       activityService,
-      signal: active?.signal,
-      setStage: active?.setStage,
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, currentWorkflowStage(active, "DEVOPS")) ??
+        active?.signal,
+      setStage: (stage) => {
+        active?.setStage(stage);
+        if (stage !== "RETRY_WAIT") {
+          budget?.setStage(stage);
+        }
+      },
     }).repairIfRequired(validatedTask);
 
+    budget?.throwIfExpired(currentWorkflowStage(active, "DEVOPS"));
+    throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
-    return maybePublishValidatedTask(repairedTask, active);
+    return maybePublishValidatedTask(repairedTask, active, budget);
   }
 
   async function runReviewerStage(
     project: Awaited<ReturnType<ProjectService["getProject"]>>,
     task: TaskSnapshot,
     active?: ActiveTaskExecution,
+    budget?: TaskExecutionBudget,
+    signal?: AbortSignal,
   ): Promise<TaskSnapshot> {
     active?.setStage("REVIEWER");
+    budget?.throwIfExpired("REVIEWER");
+    throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const review = await taskReviewer.review(copyTask(task), project, {
-      signal: active?.signal,
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "REVIEWER") ??
+        active?.signal,
     });
+    budget?.throwIfExpired("REVIEWER");
+    throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const timestamp = now().toISOString();
     const updatedTask: TaskSnapshot = {
@@ -646,14 +745,23 @@ export function createTaskService({
     project: Awaited<ReturnType<ProjectService["getProject"]>>,
     task: TaskSnapshot,
     active?: ActiveTaskExecution,
+    budget?: TaskExecutionBudget,
+    signal?: AbortSignal,
   ): Promise<TaskSnapshot> {
     active?.setStage("PULL_REQUEST");
+    budget?.throwIfExpired("PULL_REQUEST");
+    throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const result = await pullRequestCreator.createPullRequest({
       project,
       task: copyTask(task),
-      signal: active?.signal,
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "PULL_REQUEST") ??
+        active?.signal,
     });
+    budget?.throwIfExpired("PULL_REQUEST");
+    throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
 
     if (task.pullRequest !== undefined) {
@@ -694,6 +802,7 @@ export function createTaskService({
   async function refreshPullRequestEvidence(
     project: Awaited<ReturnType<ProjectService["getProject"]>>,
     task: TaskSnapshot,
+    signal?: AbortSignal,
   ) {
     if (pullRequestCreator.refreshPullRequest === undefined) {
       throw new ApplicationError(
@@ -706,12 +815,15 @@ export function createTaskService({
     return pullRequestCreator.refreshPullRequest({
       project,
       task: copyTask(task),
+      ...(signal === undefined ? {} : { signal }),
     });
   }
 
   async function maybePublishValidatedTask(
     task: TaskSnapshot,
     active?: ActiveTaskExecution,
+    budget?: TaskExecutionBudget,
+    signal?: AbortSignal,
   ): Promise<TaskSnapshot> {
     if (
       task.status !== "VALIDATION_COMPLETED" ||
@@ -728,11 +840,23 @@ export function createTaskService({
     }
 
     active?.setStage("CHECKPOINT");
+    budget?.throwIfExpired("CHECKPOINT");
+    throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const validation = await devOpsValidator.publishValidatedTask(copyTask(task), {
-      signal: active?.signal,
-      setStage: active?.setStage,
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "CHECKPOINT") ??
+        active?.signal,
+      setStage: (stage) => {
+        active?.setStage(stage);
+        if (stage !== "RETRY_WAIT") {
+          budget?.setStage(stage);
+        }
+      },
     });
+    budget?.throwIfExpired(currentWorkflowStage(active, "CHECKPOINT"));
+    throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const timestamp = now().toISOString();
     return copyTask(
@@ -882,6 +1006,17 @@ function isDevOpsPublisher(
   devOpsValidator: DevOpsValidator,
 ): devOpsValidator is DevOpsValidator & DevOpsPublisher {
   return "publishValidatedTask" in devOpsValidator;
+}
+
+function currentWorkflowStage(
+  active: ActiveTaskExecution | undefined,
+  fallback: RetryStage,
+): RetryStage {
+  if (active === undefined || active.stage === "RETRY_WAIT") {
+    return fallback;
+  }
+
+  return active.stage;
 }
 
 function unavailablePullRequestCreator(): TaskPullRequestCreator {
