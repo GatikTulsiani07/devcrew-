@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 
 import { createApp } from "../src/app.js";
 import type { DatabaseHealth } from "../src/db/health.js";
+import type { RuntimeReadinessDiagnostics } from "../src/diagnostics/runtime-readiness.js";
+import type { ActivityService } from "../src/activity/activity-service.js";
 import type { Logger, LogContext } from "../src/observability/logger.js";
 import type { ProjectService } from "../src/projects/project-service.js";
 
@@ -12,6 +14,25 @@ function fakeDatabase(checkConnection: () => Promise<void>): DatabaseHealth {
 
 function fixedRequestId(): string {
   return "req_test_000001";
+}
+
+function fakeReadiness(
+  capabilities: {
+    gitAvailable: boolean;
+    githubConfigured: boolean;
+    openaiConfigured: boolean;
+    browserAvailable: boolean;
+    artifactStorageAvailable: boolean;
+  },
+): RuntimeReadinessDiagnostics {
+  return {
+    async check() {
+      return {
+        status: Object.values(capabilities).every(Boolean) ? "READY" : "DEGRADED",
+        capabilities,
+      };
+    },
+  };
 }
 
 interface CapturedLog {
@@ -116,6 +137,161 @@ describe("health endpoints", () => {
 
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("X-Request-Id"), "req_test_000001");
+  });
+});
+
+describe("runtime readiness endpoint", () => {
+  it("returns READY when all workflow capabilities are available", async () => {
+    const app = createApp({
+      databaseHealth: fakeDatabase(async () => undefined),
+      generateRequestId: fixedRequestId,
+      runtimeReadinessDiagnostics: fakeReadiness({
+        gitAvailable: true,
+        githubConfigured: true,
+        openaiConfigured: true,
+        browserAvailable: true,
+        artifactStorageAvailable: true,
+      }),
+    });
+
+    const response = await app.request("/api/v1/readiness");
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      status: "READY",
+      capabilities: {
+        gitAvailable: true,
+        githubConfigured: true,
+        openaiConfigured: true,
+        browserAvailable: true,
+        artifactStorageAvailable: true,
+      },
+    });
+  });
+
+  it("returns DEGRADED with 200 when optional workflow capabilities are unavailable", async () => {
+    const app = createApp({
+      databaseHealth: fakeDatabase(async () => undefined),
+      runtimeReadinessDiagnostics: fakeReadiness({
+        gitAvailable: false,
+        githubConfigured: false,
+        openaiConfigured: false,
+        browserAvailable: false,
+        artifactStorageAvailable: false,
+      }),
+    });
+
+    const response = await app.request("/api/v1/readiness");
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      status: "DEGRADED",
+      capabilities: {
+        gitAvailable: false,
+        githubConfigured: false,
+        openaiConfigured: false,
+        browserAvailable: false,
+        artifactStorageAvailable: false,
+      },
+    });
+  });
+
+  it("returns mixed capability availability without exposing secrets, paths, or command output", async () => {
+    const secret = "sk-test-secret-value";
+    const githubToken = "github_pat_sensitive_token";
+    const localPath = "/Users/example/Applications/Browser";
+    const app = createApp({
+      databaseHealth: fakeDatabase(async () => undefined),
+      runtimeReadinessDiagnostics: fakeReadiness({
+        gitAvailable: true,
+        githubConfigured: false,
+        openaiConfigured: true,
+        browserAvailable: false,
+        artifactStorageAvailable: true,
+      }),
+    });
+
+    const response = await app.request("/api/v1/readiness");
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.includes(secret), false);
+    assert.equal(body.includes(githubToken), false);
+    assert.equal(body.includes(localPath), false);
+    assert.equal(body.includes("/Users/"), false);
+    assert.equal(body.includes("git version"), false);
+    assert.deepEqual(JSON.parse(body), {
+      status: "DEGRADED",
+      capabilities: {
+        gitAvailable: true,
+        githubConfigured: false,
+        openaiConfigured: true,
+        browserAvailable: false,
+        artifactStorageAvailable: true,
+      },
+    });
+  });
+
+  it("does not mutate projects, tasks, activity, or health behavior", async () => {
+    let projectCalls = 0;
+    let activityAppends = 0;
+    const projectService: ProjectService = {
+      async createProject() {
+        projectCalls += 1;
+        throw new Error("should not create a project");
+      },
+      async getProject() {
+        projectCalls += 1;
+        throw new Error("should not read a project");
+      },
+    };
+    const activityService: ActivityService = {
+      async append(input) {
+        activityAppends += 1;
+        return {
+          id: "evt_test",
+          sequence: 1,
+          projectId: input.projectId,
+          type: input.type,
+          actor: input.actor,
+          summary: input.summary,
+          createdAt: "2026-08-16T00:00:00.000Z",
+        };
+      },
+      async list() {
+        throw new Error("should not list activity");
+      },
+      subscribe() {
+        throw new Error("should not subscribe");
+      },
+      subscriberCount() {
+        throw new Error("should not count subscribers");
+      },
+    };
+    const app = createApp({
+      databaseHealth: fakeDatabase(async () => undefined),
+      generateRequestId: fixedRequestId,
+      projectService,
+      activityService,
+      runtimeReadinessDiagnostics: fakeReadiness({
+        gitAvailable: true,
+        githubConfigured: true,
+        openaiConfigured: true,
+        browserAvailable: true,
+        artifactStorageAvailable: true,
+      }),
+    });
+
+    const readiness = await app.request("/api/v1/readiness");
+    const health = await app.request("/health");
+
+    assert.equal(readiness.status, 200);
+    assert.equal(projectCalls, 0);
+    assert.equal(activityAppends, 0);
+    assert.deepEqual(await health.json(), {
+      status: "ok",
+      service: "devcrew-backend",
+    });
   });
 });
 
