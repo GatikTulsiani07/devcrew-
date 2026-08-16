@@ -190,6 +190,16 @@ async function reachReviewCompleted(app: ReturnType<typeof createTestApp>) {
   );
 }
 
+function refreshPullRequest(app: ReturnType<typeof createTestApp>, init: RequestInit = {}) {
+  return app.request(
+    "/api/v1/projects/proj_000001/tasks/task_000001/pull-request/refresh",
+    {
+      method: "POST",
+      ...init,
+    },
+  );
+}
+
 describe("pull request task route", () => {
   it("persists PR evidence and appends the success event once", async () => {
     let callCount = 0;
@@ -241,6 +251,176 @@ describe("pull request task route", () => {
       ).length,
       1,
     );
+  });
+
+  it("refreshes existing PR evidence and persists it for later reads", async () => {
+    let createCalls = 0;
+    let refreshCalls = 0;
+    const app = createTestApp({
+      async createPullRequest() {
+        createCalls += 1;
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: branch,
+            baseBranch: "main",
+            commitSha: checkpointSha,
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+      async refreshPullRequest(input) {
+        refreshCalls += 1;
+        return {
+          ...input.task.pullRequest!,
+          state: "MERGED",
+        };
+      },
+    });
+    await reachReviewCompleted(app);
+    assert.equal(
+      (
+        await app.request(
+          "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+          { method: "POST" },
+        )
+      ).status,
+      200,
+    );
+
+    const refreshed = await refreshPullRequest(app);
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+
+    assert.equal(refreshed.status, 200);
+    assert.equal((await refreshed.json()).task.pullRequest.state, "MERGED");
+    assert.equal((await read.json()).task.pullRequest.state, "MERGED");
+    assert.equal(createCalls, 1);
+    assert.equal(refreshCalls, 1);
+  });
+
+  it("strictly rejects client-supplied refresh identity fields", async () => {
+    const app = createTestApp({
+      async createPullRequest() {
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: branch,
+            baseBranch: "main",
+            commitSha: checkpointSha,
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+      async refreshPullRequest() {
+        throw new Error("refresh should not be called");
+      },
+    });
+    await reachReviewCompleted(app);
+    assert.equal(
+      (
+        await app.request(
+          "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+          { method: "POST" },
+        )
+      ).status,
+      200,
+    );
+
+    const response = await refreshPullRequest(app, {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        number: 99,
+        owner: "attacker",
+        repo: "repo",
+        url: "https://github.com/attacker/repo/pull/99",
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+
+  it("fails safely when refresh runs before PR evidence exists", async () => {
+    const app = createTestApp({
+      async createPullRequest() {
+        throw new Error("create should not be called");
+      },
+      async refreshPullRequest() {
+        throw new Error("refresh should not be called");
+      },
+    });
+    await reachReviewCompleted(app);
+
+    const response = await refreshPullRequest(app);
+
+    assert.equal(response.status, 409);
+    assert.equal(
+      (await response.json()).error.message,
+      "Task pull request has not been created",
+    );
+  });
+
+  it("uses the execution lock for concurrent refresh while reads remain available", async () => {
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    const app = createTestApp({
+      async createPullRequest() {
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: branch,
+            baseBranch: "main",
+            commitSha: checkpointSha,
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+      async refreshPullRequest(input) {
+        started.resolve();
+        await finish.promise;
+        return { ...input.task.pullRequest!, state: "CLOSED" };
+      },
+    });
+    await reachReviewCompleted(app);
+    assert.equal(
+      (
+        await app.request(
+          "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+          { method: "POST" },
+        )
+      ).status,
+      200,
+    );
+
+    const first = refreshPullRequest(app);
+    await started.promise;
+    const second = await refreshPullRequest(app);
+    const taskRead = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const activityRead = await app.request("/api/v1/projects/proj_000001/activity");
+
+    assert.equal(second.status, 409);
+    assert.equal(
+      (await second.json()).error.code,
+      "TASK_EXECUTION_IN_PROGRESS",
+    );
+    assert.equal(taskRead.status, 200);
+    assert.equal(activityRead.status, 200);
+
+    finish.resolve();
+    assert.equal((await first).status, 200);
   });
 
   it("rejects browser-controlled title, body, repository, and refs", async () => {
@@ -304,3 +484,20 @@ describe("pull request task route", () => {
     );
   });
 });
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(reason?: unknown): void;
+}
+
+function deferred<T = void>(): Deferred<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, resolve, reject };
+}

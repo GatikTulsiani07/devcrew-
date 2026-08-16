@@ -5,8 +5,10 @@ import type {
   GitHubPullRequest,
   GitHubPullRequestClient,
   GitHubPullRequestCreateInput,
+  GitHubPullRequestGetInput,
   GitHubPullRequestLookupInput,
 } from "../src/github/github-pull-request-client.js";
+import { GitHubPullRequestClientError } from "../src/github/github-pull-request-client.js";
 import { ApplicationError } from "../src/errors.js";
 import {
   createPullRequestService,
@@ -117,6 +119,7 @@ function providerPullRequest(overrides: Partial<GitHubPullRequest> = {}): GitHub
     url: "https://github.com/example/devcrew/pull/42",
     state: "OPEN",
     headRef: branch,
+    headSha: checkpointSha,
     baseRef: "main",
     repository: { owner: "example", repo: "devcrew" },
     createdAt: "2026-08-03T07:00:00.000Z",
@@ -126,14 +129,17 @@ function providerPullRequest(overrides: Partial<GitHubPullRequest> = {}): GitHub
 
 function fakeClient({
   existing,
+  refreshed = providerPullRequest(),
   created = providerPullRequest(),
   fail,
 }: {
   existing?: GitHubPullRequest;
+  refreshed?: GitHubPullRequest;
   created?: GitHubPullRequest;
   fail?: Error;
 } = {}) {
   const lookups: GitHubPullRequestLookupInput[] = [];
+  const gets: GitHubPullRequestGetInput[] = [];
   const creates: GitHubPullRequestCreateInput[] = [];
   const client: GitHubPullRequestClient = {
     async findOpenPullRequest(input) {
@@ -142,6 +148,13 @@ function fakeClient({
         throw fail;
       }
       return existing;
+    },
+    async getPullRequest(input) {
+      gets.push(input);
+      if (fail !== undefined) {
+        throw fail;
+      }
+      return refreshed;
     },
     async createPullRequest(input) {
       creates.push(input);
@@ -152,7 +165,7 @@ function fakeClient({
     },
   };
 
-  return { client, lookups, creates };
+  return { client, lookups, gets, creates };
 }
 
 describe("pull request service", () => {
@@ -403,4 +416,108 @@ describe("pull request service", () => {
     assert.equal(withTaskPr.lookups.length, 0);
     assert.equal(withTaskPr.creates.length, 0);
   });
+
+  it("refreshes existing PR state from the server-derived PR number", async () => {
+    const taskEvidence = pullRequestEvidence();
+    const withRefresh = fakeClient({
+      refreshed: providerPullRequest({ state: "MERGED" }),
+    });
+
+    const refreshed = await createPullRequestService({
+      githubClient: withRefresh.client,
+      preparedRepositories,
+    }).refreshPullRequest!({
+      project,
+      task: validTask({ pullRequest: taskEvidence }),
+    });
+
+    assert.deepEqual(refreshed, {
+      ...taskEvidence,
+      state: "MERGED",
+    });
+    assert.deepEqual(withRefresh.gets[0], {
+      repository: { owner: "example", repo: "devcrew" },
+      number: 42,
+      head: branch,
+      base: "main",
+    });
+    assert.equal(withRefresh.lookups.length, 0);
+    assert.equal(withRefresh.creates.length, 0);
+  });
+
+  it("refreshes CLOSED and unchanged OPEN states idempotently", async () => {
+    const taskEvidence = pullRequestEvidence();
+    const closed = await createPullRequestService({
+      githubClient: fakeClient({
+        refreshed: providerPullRequest({ state: "CLOSED" }),
+      }).client,
+      preparedRepositories,
+    }).refreshPullRequest!({
+      project,
+      task: validTask({ pullRequest: taskEvidence }),
+    });
+    const open = await createPullRequestService({
+      githubClient: fakeClient({
+        refreshed: providerPullRequest({ state: "OPEN" }),
+      }).client,
+      preparedRepositories,
+    }).refreshPullRequest!({
+      project,
+      task: validTask({ pullRequest: taskEvidence }),
+    });
+
+    assert.equal(closed.state, "CLOSED");
+    assert.deepEqual(open, taskEvidence);
+  });
+
+  it("requires existing authoritative PR evidence before refresh", async () => {
+    await assert.rejects(
+      createPullRequestService({
+        githubClient: fakeClient().client,
+        preparedRepositories,
+      }).refreshPullRequest!({ project, task: validTask() }),
+      (error: unknown) =>
+        error instanceof ApplicationError &&
+        error.code === "INVALID_TASK_TRANSITION" &&
+        error.message === "Task pull request has not been created",
+    );
+  });
+
+  it("fails closed when refreshed PR identity no longer matches", async () => {
+    const serviceFor = (refreshed: GitHubPullRequest) =>
+      createPullRequestService({
+        githubClient: fakeClient({ refreshed }).client,
+        preparedRepositories,
+      });
+    const task = validTask({ pullRequest: pullRequestEvidence() });
+
+    for (const refreshed of [
+      providerPullRequest({ number: 99 }),
+      providerPullRequest({ repository: { owner: "example", repo: "other" } }),
+      providerPullRequest({ headRef: "devcrew/task-other" }),
+      providerPullRequest({ baseRef: "develop" }),
+      providerPullRequest({
+        headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
+    ]) {
+      await assert.rejects(
+        serviceFor(refreshed).refreshPullRequest!({ project, task }),
+        (error: unknown) =>
+          error instanceof PullRequestServiceError ||
+          error instanceof GitHubPullRequestClientError,
+      );
+    }
+  });
 });
+
+function pullRequestEvidence() {
+  return {
+    number: 42,
+    url: "https://github.com/example/devcrew/pull/42",
+    state: "OPEN" as const,
+    headBranch: branch,
+    baseBranch: "main",
+    commitSha: checkpointSha,
+    createdAt: "2026-08-03T07:00:00.000Z",
+  };
+}

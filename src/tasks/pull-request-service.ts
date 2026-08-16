@@ -110,6 +110,50 @@ export function createPullRequestService({
         created: true,
       };
     },
+
+    async refreshPullRequest(input) {
+      throwIfSignalCancelled(input.signal);
+      const context = resolveContext(input, preparedRepositories);
+
+      if (input.task.pullRequest === undefined) {
+        throw new ApplicationError(
+          "INVALID_TASK_TRANSITION",
+          409,
+          "Task pull request has not been created",
+        );
+      }
+
+      const existing = validateExistingPullRequestEvidence(
+        input.task.pullRequest,
+        context.headBranch,
+        context.baseBranch,
+        context.checkpointSha,
+      );
+      const refreshed = await githubClient.getPullRequest({
+        repository: context.repository,
+        number: existing.number,
+        head: context.headBranch,
+        base: context.baseBranch,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      });
+      throwIfSignalCancelled(input.signal);
+
+      if (
+        refreshed.number !== existing.number ||
+        !sameGitHubRepository(refreshed.repository, context.repository) ||
+        refreshed.headRef !== context.headBranch ||
+        refreshed.baseRef !== context.baseBranch ||
+        normalizeSha(refreshed.headSha) !== context.checkpointSha
+      ) {
+        throw new PullRequestServiceError("refreshed pull request evidence does not match");
+      }
+
+      return {
+        ...existing,
+        url: refreshed.url,
+        state: refreshed.state,
+      };
+    },
   };
 }
 
@@ -271,10 +315,30 @@ function copyExistingPullRequestEvidence(
   baseBranch: string,
   checkpointSha: string,
 ): TaskPullRequestEvidence {
+  const existing = validateExistingPullRequestEvidence(
+    evidence,
+    headBranch,
+    baseBranch,
+    checkpointSha,
+  );
+
+  if (existing.state !== "OPEN") {
+    throw new PullRequestServiceError("existing pull request evidence does not match");
+  }
+
+  return existing;
+}
+
+function validateExistingPullRequestEvidence(
+  evidence: TaskPullRequestEvidence,
+  headBranch: string,
+  baseBranch: string,
+  checkpointSha: string,
+): TaskPullRequestEvidence {
   if (
     !Number.isInteger(evidence.number) ||
     evidence.number <= 0 ||
-    evidence.state !== "OPEN" ||
+    !isValidPullRequestState(evidence.state) ||
     evidence.headBranch !== headBranch ||
     evidence.baseBranch !== baseBranch ||
     normalizeSha(evidence.commitSha) !== checkpointSha ||
@@ -284,6 +348,10 @@ function copyExistingPullRequestEvidence(
   }
 
   return { ...evidence };
+}
+
+function isValidPullRequestState(value: string): value is TaskPullRequestEvidence["state"] {
+  return value === "OPEN" || value === "CLOSED" || value === "MERGED";
 }
 
 function normalizeSha(value: string): string {
