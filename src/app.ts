@@ -16,6 +16,10 @@ import {
   resolveAllowedOrigin,
 } from "./config/security.js";
 import type { DatabaseHealth } from "./db/health.js";
+import {
+  createRuntimeReadinessDiagnostics,
+  type RuntimeReadinessDiagnostics,
+} from "./diagnostics/runtime-readiness.js";
 import { ApplicationError, jsonError } from "./errors.js";
 import { createGitHubPullRequestClient } from "./github/github-pull-request-client.js";
 import {
@@ -67,6 +71,7 @@ export interface AppDependencies {
   activityHeartbeatIntervalMs?: number;
   preparedRepositories?: readonly PreparedRepository[];
   controlledCommandRunner?: ControlledCommandRunner;
+  runtimeReadinessDiagnostics?: RuntimeReadinessDiagnostics;
   logger?: Logger;
   allowedOrigins?: readonly string[];
   maxRequestBodyBytes?: number;
@@ -120,6 +125,9 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       projectService,
       activityService,
     });
+  const runtimeReadinessDiagnostics =
+    dependencies.runtimeReadinessDiagnostics ??
+    createRuntimeReadinessDiagnostics();
   const allowedOrigins = dependencies.allowedOrigins ?? readAllowedOrigins();
   const maxRequestBodyBytes =
     dependencies.maxRequestBodyBytes ?? MAX_REQUEST_BODY_BYTES;
@@ -205,6 +213,10 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       database: "connected",
     });
   });
+
+  app.get("/api/v1/readiness", async (c) =>
+    c.json(await runtimeReadinessDiagnostics.check()),
+  );
 
   app.route("/api/v1/projects", createProjectRoutes(projectService));
   app.route("/api/v1/projects", createTaskRoutes(taskService));
