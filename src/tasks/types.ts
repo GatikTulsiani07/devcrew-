@@ -64,6 +64,17 @@ export type RetryFailureCategory =
   | "MODEL_OUTPUT_SCHEMA_INVALID"
   | "UNSUPPORTED_CONFIGURATION"
   | "UNKNOWN_FAILURE";
+export type WorkflowFailureStage =
+  | "DEVELOPER"
+  | "DEVOPS"
+  | "BROWSER_VERIFICATION"
+  | "SCREENSHOT_CAPTURE"
+  | "VISUAL_REVIEW_PROVIDER"
+  | "GIT_CHECKPOINT"
+  | "GIT_PUSH"
+  | "REVIEWER"
+  | "GITHUB_PULL_REQUEST"
+  | "GITHUB_PULL_REQUEST_REFRESH";
 
 export interface TaskPlan {
   summary: string;
@@ -150,6 +161,13 @@ export interface RetryRecoveryEvidence {
   attempts: readonly RetryAttemptEvidence[];
 }
 
+export interface WorkflowFailureEvidence {
+  stage: WorkflowFailureStage;
+  category: RetryFailureCategory;
+  summary: string;
+  failedAt: string;
+}
+
 export interface TaskCancellationEvidence {
   status: "REQUESTED" | "CANCELLED" | "FAILED";
   requestedAt: string;
@@ -220,6 +238,7 @@ export interface TaskSnapshot {
   validation?: TaskValidation;
   visualRepair?: VisualRepairEvidence;
   retryRecovery?: RetryRecoveryEvidence;
+  workflowFailure?: WorkflowFailureEvidence;
   cancellation?: TaskCancellationEvidence;
   review?: TaskReview;
   pullRequest?: TaskPullRequestEvidence;

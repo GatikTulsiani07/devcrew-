@@ -21,6 +21,7 @@ import type {
   TaskSnapshot,
   TaskStore,
 } from "../tasks/types.js";
+import { createWorkflowFailureEvidence } from "../tasks/workflow-failure.js";
 
 export const MAX_RETRY_ATTEMPTS = 2;
 const MAX_RETRY_ATTEMPT_EVIDENCE = 20;
@@ -101,6 +102,10 @@ export function createRetryOrchestrator({
             exhausted,
             attempts: [...(task.retryRecovery?.attempts ?? []), evidence],
           }),
+          workflowFailure: createWorkflowFailureEvidence(
+            classification,
+            timestamp,
+          ),
           updatedAt: timestamp,
         }),
       );
@@ -165,6 +170,7 @@ export function createRetryOrchestrator({
             exhausted: false,
             attempts: [...recovery.attempts, success],
           }),
+          workflowFailure: undefined,
           updatedAt: completedAt,
         });
 
@@ -201,6 +207,10 @@ export function createRetryOrchestrator({
             exhausted: classification.retryable && exhausted,
             attempts: [...recovery.attempts, failure],
           }),
+          workflowFailure: createWorkflowFailureEvidence(
+            classification,
+            completedAt,
+          ),
           updatedAt: completedAt,
         });
 

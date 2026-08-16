@@ -11,6 +11,7 @@ import {
   createVisualRepairOrchestrator,
 } from "../orchestration/visual-repair-orchestrator.js";
 import {
+  classifyRetryFailure,
   createRetryOrchestrator,
   sanitizeStageError,
 } from "../orchestration/retry-orchestrator.js";
@@ -24,6 +25,7 @@ import {
   createTaskExecutionLock,
   type TaskExecutionLock,
 } from "./task-execution-lock.js";
+import { createWorkflowFailureEvidence } from "./workflow-failure.js";
 import type {
   CancellationStage,
   CreateTaskInput,
@@ -456,13 +458,32 @@ export function createTaskService({
           );
         }
 
-        const pullRequest = await refreshPullRequestEvidence(project, task);
         const timestamp = now().toISOString();
+        let pullRequest;
+
+        try {
+          pullRequest = await refreshPullRequestEvidence(project, task);
+        } catch (error) {
+          const latest = await latestTaskOr(task);
+          const failedAt = now().toISOString();
+          const classification = classifyRetryFailure(error, "PULL_REQUEST");
+          await store.update({
+            ...copyTask(latest),
+            workflowFailure: createWorkflowFailureEvidence(
+              classification,
+              failedAt,
+              "GITHUB_PULL_REQUEST_REFRESH",
+            ),
+            updatedAt: failedAt,
+          });
+          throw sanitizeStageError("PULL_REQUEST");
+        }
 
         return copyTask(
           await store.update({
             ...copyTask(task),
             pullRequest,
+            workflowFailure: undefined,
             updatedAt: timestamp,
           }),
         );
@@ -534,6 +555,7 @@ export function createTaskService({
       ...copyTask(task),
       status: "IMPLEMENTATION_COMPLETED",
       execution,
+      workflowFailure: undefined,
       updatedAt: timestamp,
     };
 
@@ -566,6 +588,7 @@ export function createTaskService({
       ...copyTask(task),
       status: "VALIDATION_COMPLETED",
       validation,
+      workflowFailure: undefined,
       updatedAt: timestamp,
     };
 
@@ -603,6 +626,7 @@ export function createTaskService({
       ...copyTask(task),
       status: "REVIEW_COMPLETED",
       review,
+      workflowFailure: undefined,
       updatedAt: timestamp,
     };
 
@@ -648,6 +672,7 @@ export function createTaskService({
         commitSha: result.evidence.commitSha,
         createdAt: result.evidence.createdAt,
       },
+      workflowFailure: undefined,
       updatedAt: timestamp,
     };
 
@@ -714,6 +739,7 @@ export function createTaskService({
       await store.update({
         ...copyTask(task),
         validation,
+        workflowFailure: undefined,
         updatedAt: timestamp,
       }),
     );
@@ -1083,6 +1109,16 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               retryable: attempt.retryable,
               summary: attempt.summary,
             })),
+          },
+        }),
+    ...(task.workflowFailure === undefined
+      ? {}
+      : {
+          workflowFailure: {
+            stage: task.workflowFailure.stage,
+            category: task.workflowFailure.category,
+            summary: task.workflowFailure.summary,
+            failedAt: task.workflowFailure.failedAt,
           },
         }),
     ...(task.cancellation === undefined
