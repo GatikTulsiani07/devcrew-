@@ -22,6 +22,8 @@ import {
   reviewTaskRequestSchema,
   refreshPullRequestPathParamsSchema,
   refreshPullRequestRequestSchema,
+  resumeTaskPathParamsSchema,
+  resumeTaskRequestSchema,
   retryTaskPathParamsSchema,
   retryTaskRequestSchema,
   validateTaskPathParamsSchema,
@@ -211,6 +213,25 @@ export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
     }
 
     const task = await taskService.refreshPullRequest(
+      params.data.projectId,
+      params.data.taskId,
+    );
+    return c.json({ task });
+  });
+
+  routes.post("/:projectId/tasks/:taskId/resume", async (c) => {
+    const params = resumeTaskPathParamsSchema.safeParse({
+      projectId: c.req.param("projectId"),
+      taskId: c.req.param("taskId"),
+    });
+    const body = await readOptionalJsonBody(c.req.text.bind(c.req));
+    const request = resumeTaskRequestSchema.safeParse(body);
+
+    if (!params.success || !request.success) {
+      throw validationError();
+    }
+
+    const task = await taskService.resumeTask(
       params.data.projectId,
       params.data.taskId,
     );

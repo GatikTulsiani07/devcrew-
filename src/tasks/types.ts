@@ -11,6 +11,7 @@ import type {
 import type { VisualReviewEvidence } from "../review/visual-reviewer.js";
 import type { ProjectSnapshot } from "../projects/types.js";
 import type { ValidationSelectionEvidence } from "../validation/validation-selection.js";
+import type { WorkflowResumeMetadata } from "./workflow-resume.js";
 
 export type TaskStatus =
   | "WAITING_FOR_APPROVAL"
@@ -255,6 +256,7 @@ export interface TaskSnapshot {
   cancellation?: TaskCancellationEvidence;
   review?: TaskReview;
   pullRequest?: TaskPullRequestEvidence;
+  resume?: WorkflowResumeMetadata;
   createdAt: string;
   updatedAt: string;
 }
