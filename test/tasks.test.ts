@@ -1088,6 +1088,83 @@ describe("task manager planning API", () => {
     assert.deepEqual(await read.json(), await executed.json());
   });
 
+  it("preserves safe repository change summary on task reads without raw diffs", async () => {
+    const developerExecutor: DeveloperExecutor = {
+      async execute() {
+        return {
+          id: "exec_git",
+          role: "FULL_STACK_DEVELOPER",
+          status: "COMPLETED",
+          attempt: 1,
+          startedAt: "2026-08-03T03:00:00.000Z",
+          completedAt: "2026-08-03T04:00:00.000Z",
+          result: {
+            summary: "Updated src/wrong.ts in the Developer narrative.",
+            changedFiles: ["Developer said src/wrong.ts"],
+            verification: ["Run tests"],
+            repositoryChanges: {
+              filesChanged: ["src/actual.ts"],
+              filesAdded: [],
+              filesModified: ["src/actual.ts"],
+              filesDeleted: [],
+              totalFilesChanged: 1,
+              insertions: 4,
+              deletions: 2,
+            },
+            changeEvidence: {
+              files: [
+                {
+                  path: "src/actual.ts",
+                  status: "MODIFIED",
+                  additions: 4,
+                  deletions: 2,
+                },
+              ],
+              summary: { filesChanged: 1, additions: 4, deletions: 2 },
+              diff: "RAW DIFF SHOULD NOT BE PERSISTED",
+            },
+          },
+        };
+      },
+    };
+    const app = createTestApp({ developerExecutor });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const body = await read.json();
+    const result = body.task.execution.result;
+
+    assert.equal(read.status, 200);
+    assert.equal(result.summary, "Updated src/wrong.ts in the Developer narrative.");
+    assert.deepEqual(result.changedFiles, ["Developer said src/wrong.ts"]);
+    assert.deepEqual(result.repositoryChanges, {
+      filesChanged: ["src/actual.ts"],
+      filesAdded: [],
+      filesModified: ["src/actual.ts"],
+      filesDeleted: [],
+      totalFilesChanged: 1,
+      insertions: 4,
+      deletions: 2,
+    });
+    assert.deepEqual(result.changeEvidence, {
+      files: [
+        {
+          path: "src/actual.ts",
+          status: "MODIFIED",
+          additions: 4,
+          deletions: 2,
+        },
+      ],
+      summary: { filesChanged: 1, additions: 4, deletions: 2 },
+    });
+    assert.equal(JSON.stringify(body).includes("RAW DIFF"), false);
+  });
+
   it("rejects execution while waiting for approval", async () => {
     const app = createTestApp();
     assert.equal((await createProject(app)).status, 201);
