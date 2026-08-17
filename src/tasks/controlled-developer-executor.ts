@@ -151,11 +151,11 @@ export function createControlledDeveloperExecutor({
         throw executionFailure();
       }
 
-      let evidence;
+      let inspection;
 
       try {
         throwIfSignalCancelled(input.signal);
-        evidence = await gitInspector.captureEvidence(repositoryRoot);
+        inspection = await gitInspector.captureRepositoryChanges(repositoryRoot);
         await rollbackIfCancelled(mutation, input.signal);
       } catch (error) {
         if (isTaskCancellationError(error)) {
@@ -179,13 +179,29 @@ export function createControlledDeveloperExecutor({
         completedAt: now().toISOString(),
         result: {
           summary: parsed.data.summary,
-          changedFiles: evidence.files.map(describeChangedFile),
+          changedFiles:
+            inspection.changeEvidence?.files.map(describeChangedFile) ?? [],
           verification: [...parsed.data.verification],
-          changeEvidence: {
-            files: evidence.files.map((file) => ({ ...file })),
-            summary: { ...evidence.summary },
-            ...(evidence.diff === undefined ? {} : { diff: evidence.diff }),
+          repositoryChanges: {
+            filesChanged: [...inspection.repositoryChanges.filesChanged],
+            filesAdded: [...inspection.repositoryChanges.filesAdded],
+            filesModified: [...inspection.repositoryChanges.filesModified],
+            filesDeleted: [...inspection.repositoryChanges.filesDeleted],
+            totalFilesChanged: inspection.repositoryChanges.totalFilesChanged,
+            insertions: inspection.repositoryChanges.insertions,
+            deletions: inspection.repositoryChanges.deletions,
           },
+          ...(inspection.changeEvidence === undefined
+            ? {}
+            : {
+                changeEvidence: {
+                  files: inspection.changeEvidence.files.map((file) => ({ ...file })),
+                  summary: { ...inspection.changeEvidence.summary },
+                  ...(inspection.changeEvidence.diff === undefined
+                    ? {}
+                    : { diff: inspection.changeEvidence.diff }),
+                },
+              }),
         },
       };
     },

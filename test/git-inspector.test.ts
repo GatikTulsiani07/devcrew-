@@ -125,7 +125,9 @@ describe("controlled git inspector", () => {
         [
           successfulResult(" M a.ts\0"),
           successfulResult("1\t0\ta.ts\0"),
+          successfulResult(""),
           successfulResult("--- a/a.ts\n+++ b/a.ts\n+two\n"),
+          successfulResult(""),
         ],
         calls,
       ),
@@ -144,7 +146,7 @@ describe("controlled git inspector", () => {
     assert.equal(calls.every((call) => call.cwd === repositoryRoot), true);
     assert.deepEqual(
       calls.map((call) => call.args[0]),
-      ["status", "diff", "diff"],
+      ["status", "diff", "diff", "diff", "diff"],
     );
     assert.equal(
       calls.every((call) =>
@@ -212,7 +214,9 @@ describe("controlled git inspector", () => {
       runner: scriptedRunner([
         successfulResult(" M a.ts\0"),
         successfulResult("1\t0\ta.ts\0"),
+        successfulResult(""),
         successfulResult(`+${"x".repeat(500)}\n`),
+        successfulResult(""),
       ]),
     });
 
@@ -253,6 +257,89 @@ describe("controlled git inspector", () => {
     assert.match(evidence.diff ?? "", /Binary files/);
     assert.match(evidence.diff ?? "", /\+alpha/);
     assert.equal((evidence.diff ?? "").includes("\u0000"), false);
+  });
+
+  it("returns a clean repository summary without fabricating change evidence", async () => {
+    const inspection = await createControlledGitInspector({
+      runner: scriptedRunner([successfulResult("")]),
+    }).captureRepositoryChanges(repositoryRoot);
+
+    assert.deepEqual(inspection, {
+      repositoryChanges: {
+        filesChanged: [],
+        filesAdded: [],
+        filesModified: [],
+        filesDeleted: [],
+        totalFilesChanged: 0,
+        insertions: 0,
+        deletions: 0,
+      },
+    });
+  });
+
+  it("summarizes mixed, unique, and staged repository changes without raw output", async () => {
+    const inspection = await createControlledGitInspector({
+      runner: scriptedRunner([
+        successfulResult(" M src/modified.ts\0A  src/staged.ts\0 D src/deleted.ts\0?? src/new.ts\0"),
+        successfulResult("2\t1\tsrc/modified.ts\0"),
+        successfulResult("3\t0\tsrc/staged.ts\0" + "0\t4\tsrc/deleted.ts\0"),
+        successfulResult("raw tracked patch"),
+        successfulResult("raw staged patch"),
+        successfulResult("5\t0\tsrc/new.ts\nraw untracked patch"),
+      ]),
+    }).captureRepositoryChanges(repositoryRoot);
+
+    assert.deepEqual(inspection.repositoryChanges, {
+      filesChanged: [
+        "src/deleted.ts",
+        "src/modified.ts",
+        "src/new.ts",
+        "src/staged.ts",
+      ],
+      filesAdded: ["src/new.ts", "src/staged.ts"],
+      filesModified: ["src/modified.ts"],
+      filesDeleted: ["src/deleted.ts"],
+      totalFilesChanged: 4,
+      insertions: 10,
+      deletions: 5,
+    });
+    assert.equal("diff" in inspection.repositoryChanges, false);
+    assert.equal(JSON.stringify(inspection.repositoryChanges).includes("raw"), false);
+  });
+
+  it("handles binary numstat conservatively", async () => {
+    const inspection = await createControlledGitInspector({
+      runner: scriptedRunner([
+        successfulResult(" M public/logo.png\0"),
+        successfulResult("-\t-\tpublic/logo.png\0"),
+        successfulResult(""),
+        successfulResult("Binary files differ"),
+        successfulResult(""),
+      ]),
+    }).captureRepositoryChanges(repositoryRoot);
+
+    assert.deepEqual(inspection.repositoryChanges, {
+      filesChanged: ["public/logo.png"],
+      filesAdded: [],
+      filesModified: ["public/logo.png"],
+      filesDeleted: [],
+      totalFilesChanged: 1,
+      insertions: 0,
+      deletions: 0,
+    });
+  });
+
+  it("rejects unsafe evidence paths and changed file limits", async () => {
+    assert.throws(() => parseStatusOutput(" M .git/config\0"), GitInspectionError);
+    assert.throws(() => parseNumstatOutput("1\t0\t.git/config\0"), GitInspectionError);
+
+    await assert.rejects(
+      createControlledGitInspector({
+        maxChangedFiles: 1,
+        runner: scriptedRunner([successfulResult(" M a.ts\0 M b.ts\0")]),
+      }).captureRepositoryChanges(repositoryRoot),
+      GitInspectionError,
+    );
   });
 
   it("bounds real command output and reports non-git directories", async () => {

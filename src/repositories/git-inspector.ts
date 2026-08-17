@@ -25,10 +25,25 @@ export interface GitDiffSummary {
   deletions?: number;
 }
 
+export interface GitRepositoryChangeSummary {
+  filesChanged: readonly string[];
+  filesAdded: readonly string[];
+  filesModified: readonly string[];
+  filesDeleted: readonly string[];
+  totalFilesChanged: number;
+  insertions: number;
+  deletions: number;
+}
+
 export interface GitChangeEvidence {
   files: readonly GitChangedFile[];
   summary: GitDiffSummary;
   diff?: string;
+}
+
+export interface GitRepositoryChangeInspection {
+  repositoryChanges: GitRepositoryChangeSummary;
+  changeEvidence?: GitChangeEvidence;
 }
 
 export interface GitCommandResult {
@@ -50,6 +65,7 @@ export interface GitCommandRunner {
 export interface GitInspector {
   assertCleanBaseline(repositoryRoot: string): Promise<void>;
   captureEvidence(repositoryRoot: string): Promise<GitChangeEvidence>;
+  captureRepositoryChanges(repositoryRoot: string): Promise<GitRepositoryChangeInspection>;
 }
 
 export const GIT_EXECUTABLE = "git";
@@ -57,6 +73,7 @@ export const GIT_TIMEOUT_MS = 20_000;
 export const MAX_GIT_OUTPUT_BYTES = 256 * 1024;
 export const MAX_DIFF_BYTES = 64 * 1024;
 export const MAX_CHANGED_FILES = 24;
+export const MAX_EVIDENCE_PATH_LENGTH = 200;
 export const DIFF_TRUNCATION_NOTICE = "\n[diff truncated by Devcrew]\n";
 
 const statusArgs: readonly string[] = [
@@ -75,8 +92,24 @@ const trackedNumstatArgs: readonly string[] = [
   "--no-ext-diff",
 ];
 
+const stagedNumstatArgs: readonly string[] = [
+  "diff",
+  "--cached",
+  "--numstat",
+  "-z",
+  "--no-color",
+  "--no-ext-diff",
+];
+
 const trackedPatchArgs: readonly string[] = [
   "diff",
+  "--no-color",
+  "--no-ext-diff",
+];
+
+const stagedPatchArgs: readonly string[] = [
+  "diff",
+  "--cached",
   "--no-color",
   "--no-ext-diff",
 ];
@@ -260,42 +293,76 @@ export function createControlledGitInspector({
         throw new GitInspectionError("changed file limit exceeded");
       }
 
-      const stats = parseNumstatOutput(
-        (await run(runner, trackedNumstatArgs, repositoryRoot, [0, 1])).stdout,
-      );
-      const patches: string[] = [
-        (await run(runner, trackedPatchArgs, repositoryRoot, [0, 1])).stdout,
-      ];
-      const enriched: GitChangedFile[] = [];
+      const evidence = await captureNonEmptyEvidence(repositoryRoot, files);
 
-      for (const file of files) {
-        if (file.status === "UNTRACKED") {
-          const untracked = await run(
-            runner,
-            untrackedDiffArgs(file.path),
-            repositoryRoot,
-            [0, 1],
-          );
-          const parsed = parseUntrackedDiff(untracked.stdout);
+      return evidence;
+    },
 
-          patches.push(parsed.patch);
-          enriched.push({ ...file, ...parsed.stats });
-          continue;
-        }
+    async captureRepositoryChanges(repositoryRoot) {
+      const files = await readStatus(repositoryRoot);
 
-        const trackedStats = stats.get(file.path);
-        enriched.push(trackedStats === undefined ? file : { ...file, ...trackedStats });
+      if (files.length === 0) {
+        return { repositoryChanges: emptyRepositoryChanges() };
       }
 
-      const diff = boundDiff(sanitizeDiff(patches.join("")), maxDiffBytes);
+      if (files.length > maxChangedFiles) {
+        throw new GitInspectionError("changed file limit exceeded");
+      }
+
+      const changeEvidence = await captureNonEmptyEvidence(repositoryRoot, files);
 
       return {
-        files: enriched,
-        summary: summarize(enriched),
-        ...(diff === "" ? {} : { diff }),
+        repositoryChanges: summarizeRepositoryChanges(changeEvidence.files),
+        changeEvidence,
       };
     },
   };
+
+  async function captureNonEmptyEvidence(
+    repositoryRoot: string,
+    files: readonly GitChangedFile[],
+  ): Promise<GitChangeEvidence> {
+    const stats = mergeStats(
+      parseNumstatOutput(
+        (await run(runner, trackedNumstatArgs, repositoryRoot, [0, 1])).stdout,
+      ),
+      parseNumstatOutput(
+        (await run(runner, stagedNumstatArgs, repositoryRoot, [0, 1])).stdout,
+      ),
+    );
+    const patches: string[] = [
+      (await run(runner, trackedPatchArgs, repositoryRoot, [0, 1])).stdout,
+      (await run(runner, stagedPatchArgs, repositoryRoot, [0, 1])).stdout,
+    ];
+    const enriched: GitChangedFile[] = [];
+
+    for (const file of files) {
+      if (file.status === "UNTRACKED") {
+        const untracked = await run(
+          runner,
+          untrackedDiffArgs(file.path),
+          repositoryRoot,
+          [0, 1],
+        );
+        const parsed = parseUntrackedDiff(untracked.stdout);
+
+        patches.push(parsed.patch);
+        enriched.push({ ...file, ...parsed.stats });
+        continue;
+      }
+
+      const trackedStats = stats.get(file.path);
+      enriched.push(trackedStats === undefined ? file : { ...file, ...trackedStats });
+    }
+
+    const diff = boundDiff(sanitizeDiff(patches.join("")), maxDiffBytes);
+
+    return {
+      files: enriched,
+      summary: summarize(enriched),
+      ...(diff === "" ? {} : { diff }),
+    };
+  }
 }
 
 async function run(
@@ -444,6 +511,39 @@ function toStats(
   };
 }
 
+function mergeStats(
+  left: Map<string, { additions?: number; deletions?: number }>,
+  right: Map<string, { additions?: number; deletions?: number }>,
+): Map<string, { additions?: number; deletions?: number }> {
+  const merged = new Map(left);
+
+  for (const [path, stats] of right) {
+    const current = merged.get(path);
+
+    if (current === undefined) {
+      merged.set(path, stats);
+      continue;
+    }
+
+    if (
+      current.additions === undefined ||
+      current.deletions === undefined ||
+      stats.additions === undefined ||
+      stats.deletions === undefined
+    ) {
+      merged.set(path, {});
+      continue;
+    }
+
+    merged.set(path, {
+      additions: current.additions + stats.additions,
+      deletions: current.deletions + stats.deletions,
+    });
+  }
+
+  return merged;
+}
+
 function summarize(files: readonly GitChangedFile[]): GitDiffSummary {
   const measurable = files.filter(
     (file) => file.additions !== undefined && file.deletions !== undefined,
@@ -460,13 +560,90 @@ function summarize(files: readonly GitChangedFile[]): GitDiffSummary {
   };
 }
 
+export function emptyRepositoryChanges(): GitRepositoryChangeSummary {
+  return {
+    filesChanged: [],
+    filesAdded: [],
+    filesModified: [],
+    filesDeleted: [],
+    totalFilesChanged: 0,
+    insertions: 0,
+    deletions: 0,
+  };
+}
+
+export function summarizeRepositoryChanges(
+  files: readonly GitChangedFile[],
+): GitRepositoryChangeSummary {
+  const changed = new Set<string>();
+  const added = new Set<string>();
+  const modified = new Set<string>();
+  const deleted = new Set<string>();
+  let insertions = 0;
+  let deletions = 0;
+
+  for (const file of files) {
+    if (!isSafeEvidencePath(file.path)) {
+      throw new GitInspectionError("unsafe path in git evidence");
+    }
+
+    changed.add(file.path);
+
+    switch (file.status) {
+      case "ADDED":
+      case "UNTRACKED":
+        added.add(file.path);
+        break;
+      case "DELETED":
+        deleted.add(file.path);
+        break;
+      case "MODIFIED":
+      case "RENAMED":
+      case "UNKNOWN":
+        modified.add(file.path);
+        break;
+    }
+
+    if (file.additions !== undefined) {
+      insertions += safeLineCount(file.additions);
+    }
+    if (file.deletions !== undefined) {
+      deletions += safeLineCount(file.deletions);
+    }
+  }
+
+  return {
+    filesChanged: sorted(changed),
+    filesAdded: sorted(added),
+    filesModified: sorted(modified),
+    filesDeleted: sorted(deleted),
+    totalFilesChanged: changed.size,
+    insertions,
+    deletions,
+  };
+}
+
+function sorted(paths: Set<string>): readonly string[] {
+  return [...paths].sort((left, right) => left.localeCompare(right));
+}
+
+function safeLineCount(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new GitInspectionError("unsafe line count in git evidence");
+  }
+
+  return value;
+}
+
 export function isSafeEvidencePath(path: string): boolean {
   return (
     path !== "" &&
+    path.length <= MAX_EVIDENCE_PATH_LENGTH &&
     !path.includes("\0") &&
     !isAbsolute(path) &&
     !/^[A-Za-z]:[\\/]/.test(path) &&
     !path.split("/").includes("..") &&
+    !path.split("/").includes(".git") &&
     !/[\u0000-\u001f\u007f]/.test(path)
   );
 }

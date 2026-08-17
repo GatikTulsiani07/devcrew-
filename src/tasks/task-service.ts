@@ -6,7 +6,10 @@ import {
 } from "../activity/activity-service.js";
 import { ApplicationError } from "../errors.js";
 import type { ProjectService } from "../projects/project-service.js";
-import type { GitChangeEvidence } from "../repositories/git-inspector.js";
+import type {
+  GitChangeEvidence,
+  GitRepositoryChangeSummary,
+} from "../repositories/git-inspector.js";
 import {
   createVisualRepairOrchestrator,
 } from "../orchestration/visual-repair-orchestrator.js";
@@ -1072,7 +1075,20 @@ function copyChangeEvidence(evidence: GitChangeEvidence): GitChangeEvidence {
   return {
     files: evidence.files.map((file) => ({ ...file })),
     summary: { ...evidence.summary },
-    ...(evidence.diff === undefined ? {} : { diff: evidence.diff }),
+  };
+}
+
+function copyRepositoryChanges(
+  evidence: GitRepositoryChangeSummary,
+): GitRepositoryChangeSummary {
+  return {
+    filesChanged: [...evidence.filesChanged],
+    filesAdded: [...evidence.filesAdded],
+    filesModified: [...evidence.filesModified],
+    filesDeleted: [...evidence.filesDeleted],
+    totalFilesChanged: evidence.totalFilesChanged,
+    insertions: evidence.insertions,
+    deletions: evidence.deletions,
   };
 }
 
@@ -1115,6 +1131,13 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               summary: task.execution.result.summary,
               changedFiles: [...task.execution.result.changedFiles],
               verification: [...task.execution.result.verification],
+              ...(task.execution.result.repositoryChanges === undefined
+                ? {}
+                : {
+                    repositoryChanges: copyRepositoryChanges(
+                      task.execution.result.repositoryChanges,
+                    ),
+                  }),
               ...(task.execution.result.changeEvidence === undefined
                 ? {}
                 : {

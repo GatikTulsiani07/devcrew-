@@ -46,6 +46,15 @@ export interface ImplementationResult {
   summary: string;
   changedFiles: readonly string[];
   verification: readonly string[];
+  repositoryChanges?: {
+    filesChanged: readonly string[];
+    filesAdded: readonly string[];
+    filesModified: readonly string[];
+    filesDeleted: readonly string[];
+    totalFilesChanged: number;
+    insertions: number;
+    deletions: number;
+  };
 }
 
 export interface GitCheckpointEvidence {

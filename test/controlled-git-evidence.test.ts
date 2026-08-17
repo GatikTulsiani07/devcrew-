@@ -141,6 +141,15 @@ describe("controlled git evidence", () => {
       additions: 2,
       deletions: 0,
     });
+    assert.deepEqual(execution.result.repositoryChanges, {
+      filesChanged: ["changing.ts", "src/added file.ts"],
+      filesAdded: ["src/added file.ts"],
+      filesModified: ["changing.ts"],
+      filesDeleted: [],
+      totalFilesChanged: 2,
+      insertions: 2,
+      deletions: 0,
+    });
     assert.equal(
       execution.result.changedFiles.includes("MODIFIED: tracked.ts (+0/-0)"),
       false,
@@ -148,6 +157,45 @@ describe("controlled git evidence", () => {
     assert.match(evidence?.diff ?? "", /\+three/);
     assert.match(evidence?.diff ?? "", /\+export const a = 1;/);
     assert.equal(/\/home\/|\/Users\//.test(evidence?.diff ?? ""), false);
+  });
+
+  it("persists an empty Git-derived summary when the model claims a file changed but Git is clean", async () => {
+    const execution = await executor({
+      summary: "Updated src/foo.ts even though no repository content changed.",
+      operations: [{ type: "update", path: "tracked.ts", content: "same\n" }],
+      verification: ["Run tests"],
+    }).execute(developerInput());
+
+    assert.equal(execution.result.summary.includes("src/foo.ts"), true);
+    assert.deepEqual(execution.result.changedFiles, []);
+    assert.deepEqual(execution.result.repositoryChanges, {
+      filesChanged: [],
+      filesAdded: [],
+      filesModified: [],
+      filesDeleted: [],
+      totalFilesChanged: 0,
+      insertions: 0,
+      deletions: 0,
+    });
+    assert.equal(execution.result.changeEvidence, undefined);
+  });
+
+  it("uses Git evidence when the model names the wrong file in its summary", async () => {
+    const execution = await executor({
+      summary: "Updated src/foo.ts.",
+      operations: [
+        { type: "update", path: "changing.ts", content: "one\ntwo\nactual\n" },
+      ],
+      verification: ["Run tests"],
+    }).execute(developerInput());
+
+    assert.deepEqual(execution.result.repositoryChanges?.filesChanged, [
+      "changing.ts",
+    ]);
+    assert.equal(
+      execution.result.repositoryChanges?.filesChanged.includes("src/foo.ts"),
+      false,
+    );
   });
 
   it("does not stage or commit repository changes", async () => {
@@ -212,6 +260,9 @@ describe("controlled git evidence", () => {
     const failingInspector: GitInspector = {
       async assertCleanBaseline() {},
       async captureEvidence() {
+        throw new Error("unused");
+      },
+      async captureRepositoryChanges() {
         throw new Error("git inspection exploded at /home/example/checkout");
       },
     };

@@ -92,20 +92,36 @@ function planner(plan: unknown): DeveloperImplementationPlanner {
 }
 
 function stubGitInspector(): GitInspector {
+  const evidence = {
+    files: [
+      {
+        path: "observed.ts",
+        status: "MODIFIED" as const,
+        additions: 2,
+        deletions: 1,
+      },
+    ],
+    summary: { filesChanged: 1, additions: 2, deletions: 1 },
+    diff: "--- a/observed.ts\n+++ b/observed.ts\n",
+  };
+
   return {
     async assertCleanBaseline() {},
     async captureEvidence() {
+      return evidence;
+    },
+    async captureRepositoryChanges() {
       return {
-        files: [
-          {
-            path: "observed.ts",
-            status: "MODIFIED" as const,
-            additions: 2,
-            deletions: 1,
-          },
-        ],
-        summary: { filesChanged: 1, additions: 2, deletions: 1 },
-        diff: "--- a/observed.ts\n+++ b/observed.ts\n",
+        repositoryChanges: {
+          filesChanged: ["observed.ts"],
+          filesAdded: [],
+          filesModified: ["observed.ts"],
+          filesDeleted: [],
+          totalFilesChanged: 1,
+          insertions: 2,
+          deletions: 1,
+        },
+        changeEvidence: evidence,
       };
     },
   };
@@ -171,6 +187,15 @@ describe("controlled developer executor", () => {
         summary: "Implemented the approved authentication change.",
         changedFiles: ["MODIFIED: observed.ts (+2/-1)"],
         verification: ["Run typecheck", "Run tests"],
+        repositoryChanges: {
+          filesChanged: ["observed.ts"],
+          filesAdded: [],
+          filesModified: ["observed.ts"],
+          filesDeleted: [],
+          totalFilesChanged: 1,
+          insertions: 2,
+          deletions: 1,
+        },
         changeEvidence: {
           files: [
             {
@@ -360,10 +385,24 @@ describe("controlled developer executor", () => {
           gitInspector: {
             async assertCleanBaseline() {},
             async captureEvidence() {
+              throw new Error("unused");
+            },
+            async captureRepositoryChanges() {
               controller.abort(new TaskCancellationError());
               return {
-                files: [{ path: "cancelled.ts", status: "ADDED" as const }],
-                summary: { filesChanged: 1 },
+                repositoryChanges: {
+                  filesChanged: ["cancelled.ts"],
+                  filesAdded: ["cancelled.ts"],
+                  filesModified: [],
+                  filesDeleted: [],
+                  totalFilesChanged: 1,
+                  insertions: 0,
+                  deletions: 0,
+                },
+                changeEvidence: {
+                  files: [{ path: "cancelled.ts", status: "ADDED" as const }],
+                  summary: { filesChanged: 1 },
+                },
               };
             },
           },

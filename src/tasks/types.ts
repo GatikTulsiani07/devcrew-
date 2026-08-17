@@ -1,4 +1,7 @@
-import type { GitChangeEvidence } from "../repositories/git-inspector.js";
+import type {
+  GitChangeEvidence,
+  GitRepositoryChangeSummary,
+} from "../repositories/git-inspector.js";
 import type { GitCheckpointEvidence } from "../repositories/git-checkpoint.js";
 import type { GitRemotePushEvidence } from "../repositories/git-remote-push.js";
 import type {
@@ -92,6 +95,7 @@ export interface ImplementationResult {
   summary: string;
   changedFiles: readonly string[];
   verification: readonly string[];
+  repositoryChanges?: GitRepositoryChangeSummary;
   changeEvidence?: GitChangeEvidence;
 }
 
