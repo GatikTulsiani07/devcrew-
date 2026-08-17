@@ -20,6 +20,11 @@ export type TaskStatus =
   | "IMPLEMENTATION_COMPLETED"
   | "VALIDATION_COMPLETED"
   | "REVIEW_COMPLETED";
+export type TaskOutcomeStatus =
+  | "IN_PROGRESS"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "CANCELLED";
 
 export type PlanDecisionType = "APPROVE" | "REJECT";
 export type ExecutionId = string;
@@ -240,6 +245,19 @@ export interface TaskPullRequestEvidence {
   durationMs?: number;
 }
 
+export interface TaskOutcome {
+  outcome: TaskOutcomeStatus;
+  implementationCompleted: boolean;
+  validationPassed: boolean;
+  visualReviewPassed: boolean | null;
+  reviewerPassed: boolean;
+  pullRequestCreated: boolean;
+  repairAttempts: number;
+  retryAttempts: number;
+  changedFileCount: number | null;
+  completedAt: string | null;
+}
+
 export interface TaskSnapshot {
   id: string;
   projectId: string;
@@ -257,6 +275,7 @@ export interface TaskSnapshot {
   review?: TaskReview;
   pullRequest?: TaskPullRequestEvidence;
   resume?: WorkflowResumeMetadata;
+  taskOutcome?: TaskOutcome;
   createdAt: string;
   updatedAt: string;
 }
