@@ -297,6 +297,41 @@ export interface TaskReview {
   findings: readonly ReviewFinding[];
 }
 
+export type WorkflowResumeStage =
+  | "PLAN"
+  | "DEVELOPER"
+  | "VALIDATION"
+  | "VISUAL_REPAIR"
+  | "CHECKPOINT"
+  | "PUSH"
+  | "REVIEWER"
+  | "PULL_REQUEST"
+  | "COMPLETED";
+
+export type WorkflowResumeReason =
+  | "PLAN_APPROVED"
+  | "DEVELOPER_COMPLETED"
+  | "VALIDATION_COMPLETED"
+  | "CHECKPOINT_PENDING"
+  | "PUSH_PENDING"
+  | "REVIEWER_APPROVED"
+  | "ALREADY_COMPLETED"
+  | "CANCELLED"
+  | "RETRY_EXHAUSTED"
+  | "UNRESOLVED_FAILURE"
+  | "MISSING_EVIDENCE"
+  | "INCONSISTENT_EVIDENCE"
+  | "VISUAL_REPAIR_REQUIRED"
+  | "VISUAL_REPAIR_EXHAUSTED"
+  | "REPOSITORY_STATE_MISMATCH";
+
+export interface WorkflowResumeMetadata {
+  resumable: boolean;
+  lastCompletedStage: WorkflowResumeStage | null;
+  nextStage: WorkflowResumeStage | null;
+  reason: WorkflowResumeReason;
+}
+
 export interface TaskSnapshot {
   id: string;
   projectId: string;
@@ -312,6 +347,7 @@ export interface TaskSnapshot {
   cancellation?: TaskCancellationEvidence;
   review?: TaskReview;
   pullRequest?: TaskPullRequestEvidence;
+  resume?: WorkflowResumeMetadata;
   createdAt: string;
   updatedAt: string;
 }

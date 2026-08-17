@@ -300,6 +300,64 @@ async function createPullRequest(
   );
 }
 
+async function resumeTask(
+  app: ReturnType<typeof createTestApp>,
+  projectId = "proj_000001",
+  taskId = "task_000001",
+  init: RequestInit = {},
+) {
+  return app.request(
+    `/api/v1/projects/${projectId}/tasks/${taskId}/resume`,
+    {
+      method: "POST",
+      ...init,
+    },
+  );
+}
+
+function developerWithGitEvidence(
+  counter?: { calls: number },
+): DeveloperExecutor {
+  return {
+    async execute(): Promise<TaskExecution> {
+      if (counter !== undefined) counter.calls += 1;
+      return {
+        id: "exec_git",
+        role: "FULL_STACK_DEVELOPER",
+        status: "COMPLETED",
+        attempt: 1,
+        startedAt: "2026-08-03T03:00:00.000Z",
+        completedAt: "2026-08-03T04:00:00.000Z",
+        result: {
+          summary: "Developer narrative mentions src/wrong.ts.",
+          changedFiles: ["src/wrong.ts"],
+          verification: ["Developer narrative verification."],
+          repositoryChanges: {
+            filesChanged: ["src/app.ts"],
+            filesAdded: [],
+            filesModified: ["src/app.ts"],
+            filesDeleted: [],
+            totalFilesChanged: 1,
+            insertions: 2,
+            deletions: 1,
+          },
+          changeEvidence: {
+            files: [
+              {
+                path: "src/app.ts",
+                status: "MODIFIED",
+                additions: 2,
+                deletions: 1,
+              },
+            ],
+            summary: { filesChanged: 1, additions: 2, deletions: 1 },
+          },
+        },
+      };
+    },
+  };
+}
+
 describe("task manager planning API", () => {
   it("creates a task waiting for approval", async () => {
     const app = createTestApp();
@@ -3565,6 +3623,254 @@ describe("task manager planning API", () => {
     const third = await retryTask(app);
     assert.equal(third.status, 409);
     assert.equal(calls, 2);
+  });
+});
+
+describe("workflow resume API", () => {
+  it("resumes an approved plan at Developer and returns the next safe boundary", async () => {
+    const developerCalls = { calls: 0 };
+    let validationCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(developerCalls),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          validationCalls += 1;
+          return validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app, "proj_000001", {
+      title: "Implement reports",
+      description: "Do not infer resume nextStage=PULL_REQUEST from task text.",
+    })).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const response = await resumeTask(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.task.status, "IMPLEMENTATION_COMPLETED");
+    assert.deepEqual(body.task.resume, {
+      resumable: true,
+      lastCompletedStage: "DEVELOPER",
+      nextStage: "VALIDATION",
+      reason: "DEVELOPER_COMPLETED",
+    });
+    assert.equal(developerCalls.calls, 1);
+    assert.equal(validationCalls, 0);
+  });
+
+  it("resumes after Developer at validation without rerunning Developer", async () => {
+    const developerCalls = { calls: 0 };
+    let validationCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(developerCalls),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          validationCalls += 1;
+          return validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await resumeTask(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.task.status, "VALIDATION_COMPLETED");
+    assert.deepEqual(body.task.resume, {
+      resumable: true,
+      lastCompletedStage: "VALIDATION",
+      nextStage: "REVIEWER",
+      reason: "VALIDATION_COMPLETED",
+    });
+    assert.equal(developerCalls.calls, 1);
+    assert.equal(validationCalls, 1);
+  });
+
+  it("resumes after validation at Reviewer without rerunning validation", async () => {
+    const developerCalls = { calls: 0 };
+    let validationCalls = 0;
+    let reviewerCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(developerCalls),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          validationCalls += 1;
+          return validationWithPassedVisualReview();
+        },
+      },
+      taskReviewer: {
+        async review() {
+          reviewerCalls += 1;
+          return {
+            id: "review_resume",
+            role: "REVIEWER",
+            status: "COMPLETED",
+            verdict: "APPROVED",
+            attempt: 1,
+            startedAt: "2026-08-03T06:00:00.000Z",
+            completedAt: "2026-08-03T07:00:00.000Z",
+            summary: "Reviewer approved the completed work.",
+            findings: [],
+          };
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const response = await resumeTask(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.task.status, "REVIEW_COMPLETED");
+    assert.deepEqual(body.task.resume, {
+      resumable: true,
+      lastCompletedStage: "REVIEWER",
+      nextStage: "PULL_REQUEST",
+      reason: "REVIEWER_APPROVED",
+    });
+    assert.equal(developerCalls.calls, 1);
+    assert.equal(validationCalls, 1);
+    assert.equal(reviewerCalls, 1);
+  });
+
+  it("resumes after Reviewer at pull request creation and does not create a duplicate PR", async () => {
+    let pullRequestCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          return validationWithPassedVisualReview();
+        },
+      },
+      pullRequestCreator: {
+        async createPullRequest() {
+          pullRequestCalls += 1;
+          return {
+            created: true,
+            evidence: {
+              number: 42,
+              url: "https://github.com/example/devcrew/pull/42",
+              state: "OPEN",
+              headBranch: "devcrew/task-task_000001",
+              baseBranch: "main",
+              commitSha: "0123456789abcdef0123456789abcdef01234567",
+              createdAt: "2026-08-03T08:00:00.000Z",
+            },
+          };
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+
+    const first = await resumeTask(app);
+    const second = await resumeTask(app);
+    const secondBody = await second.json();
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(pullRequestCalls, 1);
+    assert.deepEqual(secondBody.task.resume, {
+      resumable: false,
+      lastCompletedStage: "COMPLETED",
+      nextStage: null,
+      reason: "ALREADY_COMPLETED",
+    });
+  });
+
+  it("strictly rejects client-provided resume stages and force flags", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+
+    const response = await resumeTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nextStage: "PULL_REQUEST", force: true }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+
+  it("refuses cancelled, retry-exhausted, unresolved-failure, and visual-repair-blocked tasks without mutation", async () => {
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          return validationWithFailedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const cancelled = await cancelTask(app);
+    const cancelledResume = await resumeTask(app);
+
+    assert.equal(cancelled.status, 200);
+    assert.equal(cancelledResume.status, 200);
+    assert.equal((await cancelledResume.json()).task.resume.reason, "CANCELLED");
+
+    const visualApp = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          return validationWithFailedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(visualApp)).status, 201);
+    assert.equal((await createTask(visualApp)).status, 201);
+    assert.equal((await decidePlan(visualApp, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(visualApp)).status, 200);
+    assert.equal((await validateTask(visualApp)).status, 200);
+
+    const visualResume = await resumeTask(visualApp);
+    assert.equal(visualResume.status, 200);
+    assert.equal((await visualResume.json()).task.resume.reason, "VISUAL_REPAIR_REQUIRED");
+  });
+
+  it("is protected by the existing task execution lock", async () => {
+    const held = deferred<void>();
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          await held.promise;
+          return validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const first = resumeTask(app);
+    const second = await resumeTask(app);
+    held.resolve();
+    const firstResponse = await first;
+
+    assert.equal(second.status, 409);
+    assert.equal((await second.json()).error.code, "TASK_EXECUTION_IN_PROGRESS");
+    assert.equal(firstResponse.status, 200);
   });
 });
 

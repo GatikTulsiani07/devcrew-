@@ -40,6 +40,11 @@ import {
   type MonotonicClock,
 } from "./workflow-duration.js";
 import { createWorkflowFailureEvidence } from "./workflow-failure.js";
+import {
+  deriveWorkflowResumeMetadata,
+  type WorkflowResumeMetadata,
+  type WorkflowResumeStage,
+} from "./workflow-resume.js";
 import type {
   CancellationStage,
   CreateTaskInput,
@@ -93,6 +98,7 @@ export interface TaskService {
   cancelTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   createPullRequest(projectId: string, taskId: string): Promise<TaskSnapshot>;
   refreshPullRequest(projectId: string, taskId: string): Promise<TaskSnapshot>;
+  resumeTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
 }
 
 export function createTaskService({
@@ -556,6 +562,58 @@ export function createTaskService({
         );
       });
     },
+
+    async resumeTask(projectId, taskId) {
+      const project = await projectService.getProject(projectId);
+
+      await assertTaskExists(projectId, taskId);
+
+      return executionLock.withLock(projectId, taskId, async () => {
+        const task = await requireTask(projectId, taskId);
+        const resume = deriveResumeMetadata(task, isDevOpsPublisher(devOpsValidator));
+
+        if (!resume.resumable || resume.nextStage === null) {
+          return withResume(task, resume);
+        }
+
+        const active = cancellationRegistry.register({
+          projectId,
+          taskId,
+          stage: cancellationStageForResume(resume.nextStage),
+        });
+        const budget = createExecutionBudget();
+
+        try {
+          const resumed = await runResumeStage(
+            resume.nextStage,
+            project,
+            task,
+            active,
+            budget,
+          );
+          return withResume(
+            resumed,
+            deriveResumeMetadata(resumed, isDevOpsPublisher(devOpsValidator)),
+          );
+        } catch (error) {
+          if (isTaskCancellationError(error)) {
+            await completeCancellation(await latestTaskOr(task), active.stage);
+            throw error;
+          }
+          const latest = await latestTaskOr(task);
+          const fallbackStage = retryStageForResume(resume.nextStage);
+          await retryOrchestrator.recordFailure(
+            latest,
+            currentWorkflowStage(active, fallbackStage),
+            error,
+          );
+          throw sanitizeStageError(fallbackStage);
+        } finally {
+          budget.dispose();
+          active.unregister();
+        }
+      });
+    },
   };
 
   async function assertTaskExists(
@@ -602,6 +660,36 @@ export function createTaskService({
         return runReviewerStage(project, task, active, undefined, signal);
       case "PULL_REQUEST":
         return runPullRequestStage(project, task, active, undefined, signal);
+    }
+  }
+
+  async function runResumeStage(
+    stage: WorkflowResumeStage,
+    project: Awaited<ReturnType<ProjectService["getProject"]>>,
+    task: TaskSnapshot,
+    active: ActiveTaskExecution,
+    budget: TaskExecutionBudget,
+  ): Promise<TaskSnapshot> {
+    switch (stage) {
+      case "DEVELOPER":
+        return runDeveloperStage(project, task, active, budget);
+      case "VALIDATION":
+        return runValidationWorkflow(project, task, active, budget);
+      case "CHECKPOINT":
+      case "PUSH":
+        return maybePublishValidatedTask(task, active, budget);
+      case "REVIEWER": {
+        const verified = await verifyPublishedTaskForResume(task, active, budget);
+        return runReviewerStage(project, verified, active, budget);
+      }
+      case "PULL_REQUEST": {
+        const verified = await verifyPublishedTaskForResume(task, active, budget);
+        return runPullRequestStage(project, verified, active, budget);
+      }
+      case "PLAN":
+      case "VISUAL_REPAIR":
+      case "COMPLETED":
+        return copyTask(task);
     }
   }
 
@@ -896,6 +984,44 @@ export function createTaskService({
     );
   }
 
+  async function verifyPublishedTaskForResume(
+    task: TaskSnapshot,
+    active: ActiveTaskExecution,
+    budget: TaskExecutionBudget,
+  ): Promise<TaskSnapshot> {
+    if (
+      task.validation?.checkpoint === undefined ||
+      task.validation.remoteBranch === undefined ||
+      !isDevOpsPublisher(devOpsValidator)
+    ) {
+      return copyTask(task);
+    }
+
+    active.setStage("CHECKPOINT");
+    budget.throwIfExpired("CHECKPOINT");
+    active.throwIfCancelled();
+    const validation = await devOpsValidator.publishValidatedTask(copyTask(task), {
+      signal: budget.composeSignal(active.signal, "CHECKPOINT"),
+      setStage: (stage) => {
+        active.setStage(stage);
+        if (stage !== "RETRY_WAIT") {
+          budget.setStage(stage);
+        }
+      },
+    });
+    budget.throwIfExpired(currentWorkflowStage(active, "CHECKPOINT"));
+    active.throwIfCancelled();
+    const timestamp = now().toISOString();
+    return copyTask(
+      await store.update({
+        ...copyTask(task),
+        validation,
+        workflowFailure: undefined,
+        updatedAt: timestamp,
+      }),
+    );
+  }
+
   async function latestTaskOr(task: TaskSnapshot): Promise<TaskSnapshot> {
     return (
       (await store.findByProjectAndId(task.projectId, task.id)) ?? copyTask(task)
@@ -1006,6 +1132,77 @@ export function createTaskService({
             : `Visual review found ${validation.visualReview.findings.length} issues.`,
       });
     }
+  }
+}
+
+function deriveResumeMetadata(
+  task: TaskSnapshot,
+  publisherAvailable: boolean,
+): WorkflowResumeMetadata {
+  return deriveWorkflowResumeMetadata({
+    task,
+    publisherAvailable,
+  });
+}
+
+function withResume(
+  task: TaskSnapshot,
+  resume: WorkflowResumeMetadata,
+): TaskSnapshot {
+  return {
+    ...copyTask(task),
+    resume: copyResumeMetadata(resume),
+  };
+}
+
+function copyResumeMetadata(resume: WorkflowResumeMetadata): WorkflowResumeMetadata {
+  return {
+    resumable: resume.resumable,
+    lastCompletedStage: resume.lastCompletedStage,
+    nextStage: resume.nextStage,
+    reason: resume.reason,
+  };
+}
+
+function cancellationStageForResume(stage: WorkflowResumeStage): CancellationStage {
+  switch (stage) {
+    case "DEVELOPER":
+      return "DEVELOPER";
+    case "VALIDATION":
+    case "VISUAL_REPAIR":
+      return "DEVOPS";
+    case "CHECKPOINT":
+      return "CHECKPOINT";
+    case "PUSH":
+      return "REMOTE_PUSH";
+    case "REVIEWER":
+      return "REVIEWER";
+    case "PULL_REQUEST":
+      return "PULL_REQUEST";
+    case "PLAN":
+    case "COMPLETED":
+      return "RETRY_WAIT";
+  }
+}
+
+function retryStageForResume(stage: WorkflowResumeStage): RetryStage {
+  switch (stage) {
+    case "DEVELOPER":
+      return "DEVELOPER";
+    case "VALIDATION":
+    case "VISUAL_REPAIR":
+      return "DEVOPS";
+    case "CHECKPOINT":
+      return "CHECKPOINT";
+    case "PUSH":
+      return "REMOTE_PUSH";
+    case "REVIEWER":
+      return "REVIEWER";
+    case "PULL_REQUEST":
+      return "PULL_REQUEST";
+    case "PLAN":
+    case "COMPLETED":
+      return "DEVELOPER";
   }
 }
 

@@ -266,7 +266,11 @@ export function createControlledDevOpsValidator({
     async publishValidatedTask(task, options = {}): Promise<TaskValidation> {
       const { project, repository } = await resolveValidationContext(task);
 
-      if (task.status !== "VALIDATION_COMPLETED" || task.validation?.status !== "PASSED") {
+      if (
+        (task.status !== "VALIDATION_COMPLETED" &&
+          task.status !== "REVIEW_COMPLETED") ||
+        task.validation?.status !== "PASSED"
+      ) {
         throw validationFailure();
       }
 
