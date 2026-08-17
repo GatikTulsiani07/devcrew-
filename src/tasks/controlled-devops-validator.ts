@@ -54,6 +54,7 @@ import {
   findValidationProfile,
   validationProfiles,
 } from "../validation/validation-profiles.js";
+import { selectValidationPlan } from "../validation/validation-selection.js";
 import {
   createControlledCommandRunner,
   type ControlledCommandRunnerOptions,
@@ -109,6 +110,11 @@ export function createControlledDevOpsValidator({
   return {
     async validate(task, options = {}): Promise<TaskValidation> {
       const { repository, profile } = await resolveValidationContext(task);
+      const validationSelection = selectValidationPlan({
+        repositoryChanges: task.execution?.result.repositoryChanges,
+        capabilities: repository.capabilities,
+        approvedValidationConfig: profile,
+      });
 
       const startedAt = now().toISOString();
       const checks = [];
@@ -145,7 +151,7 @@ export function createControlledDevOpsValidator({
       let browserScreenshot: BrowserScreenshotEvidence | undefined;
       let visualReview: VisualReviewEvidence | undefined;
       const browserProfileId =
-        repository.capabilities?.browserVerificationEligible === false
+        !validationSelection.browserVerificationSelected
           ? undefined
           : repository.browserVerificationProfileId;
 
@@ -244,6 +250,13 @@ export function createControlledDevOpsValidator({
         completedAt: now().toISOString(),
         checks,
         summary: "Controlled validation completed successfully.",
+        validationSelection: {
+          strategy: validationSelection.strategy,
+          categories: [...validationSelection.categories],
+          browserVerificationSelected:
+            validationSelection.browserVerificationSelected,
+          reason: validationSelection.reason,
+        },
         ...(browserVerification === undefined ? {} : { browserVerification }),
         ...(browserScreenshot === undefined ? {} : { browserScreenshot }),
         ...(visualReview === undefined ? {} : { visualReview }),

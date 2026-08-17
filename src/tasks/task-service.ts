@@ -10,6 +10,7 @@ import type {
   GitChangeEvidence,
   GitRepositoryChangeSummary,
 } from "../repositories/git-inspector.js";
+import type { ValidationSelectionEvidence } from "../validation/validation-selection.js";
 import {
   createVisualRepairOrchestrator,
 } from "../orchestration/visual-repair-orchestrator.js";
@@ -1092,6 +1093,17 @@ function copyRepositoryChanges(
   };
 }
 
+function copyValidationSelection(
+  evidence: ValidationSelectionEvidence,
+): ValidationSelectionEvidence {
+  return {
+    strategy: evidence.strategy,
+    categories: [...evidence.categories],
+    browserVerificationSelected: evidence.browserVerificationSelected,
+    reason: evidence.reason,
+  };
+}
+
 function copyTask(task: TaskSnapshot): TaskSnapshot {
   return {
     id: task.id,
@@ -1167,6 +1179,13 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               summary: check.summary,
             })),
             summary: task.validation.summary,
+            ...(task.validation.validationSelection === undefined
+              ? {}
+              : {
+                  validationSelection: copyValidationSelection(
+                    task.validation.validationSelection,
+                  ),
+                }),
             ...(task.validation.checkpoint === undefined
               ? {}
               : {

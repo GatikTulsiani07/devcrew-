@@ -1654,6 +1654,55 @@ describe("task manager planning API", () => {
     assert.deepEqual(await read.json(), await validated.json());
   });
 
+  it("preserves validation selection evidence on later task reads", async () => {
+    const devOpsValidator: DevOpsValidator = {
+      async validate(): Promise<TaskValidation> {
+        return {
+          id: "val_selection",
+          role: "DEVOPS_ENGINEER",
+          status: "PASSED",
+          attempt: 1,
+          startedAt: "2026-08-03T06:00:00.000Z",
+          completedAt: "2026-08-03T07:00:00.000Z",
+          checks: [
+            {
+              name: "typecheck",
+              status: "PASSED",
+              summary: "Type checking completed successfully.",
+            },
+          ],
+          summary: "Controlled validation completed successfully.",
+          validationSelection: {
+            strategy: "TARGETED",
+            categories: ["DOCUMENTATION"],
+            browserVerificationSelected: false,
+            reason: "DOCUMENTATION_ONLY",
+          },
+        };
+      },
+    };
+    const app = createTestApp({ devOpsValidator });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const body = await read.json();
+
+    assert.equal(read.status, 200);
+    assert.deepEqual(body.task.validation.validationSelection, {
+      strategy: "TARGETED",
+      categories: ["DOCUMENTATION"],
+      browserVerificationSelected: false,
+      reason: "DOCUMENTATION_ONLY",
+    });
+    assert.equal(JSON.stringify(body).includes("npm run"), false);
+  });
+
   it("persists public screenshot and visual review evidence without leaking internals", async () => {
     let validationCount = 0;
     const devOpsValidator: DevOpsValidator = {
