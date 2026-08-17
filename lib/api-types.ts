@@ -235,6 +235,33 @@ export interface ValidationCheck {
   summary: string;
 }
 
+export type ValidationSelectionStrategy = "FULL" | "TARGETED";
+export type ValidationChangeCategory =
+  | "FRONTEND"
+  | "BACKEND"
+  | "DOCUMENTATION"
+  | "CONFIGURATION"
+  | "TEST"
+  | "UNKNOWN";
+export type ValidationSelectionReason =
+  | "FRONTEND_ONLY"
+  | "BACKEND_ONLY"
+  | "DOCUMENTATION_ONLY"
+  | "TEST_ONLY"
+  | "MIXED_CODE"
+  | "CONFIGURATION_CHANGE"
+  | "UNKNOWN_CHANGE"
+  | "NO_CHANGE"
+  | "MISSING_CHANGE_EVIDENCE"
+  | "CONSERVATIVE_FALLBACK";
+
+export interface ValidationSelectionEvidence {
+  strategy: ValidationSelectionStrategy;
+  categories: readonly ValidationChangeCategory[];
+  browserVerificationSelected: boolean;
+  reason: ValidationSelectionReason;
+}
+
 export interface TaskValidation {
   id: string;
   role: "DEVOPS_ENGINEER";
@@ -244,6 +271,7 @@ export interface TaskValidation {
   completedAt: string;
   checks: readonly ValidationCheck[];
   summary: string;
+  validationSelection?: ValidationSelectionEvidence;
   checkpoint?: GitCheckpointEvidence;
   remoteBranch?: GitRemotePushEvidence;
   browserVerification?: BrowserVerificationEvidence;

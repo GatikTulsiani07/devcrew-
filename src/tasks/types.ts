@@ -10,6 +10,7 @@ import type {
 } from "../browser/browser-types.js";
 import type { VisualReviewEvidence } from "../review/visual-reviewer.js";
 import type { ProjectSnapshot } from "../projects/types.js";
+import type { ValidationSelectionEvidence } from "../validation/validation-selection.js";
 
 export type TaskStatus =
   | "WAITING_FOR_APPROVAL"
@@ -200,6 +201,7 @@ export interface TaskValidation {
   durationMs?: number;
   checks: readonly ValidationCheck[];
   summary: string;
+  validationSelection?: ValidationSelectionEvidence;
   checkpoint?: GitCheckpointEvidence;
   remoteBranch?: GitRemotePushEvidence;
   browserVerification?: BrowserVerificationEvidence;

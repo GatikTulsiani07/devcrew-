@@ -28,6 +28,15 @@ const task: TaskSnapshot = {
       summary: "Changed files.",
       changedFiles: ["MODIFIED: src/app.ts (+1/-0)"],
       verification: ["Run tests"],
+      repositoryChanges: {
+        filesChanged: ["src/app.ts"],
+        filesAdded: [],
+        filesModified: ["src/app.ts"],
+        filesDeleted: [],
+        totalFilesChanged: 1,
+        insertions: 1,
+        deletions: 0,
+      },
       changeEvidence: {
         files: [
           {
@@ -51,6 +60,28 @@ const repository: PreparedRepository = {
   localCheckoutPath: "/private/tmp/devcrew-fixture",
   validationProfileId: "node_standard",
 };
+
+function taskWithChangedPath(path: string): TaskSnapshot {
+  return {
+    ...task,
+    execution: {
+      ...task.execution!,
+      result: {
+        ...task.execution!.result,
+        changedFiles: [`MODIFIED: ${path} (+1/-0)`],
+        repositoryChanges: {
+          filesChanged: [path],
+          filesAdded: [],
+          filesModified: [path],
+          filesDeleted: [],
+          totalFilesChanged: 1,
+          insertions: 1,
+          deletions: 0,
+        },
+      },
+    },
+  };
+}
 
 function passingRunner(): ControlledCommandRunner {
   return {
@@ -175,6 +206,12 @@ describe("controlled DevOps validator", () => {
         { name: "build", status: "PASSED", summary: "Production build completed successfully." },
       ],
       summary: "Controlled validation completed successfully.",
+      validationSelection: {
+        strategy: "TARGETED",
+        categories: ["BACKEND"],
+        browserVerificationSelected: false,
+        reason: "BACKEND_ONLY",
+      },
     });
   });
 
@@ -486,6 +523,15 @@ describe("controlled DevOps validator", () => {
     const browserRepository: PreparedRepository = {
       ...repository,
       browserVerificationProfileId: "next_localhost",
+      capabilities: {
+        nodeProject: true,
+        frontendApplication: true,
+        hasDevScript: true,
+        hasTestScript: true,
+        hasBuildScript: true,
+        typescriptProject: true,
+        browserVerificationEligible: true,
+      },
     };
 
     const validation = await createControlledDevOpsValidator({
@@ -553,7 +599,7 @@ describe("controlled DevOps validator", () => {
       generateValidationId: () => "val_000001",
       now: () => new Date("2026-08-03T10:00:00.000Z"),
       durationClock: () => ticks[Math.min(tickIndex++, ticks.length - 1)],
-    }).validate(task);
+    }).validate(taskWithChangedPath("app/page.tsx"));
 
     assert.deepEqual(events, [
       "server:next_localhost:/private/tmp/devcrew-fixture",
@@ -583,6 +629,12 @@ describe("controlled DevOps validator", () => {
       screenshotId: "shot_123e4567-e89b-42d3-a456-426614174000",
       reviewedAt: "2026-08-03T09:30:00.000Z",
       durationMs: 9,
+    });
+    assert.deepEqual(validation.validationSelection, {
+      strategy: "TARGETED",
+      categories: ["FRONTEND"],
+      browserVerificationSelected: true,
+      reason: "FRONTEND_ONLY",
     });
   });
 
@@ -614,22 +666,146 @@ describe("controlled DevOps validator", () => {
       },
       generateValidationId: () => "val_000001",
       now: () => new Date("2026-08-03T10:00:00.000Z"),
-    }).validate(task);
+    }).validate(taskWithChangedPath("app/page.tsx"));
 
+    assert.equal(validation.browserVerification, undefined);
+    assert.equal(validation.browserScreenshot, undefined);
+    assert.equal(validation.visualReview, undefined);
+    assert.deepEqual(validation.validationSelection, {
+      strategy: "TARGETED",
+      categories: ["FRONTEND"],
+      browserVerificationSelected: false,
+      reason: "FRONTEND_ONLY",
+    });
+  });
+
+  it("keeps mandatory checks for documentation-only changes without browser or visual evidence", async () => {
+    const calls: string[] = [];
+    const validation = await createControlledDevOpsValidator({
+      projectService: projectService(),
+      preparedRepositories: [
+        {
+          ...repository,
+          browserVerificationProfileId: "next_localhost",
+          capabilities: {
+            nodeProject: true,
+            frontendApplication: true,
+            hasDevScript: true,
+            hasTestScript: true,
+            hasBuildScript: true,
+            typescriptProject: true,
+            browserVerificationEligible: true,
+          },
+        },
+      ],
+      runner: {
+        async run(check) {
+          calls.push(check.name);
+          return {
+            status: "PASSED",
+            exitCode: 0,
+            timedOut: false,
+            started: true,
+            outputLimitExceeded: false,
+            unsafeEvidence: false,
+            stdout: "",
+            stderr: "",
+          };
+        },
+      },
+      devServer: {
+        async start() {
+          throw new Error("browser server should not start for documentation-only changes");
+        },
+      },
+      generateValidationId: () => "val_docs",
+      now: () => new Date("2026-08-03T10:00:00.000Z"),
+    }).validate(taskWithChangedPath("README.md"));
+
+    assert.deepEqual(calls, ["typecheck", "tests", "build"]);
+    assert.deepEqual(validation.validationSelection, {
+      strategy: "TARGETED",
+      categories: ["DOCUMENTATION"],
+      browserVerificationSelected: false,
+      reason: "DOCUMENTATION_ONLY",
+    });
     assert.equal(validation.browserVerification, undefined);
     assert.equal(validation.browserScreenshot, undefined);
     assert.equal(validation.visualReview, undefined);
   });
 
+  it("uses full validation fallback for missing and malformed repository changes", async () => {
+    const missing = await createControlledDevOpsValidator({
+      projectService: projectService(),
+      preparedRepositories: [repository],
+      runner: passingRunner(),
+      generateValidationId: () => "val_missing_changes",
+      now: () => new Date("2026-08-03T10:00:00.000Z"),
+    }).validate({
+      ...task,
+      execution: {
+        ...task.execution!,
+        result: {
+          ...task.execution!.result,
+          repositoryChanges: undefined,
+        },
+      },
+    });
+
+    const malformed = await createControlledDevOpsValidator({
+      projectService: projectService(),
+      preparedRepositories: [repository],
+      runner: passingRunner(),
+      generateValidationId: () => "val_malformed_changes",
+      now: () => new Date("2026-08-03T10:00:00.000Z"),
+    }).validate({
+      ...task,
+      execution: {
+        ...task.execution!,
+        result: {
+          ...task.execution!.result,
+          repositoryChanges: {
+            ...task.execution!.result.repositoryChanges!,
+            totalFilesChanged: 2,
+          },
+        },
+      },
+    });
+
+    assert.deepEqual(missing.validationSelection, {
+      strategy: "FULL",
+      categories: ["UNKNOWN"],
+      browserVerificationSelected: false,
+      reason: "MISSING_CHANGE_EVIDENCE",
+    });
+    assert.deepEqual(malformed.validationSelection, {
+      strategy: "FULL",
+      categories: ["UNKNOWN"],
+      browserVerificationSelected: false,
+      reason: "CONSERVATIVE_FALLBACK",
+    });
+  });
+
   it("does not run screenshot capture when browser verification fails and still stops the server", async () => {
     const events: string[] = [];
+    const browserRepository = {
+      ...repository,
+      browserVerificationProfileId: "next_localhost",
+      capabilities: {
+        nodeProject: true,
+        frontendApplication: true,
+        hasDevScript: true,
+        hasTestScript: true,
+        hasBuildScript: true,
+        typescriptProject: true,
+        browserVerificationEligible: true,
+      },
+    };
 
     await assert.rejects(
       createControlledDevOpsValidator({
         projectService: projectService(),
-        preparedRepositories: [
-          { ...repository, browserVerificationProfileId: "next_localhost" },
-        ],
+        preparedRepositories: [browserRepository],
         runner: passingRunner(),
         checkpointService: checkpointService(),
         remotePushService: remotePushService(),
@@ -655,7 +831,7 @@ describe("controlled DevOps validator", () => {
             throw new Error("unused");
           },
         },
-      }).validate(task),
+      }).validate(taskWithChangedPath("app/page.tsx")),
       (error: unknown) =>
         error instanceof ApplicationError &&
         error.code === "INTERNAL_ERROR" &&
@@ -666,12 +842,24 @@ describe("controlled DevOps validator", () => {
   });
 
   it("sanitizes screenshot capture failures and returns no partial validation", async () => {
+    const browserRepository = {
+      ...repository,
+      browserVerificationProfileId: "next_localhost",
+      capabilities: {
+        nodeProject: true,
+        frontendApplication: true,
+        hasDevScript: true,
+        hasTestScript: true,
+        hasBuildScript: true,
+        typescriptProject: true,
+        browserVerificationEligible: true,
+      },
+    };
+
     await assert.rejects(
       createControlledDevOpsValidator({
         projectService: projectService(),
-        preparedRepositories: [
-          { ...repository, browserVerificationProfileId: "next_localhost" },
-        ],
+        preparedRepositories: [browserRepository],
         runner: passingRunner(),
         checkpointService: checkpointService(),
         remotePushService: remotePushService(),
@@ -697,7 +885,7 @@ describe("controlled DevOps validator", () => {
             throw new Error("secret token at /Users/example/screenshots");
           },
         },
-      }).validate(task),
+      }).validate(taskWithChangedPath("app/page.tsx")),
       (error: unknown) =>
         error instanceof ApplicationError &&
         error.code === "INTERNAL_ERROR" &&
@@ -708,12 +896,24 @@ describe("controlled DevOps validator", () => {
 
   it("sanitizes visual review failures and emits no fake visual evidence", async () => {
     const events: string[] = [];
+    const browserRepository = {
+      ...repository,
+      browserVerificationProfileId: "next_localhost",
+      capabilities: {
+        nodeProject: true,
+        frontendApplication: true,
+        hasDevScript: true,
+        hasTestScript: true,
+        hasBuildScript: true,
+        typescriptProject: true,
+        browserVerificationEligible: true,
+      },
+    };
+
     await assert.rejects(
       createControlledDevOpsValidator({
         projectService: projectService(),
-        preparedRepositories: [
-          { ...repository, browserVerificationProfileId: "next_localhost" },
-        ],
+        preparedRepositories: [browserRepository],
         runner: passingRunner(),
         checkpointService: checkpointService(),
         remotePushService: remotePushService(),
@@ -753,7 +953,7 @@ describe("controlled DevOps validator", () => {
             throw new Error("visual provider failed sk-secret at /Users/example");
           },
         },
-      }).validate(task),
+      }).validate(taskWithChangedPath("app/page.tsx")),
       (error: unknown) =>
         error instanceof ApplicationError &&
         error.code === "INTERNAL_ERROR" &&
