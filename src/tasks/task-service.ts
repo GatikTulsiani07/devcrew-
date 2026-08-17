@@ -45,6 +45,7 @@ import {
   type WorkflowResumeMetadata,
   type WorkflowResumeStage,
 } from "./workflow-resume.js";
+import { deriveTaskOutcome } from "./task-outcome.js";
 import type {
   CancellationStage,
   CreateTaskInput,
@@ -170,7 +171,7 @@ export function createTaskService({
         throw new ApplicationError("TASK_NOT_FOUND", 404, "Task not found");
       }
 
-      return copyTask(task);
+      return withTaskOutcome(task);
     },
 
     async decidePlan(projectId, taskId, input) {
@@ -1152,6 +1153,15 @@ function withResume(
   return {
     ...copyTask(task),
     resume: copyResumeMetadata(resume),
+  };
+}
+
+function withTaskOutcome(task: TaskSnapshot): TaskSnapshot {
+  const copied = copyTask(task);
+
+  return {
+    ...copied,
+    taskOutcome: deriveTaskOutcome(copied),
   };
 }
 

@@ -55,6 +55,23 @@ function fixedRequestId(): string {
   return "req_task_test";
 }
 
+function withoutTaskOutcome<T>(body: T): T {
+  const copy = structuredClone(body);
+
+  if (
+    typeof copy === "object" &&
+    copy !== null &&
+    "task" in copy &&
+    typeof copy.task === "object" &&
+    copy.task !== null &&
+    "taskOutcome" in copy.task
+  ) {
+    delete copy.task.taskOutcome;
+  }
+
+  return copy;
+}
+
 interface TestAppOptions {
   planner?: ManagerPlanner;
   developerExecutor?: DeveloperExecutor;
@@ -548,6 +565,18 @@ describe("task manager planning API", () => {
             "Validate build",
             "Prepare for review",
           ],
+        },
+        taskOutcome: {
+          outcome: "IN_PROGRESS",
+          implementationCompleted: false,
+          validationPassed: false,
+          visualReviewPassed: null,
+          reviewerPassed: false,
+          pullRequestCreated: false,
+          repairAttempts: 0,
+          retryAttempts: 0,
+          changedFileCount: null,
+          completedAt: null,
         },
         createdAt: "2026-08-03T01:00:00.000Z",
         updatedAt: "2026-08-03T01:00:00.000Z",
@@ -1143,7 +1172,20 @@ describe("task manager planning API", () => {
     );
 
     assert.equal(read.status, 200);
-    assert.deepEqual(await read.json(), await executed.json());
+    const readBody = await read.json();
+    assert.deepEqual(readBody.task.taskOutcome, {
+      outcome: "IN_PROGRESS",
+      implementationCompleted: true,
+      validationPassed: false,
+      visualReviewPassed: null,
+      reviewerPassed: false,
+      pullRequestCreated: false,
+      repairAttempts: 0,
+      retryAttempts: 0,
+      changedFileCount: null,
+      completedAt: null,
+    });
+    assert.deepEqual(withoutTaskOutcome(readBody), await executed.json());
   });
 
   it("preserves safe repository change summary on task reads without raw diffs", async () => {
@@ -1709,7 +1751,20 @@ describe("task manager planning API", () => {
     );
 
     assert.equal(read.status, 200);
-    assert.deepEqual(await read.json(), await validated.json());
+    const readBody = await read.json();
+    assert.deepEqual(readBody.task.taskOutcome, {
+      outcome: "IN_PROGRESS",
+      implementationCompleted: true,
+      validationPassed: true,
+      visualReviewPassed: null,
+      reviewerPassed: false,
+      pullRequestCreated: false,
+      repairAttempts: 0,
+      retryAttempts: 0,
+      changedFileCount: null,
+      completedAt: null,
+    });
+    assert.deepEqual(withoutTaskOutcome(readBody), await validated.json());
   });
 
   it("preserves validation selection evidence on later task reads", async () => {
@@ -1848,7 +1903,7 @@ describe("task manager planning API", () => {
 
     assert.equal(validated.status, 200);
     assert.equal(read.status, 200);
-    assert.deepEqual(await read.json(), await validated.json());
+    assert.deepEqual(withoutTaskOutcome(await read.json()), await validated.json());
     assert.equal(body.includes("visualReview"), true);
     assert.equal(body.includes("The requested sidebar is not visible."), true);
     assert.equal(body.includes("absolutePath"), false);
@@ -1931,7 +1986,7 @@ describe("task manager planning API", () => {
       commitSha: "0123456789abcdef0123456789abcdef01234567",
       pushedAt: "2026-08-03T07:01:00.000Z",
     });
-    assert.deepEqual(await read.json(), validatedBody);
+    assert.deepEqual(withoutTaskOutcome(await read.json()), validatedBody);
   });
 
   it("rejects validation while waiting for approval", async () => {
@@ -2358,7 +2413,20 @@ describe("task manager planning API", () => {
     );
 
     assert.equal(read.status, 200);
-    assert.deepEqual(await read.json(), await reviewed.json());
+    const readBody = await read.json();
+    assert.deepEqual(readBody.task.taskOutcome, {
+      outcome: "IN_PROGRESS",
+      implementationCompleted: true,
+      validationPassed: true,
+      visualReviewPassed: null,
+      reviewerPassed: true,
+      pullRequestCreated: false,
+      repairAttempts: 0,
+      retryAttempts: 0,
+      changedFileCount: null,
+      completedAt: null,
+    });
+    assert.deepEqual(withoutTaskOutcome(readBody), await reviewed.json());
   });
 
   it("rejects review while waiting for approval", async () => {
@@ -3006,6 +3074,18 @@ describe("task manager planning API", () => {
     assert.equal(body.task.validation.durationMs, 19);
     assert.equal(body.task.review.durationMs, 5);
     assert.equal(body.task.pullRequest.durationMs, 5);
+    assert.deepEqual(body.task.taskOutcome, {
+      outcome: "SUCCEEDED",
+      implementationCompleted: true,
+      validationPassed: true,
+      visualReviewPassed: null,
+      reviewerPassed: true,
+      pullRequestCreated: true,
+      repairAttempts: 0,
+      retryAttempts: 0,
+      changedFileCount: null,
+      completedAt: "2026-08-03T07:00:00.000Z",
+    });
     assert.equal(pullRequestCalls, 1);
     assert.equal(JSON.stringify(body).includes("999999"), false);
   });
