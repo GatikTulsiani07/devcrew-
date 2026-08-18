@@ -310,6 +310,13 @@ export function classifyRetryFailure(
 
   if (
     error instanceof ApplicationError &&
+    error.code === "DEVELOPER_ROLLBACK_FAILED"
+  ) {
+    return classification(fallbackStage, "REPOSITORY_MISMATCH", false);
+  }
+
+  if (
+    error instanceof ApplicationError &&
     error.code === "VALIDATION_EVIDENCE_STALE"
   ) {
     return classification(fallbackStage, "REPOSITORY_MISMATCH", false);

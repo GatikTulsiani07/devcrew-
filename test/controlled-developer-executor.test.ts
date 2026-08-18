@@ -16,6 +16,7 @@ import { ApplicationError } from "../src/errors.js";
 import type { ProjectService } from "../src/projects/project-service.js";
 import type { GitInspector } from "../src/repositories/git-inspector.js";
 import type { RepositoryWorkspace } from "../src/repositories/controlled-repository-workspace.js";
+import type { DeveloperRollbackService } from "../src/repositories/developer-rollback.js";
 import type { PreparedRepository } from "../src/repositories/prepared-repositories.js";
 import {
   createControlledDeveloperExecutor,
@@ -135,6 +136,7 @@ function executor(
     planner?: DeveloperImplementationPlanner;
     gitInspector?: GitInspector;
     workspace?: RepositoryWorkspace;
+    rollbackService?: DeveloperRollbackService;
   } = {},
 ) {
   return createControlledDeveloperExecutor({
@@ -143,9 +145,33 @@ function executor(
     planner: overrides.planner ?? planner(plan),
     ...(overrides.workspace === undefined ? {} : { workspace: overrides.workspace }),
     gitInspector: overrides.gitInspector ?? stubGitInspector(),
+    rollbackService: overrides.rollbackService ?? noopRollbackService(),
     generateExecutionId: () => "exec_000001",
     now: () => new Date("2026-08-03T02:00:00.000Z"),
   });
+}
+
+function noopRollbackService(): DeveloperRollbackService {
+  return {
+    async captureBaseline() {
+      return {
+        headSha: "1111111111111111111111111111111111111111",
+        branch: "main",
+        repositoryChangesBefore: {
+          filesChanged: [],
+          filesAdded: [],
+          filesModified: [],
+          filesDeleted: [],
+          totalFilesChanged: 0,
+          insertions: 0,
+          deletions: 0,
+        },
+        capturedAt: "2026-08-03T02:00:00.000Z",
+        snapshots: [],
+      };
+    },
+    async rollback() {},
+  };
 }
 
 before(async () => {
@@ -162,6 +188,7 @@ after(async () => {
 describe("controlled developer executor", () => {
   it("creates and updates files and returns authoritative evidence", async () => {
     await writeFile(join(repositoryRoot, "existing.ts"), "old", "utf8");
+    let rollbackCalls = 0;
 
     const execution = await executor({
       summary: "Implemented the approved authentication change.",
@@ -174,6 +201,13 @@ describe("controlled developer executor", () => {
         { type: "update", path: "existing.ts", content: "new" },
       ],
       verification: ["Run typecheck", "Run tests"],
+    }, {
+      rollbackService: {
+        ...(noopRollbackService()),
+        async rollback() {
+          rollbackCalls += 1;
+        },
+      },
     }).execute(developerInput());
 
     assert.deepEqual(execution, {
@@ -215,6 +249,7 @@ describe("controlled developer executor", () => {
       "export const middleware = true;\n",
     );
     assert.equal(await readFile(join(repositoryRoot, "existing.ts"), "utf8"), "new");
+    assert.equal(rollbackCalls, 0);
   });
 
   it("rejects unsafe paths without mutating the repository", async () => {
@@ -376,10 +411,30 @@ describe("controlled developer executor", () => {
               applied = true;
               return {
                 operations: [{ type: "create", path: "cancelled.ts" }],
-                async rollback() {
-                  rolledBack = true;
-                },
+                async rollback() {},
               };
+            },
+          },
+          rollbackService: {
+            async captureBaseline() {
+              return {
+                headSha: "1111111111111111111111111111111111111111",
+                branch: "main",
+                repositoryChangesBefore: {
+                  filesChanged: [],
+                  filesAdded: [],
+                  filesModified: [],
+                  filesDeleted: [],
+                  totalFilesChanged: 0,
+                  insertions: 0,
+                  deletions: 0,
+                },
+                capturedAt: "2026-08-03T02:00:00.000Z",
+                snapshots: [],
+              };
+            },
+            async rollback() {
+              rolledBack = true;
             },
           },
           gitInspector: {
