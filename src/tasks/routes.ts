@@ -7,6 +7,13 @@ import {
   type RequestIdEnv,
 } from "../http/route-support.js";
 import {
+  createTaskIdempotencyStore,
+  IDEMPOTENCY_KEY_HEADER,
+  validateIdempotencyKey,
+  type TaskIdempotencyOperation,
+  type TaskIdempotencyStore,
+} from "./task-idempotency.js";
+import {
   cancelTaskPathParamsSchema,
   cancelTaskRequestSchema,
   createTaskPathParamsSchema,
@@ -31,8 +38,17 @@ import {
 } from "./contracts.js";
 import type { TaskService } from "./task-service.js";
 
-export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
+export interface TaskRoutesOptions {
+  idempotencyStore?: TaskIdempotencyStore;
+}
+
+export function createTaskRoutes(
+  taskService: TaskService,
+  options: TaskRoutesOptions = {},
+): Hono<RequestIdEnv> {
   const routes = new Hono<RequestIdEnv>();
+  const idempotencyStore =
+    options.idempotencyStore ?? createTaskIdempotencyStore();
 
   routes.post("/:projectId/tasks", async (c) => {
     const params = createTaskPathParamsSchema.safeParse({
@@ -98,9 +114,19 @@ export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
       throw validationError();
     }
 
-    const task = await taskService.executeTask(
-      params.data.projectId,
-      params.data.taskId,
+    const task = await withTaskIdempotency(
+      idempotencyStore,
+      {
+        projectId: params.data.projectId,
+        taskId: params.data.taskId,
+        operation: "EXECUTE",
+      },
+      c.req.header(IDEMPOTENCY_KEY_HEADER),
+      () =>
+        taskService.executeTask(
+          params.data.projectId,
+          params.data.taskId,
+        ),
     );
     return c.json({ task });
   });
@@ -117,9 +143,19 @@ export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
       throw validationError();
     }
 
-    const task = await taskService.validateTask(
-      params.data.projectId,
-      params.data.taskId,
+    const task = await withTaskIdempotency(
+      idempotencyStore,
+      {
+        projectId: params.data.projectId,
+        taskId: params.data.taskId,
+        operation: "VALIDATE",
+      },
+      c.req.header(IDEMPOTENCY_KEY_HEADER),
+      () =>
+        taskService.validateTask(
+          params.data.projectId,
+          params.data.taskId,
+        ),
     );
     return c.json({ task });
   });
@@ -136,9 +172,19 @@ export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
       throw validationError();
     }
 
-    const task = await taskService.reviewTask(
-      params.data.projectId,
-      params.data.taskId,
+    const task = await withTaskIdempotency(
+      idempotencyStore,
+      {
+        projectId: params.data.projectId,
+        taskId: params.data.taskId,
+        operation: "REVIEW",
+      },
+      c.req.header(IDEMPOTENCY_KEY_HEADER),
+      () =>
+        taskService.reviewTask(
+          params.data.projectId,
+          params.data.taskId,
+        ),
     );
     return c.json({ task });
   });
@@ -155,9 +201,19 @@ export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
       throw validationError();
     }
 
-    const task = await taskService.retryTask(
-      params.data.projectId,
-      params.data.taskId,
+    const task = await withTaskIdempotency(
+      idempotencyStore,
+      {
+        projectId: params.data.projectId,
+        taskId: params.data.taskId,
+        operation: "RETRY",
+      },
+      c.req.header(IDEMPOTENCY_KEY_HEADER),
+      () =>
+        taskService.retryTask(
+          params.data.projectId,
+          params.data.taskId,
+        ),
     );
     return c.json({ task });
   });
@@ -193,9 +249,19 @@ export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
       throw validationError();
     }
 
-    const task = await taskService.createPullRequest(
-      params.data.projectId,
-      params.data.taskId,
+    const task = await withTaskIdempotency(
+      idempotencyStore,
+      {
+        projectId: params.data.projectId,
+        taskId: params.data.taskId,
+        operation: "PULL_REQUEST_CREATE",
+      },
+      c.req.header(IDEMPOTENCY_KEY_HEADER),
+      () =>
+        taskService.createPullRequest(
+          params.data.projectId,
+          params.data.taskId,
+        ),
     );
     return c.json({ task });
   });
@@ -212,9 +278,19 @@ export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
       throw validationError();
     }
 
-    const task = await taskService.refreshPullRequest(
-      params.data.projectId,
-      params.data.taskId,
+    const task = await withTaskIdempotency(
+      idempotencyStore,
+      {
+        projectId: params.data.projectId,
+        taskId: params.data.taskId,
+        operation: "PULL_REQUEST_REFRESH",
+      },
+      c.req.header(IDEMPOTENCY_KEY_HEADER),
+      () =>
+        taskService.refreshPullRequest(
+          params.data.projectId,
+          params.data.taskId,
+        ),
     );
     return c.json({ task });
   });
@@ -231,12 +307,39 @@ export function createTaskRoutes(taskService: TaskService): Hono<RequestIdEnv> {
       throw validationError();
     }
 
-    const task = await taskService.resumeTask(
-      params.data.projectId,
-      params.data.taskId,
+    const task = await withTaskIdempotency(
+      idempotencyStore,
+      {
+        projectId: params.data.projectId,
+        taskId: params.data.taskId,
+        operation: "RESUME",
+      },
+      c.req.header(IDEMPOTENCY_KEY_HEADER),
+      () =>
+        taskService.resumeTask(
+          params.data.projectId,
+          params.data.taskId,
+        ),
     );
     return c.json({ task });
   });
 
   return routes;
+}
+
+function withTaskIdempotency<T>(
+  idempotencyStore: TaskIdempotencyStore,
+  scope: {
+    projectId: string;
+    taskId: string;
+    operation: TaskIdempotencyOperation;
+  },
+  rawKey: string | undefined,
+  execute: () => Promise<T>,
+): Promise<T> {
+  return idempotencyStore.run(
+    scope,
+    validateIdempotencyKey(rawKey),
+    execute,
+  );
 }

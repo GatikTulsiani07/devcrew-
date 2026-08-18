@@ -147,7 +147,7 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
         c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         c.header(
           "Access-Control-Allow-Headers",
-          "Content-Type, Accept, Last-Event-ID, X-Request-Id",
+          "Content-Type, Accept, Last-Event-ID, X-Request-Id, Idempotency-Key",
         );
         c.header("Access-Control-Expose-Headers", "X-Request-Id");
         c.header("Access-Control-Max-Age", "600");

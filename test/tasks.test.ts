@@ -3954,6 +3954,439 @@ describe("workflow resume API", () => {
   });
 });
 
+describe("task route idempotency", () => {
+  it("accepts valid Idempotency-Key on execute and replays the original response", async () => {
+    const developerCalls = { calls: 0 };
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(developerCalls),
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const first = await executeTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "execute-key-1" },
+    });
+    const firstBody = await first.json();
+    assert.equal((await validateTask(app)).status, 200);
+    const replay = await executeTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "execute-key-1" },
+    });
+    const replayBody = await replay.json();
+
+    assert.equal(first.status, 200);
+    assert.equal(replay.status, 200);
+    assert.deepEqual(replayBody, firstBody);
+    assert.equal(replayBody.task.status, "IMPLEMENTATION_COMPLETED");
+    assert.equal(developerCalls.calls, 1);
+  });
+
+  it("preserves current behavior when the key is missing and ignores query keys", async () => {
+    let developerCalls = 0;
+    const app = createTestApp({
+      developerExecutor: {
+        async execute(): Promise<TaskExecution> {
+          developerCalls += 1;
+          return developerExecution(`exec_${developerCalls}`);
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const first = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001/execute?Idempotency-Key=query-key",
+      { method: "POST" },
+    );
+    const second = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001/execute?Idempotency-Key=query-key",
+      { method: "POST" },
+    );
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 409);
+    assert.equal((await second.json()).error.code, "INVALID_TASK_TRANSITION");
+    assert.equal(developerCalls, 1);
+  });
+
+  it("rejects malformed Idempotency-Key values before mutation", async () => {
+    let developerCalls = 0;
+    const app = createTestApp({
+      developerExecutor: {
+        async execute(): Promise<TaskExecution> {
+          developerCalls += 1;
+          return developerExecution("exec_should_not_run");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    for (const key of ["", " ", "a".repeat(129), "unsafe key"]) {
+      const response = await executeTask(app, "proj_000001", "task_000001", {
+        headers: { "Idempotency-Key": key },
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 400);
+      assert.equal(body.error.code, "INVALID_IDEMPOTENCY_KEY");
+      if (key.trim() !== "") {
+        assert.equal(JSON.stringify(body).includes(key), false);
+      }
+    }
+
+    assert.equal(developerCalls, 0);
+  });
+
+  it("rejects body-supplied idempotency keys through existing strict schemas", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const response = await executeTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idempotencyKey: "body-key" }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+
+  it("replays validate and review with the same key without rerunning agents", async () => {
+    let validationCalls = 0;
+    let reviewerCalls = 0;
+    const app = createTestApp({
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          validationCalls += 1;
+          return {
+            ...validationWithPassedVisualReview(),
+            id: `val_${validationCalls}`,
+          };
+        },
+      },
+      taskReviewer: {
+        async review(): Promise<Awaited<ReturnType<TaskReviewer["review"]>>> {
+          reviewerCalls += 1;
+          return {
+            id: `review_${reviewerCalls}`,
+            role: "REVIEWER",
+            status: "COMPLETED",
+            verdict: "APPROVED",
+            attempt: 1,
+            startedAt: "2026-08-03T06:00:00.000Z",
+            completedAt: "2026-08-03T07:00:00.000Z",
+            summary: "Reviewer approved the completed work.",
+            findings: [],
+          };
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const validated = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "validate-key" },
+    });
+    const validatedReplay = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "validate-key" },
+    });
+    const reviewed = await reviewTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "review-key" },
+    });
+    const reviewedReplay = await reviewTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "review-key" },
+    });
+
+    assert.equal(validated.status, 200);
+    assert.equal(validatedReplay.status, 200);
+    assert.deepEqual(await validatedReplay.json(), await validated.json());
+    assert.equal(reviewed.status, 200);
+    assert.equal(reviewedReplay.status, 200);
+    assert.deepEqual(await reviewedReplay.json(), await reviewed.json());
+    assert.equal(validationCalls, 1);
+    assert.equal(reviewerCalls, 1);
+  });
+
+  it("replays retry with the same key without consuming another retry attempt", async () => {
+    let developerCalls = 0;
+    const app = createTestApp({
+      developerExecutor: {
+        async execute(): Promise<TaskExecution> {
+          developerCalls += 1;
+          if (developerCalls === 1) {
+            throw createRetryStageFailure("DEVELOPER", "PROVIDER_TIMEOUT", true);
+          }
+          return developerExecution(`exec_retry_${developerCalls}`);
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 500);
+
+    const retried = await retryTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "retry-key" },
+    });
+    const replay = await retryTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "retry-key" },
+    });
+    const replayBody = await replay.json();
+
+    assert.equal(retried.status, 200);
+    assert.equal(replay.status, 200);
+    assert.deepEqual(replayBody, await retried.json());
+    assert.equal(replayBody.task.retryRecovery.attempts.length, 2);
+    assert.equal(developerCalls, 2);
+  });
+
+  it("replays resume with the same key without advancing another stage", async () => {
+    const developerCalls = { calls: 0 };
+    let validationCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(developerCalls),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          validationCalls += 1;
+          return validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const first = await resumeTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "resume-key" },
+    });
+    const replay = await resumeTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "resume-key" },
+    });
+    const replayBody = await replay.json();
+
+    assert.equal(first.status, 200);
+    assert.equal(replay.status, 200);
+    assert.deepEqual(replayBody, await first.json());
+    assert.equal(replayBody.task.status, "IMPLEMENTATION_COMPLETED");
+    assert.equal(developerCalls.calls, 1);
+    assert.equal(validationCalls, 0);
+  });
+
+  it("scopes the same key by task, project, and operation", async () => {
+    let developerCalls = 0;
+    let validationCalls = 0;
+    const app = createTestApp({
+      developerExecutor: {
+        async execute(input): Promise<TaskExecution> {
+          developerCalls += 1;
+          return developerExecution(`exec_${input.task.projectId}_${input.task.id}`);
+        },
+      },
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          validationCalls += 1;
+          return validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" }, "proj_000001", "task_000002")).status, 200);
+    assert.equal(
+      (
+        await createProject(app, {
+          name: "Other",
+          publicRepositoryUrl: "https://github.com/example/other",
+          preparedRepositoryId: "prepared_other",
+        })
+      ).status,
+      201,
+    );
+    assert.equal((await createTask(app, "proj_000002")).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" }, "proj_000002", "task_000003")).status, 200);
+
+    assert.equal((await executeTask(app, "proj_000001", "task_000001", { headers: { "Idempotency-Key": "shared" } })).status, 200);
+    assert.equal((await executeTask(app, "proj_000001", "task_000002", { headers: { "Idempotency-Key": "shared" } })).status, 200);
+    assert.equal((await executeTask(app, "proj_000002", "task_000003", { headers: { "Idempotency-Key": "shared" } })).status, 200);
+    assert.equal((await validateTask(app, "proj_000001", "task_000001", { headers: { "Idempotency-Key": "shared" } })).status, 200);
+
+    assert.equal(developerCalls, 3);
+    assert.equal(validationCalls, 1);
+  });
+
+  it("shares concurrent same-key execute before the lock and keeps different-key lock behavior", async () => {
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    let developerCalls = 0;
+    const app = createTestApp({
+      developerExecutor: {
+        async execute(): Promise<TaskExecution> {
+          developerCalls += 1;
+          started.resolve();
+          await finish.promise;
+          return developerExecution("exec_idempotent_concurrent");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const first = executeTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "concurrent-key" },
+    });
+    await started.promise;
+    const sameKey = executeTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "concurrent-key" },
+    });
+    const differentKey = await executeTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "different-key" },
+    });
+
+    assert.equal(differentKey.status, 409);
+    assert.equal((await differentKey.json()).error.code, "TASK_EXECUTION_IN_PROGRESS");
+    finish.resolve();
+    const firstBody = await (await first).json();
+    const sameKeyResponse = await sameKey;
+
+    assert.equal(sameKeyResponse.status, 200);
+    assert.deepEqual(await sameKeyResponse.json(), firstBody);
+    assert.equal(developerCalls, 1);
+  });
+
+  it("shares concurrent same-key validation before the lock", async () => {
+    const started = deferred<void>();
+    const finish = deferred<void>();
+    let validationCalls = 0;
+    const app = createTestApp({
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          validationCalls += 1;
+          started.resolve();
+          await finish.promise;
+          return validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const first = validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "concurrent-validation-key" },
+    });
+    await started.promise;
+    const sameKey = validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "concurrent-validation-key" },
+    });
+
+    finish.resolve();
+    const firstBody = await (await first).json();
+    const sameKeyResponse = await sameKey;
+
+    assert.equal(sameKeyResponse.status, 200);
+    assert.deepEqual(await sameKeyResponse.json(), firstBody);
+    assert.equal(validationCalls, 1);
+  });
+
+  it("does not duplicate activity events on same-key replay", async () => {
+    const activityStore = new InMemoryActivityStore();
+    const activityService = createActivityService({ store: activityStore });
+    const app = createTestApp({ activityService });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    assert.equal((await executeTask(app, "proj_000001", "task_000001", { headers: { "Idempotency-Key": "activity-key" } })).status, 200);
+    assert.equal((await executeTask(app, "proj_000001", "task_000001", { headers: { "Idempotency-Key": "activity-key" } })).status, 200);
+
+    const activity = await app.request("/api/v1/projects/proj_000001/activity");
+    const events = (await activity.json()).events as Array<{ type: string }>;
+    assert.equal(
+      events.filter((event) => event.type === "IMPLEMENTATION_COMPLETED").length,
+      1,
+    );
+  });
+
+  it("does not cache failed, timeout, or cancelled operations as success", async () => {
+    let developerCalls = 0;
+    const app = createTestApp({
+      developerExecutor: {
+        async execute(): Promise<TaskExecution> {
+          developerCalls += 1;
+          if (developerCalls === 1) {
+            throw createRetryStageFailure("DEVELOPER", "PROVIDER_TIMEOUT", true);
+          }
+          return developerExecution(`exec_${developerCalls}`);
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    assert.equal((await executeTask(app, "proj_000001", "task_000001", { headers: { "Idempotency-Key": "failure-key" } })).status, 500);
+    assert.equal((await retryTask(app, "proj_000001", "task_000001")).status, 200);
+
+    const started = deferred<void>();
+    const cancellationApp = createTestApp({
+      developerExecutor: {
+        async execute(input): Promise<TaskExecution> {
+          started.resolve();
+          return await new Promise<TaskExecution>((_resolve, reject) => {
+            input.signal?.addEventListener(
+              "abort",
+              () => reject(input.signal?.reason),
+              { once: true },
+            );
+          });
+        },
+      },
+    });
+    assert.equal((await createProject(cancellationApp)).status, 201);
+    assert.equal((await createTask(cancellationApp)).status, 201);
+    assert.equal((await decidePlan(cancellationApp, { decision: "APPROVE" })).status, 200);
+    const running = executeTask(cancellationApp, "proj_000001", "task_000001", { headers: { "Idempotency-Key": "cancel-key" } });
+    await started.promise;
+    assert.equal((await cancelTask(cancellationApp)).status, 200);
+    assert.equal((await running).status, 409);
+
+    const timeoutApp = createTestApp({
+      developerExecutor: {
+        async execute(): Promise<TaskExecution> {
+          return developerExecution("exec_late_timeout");
+        },
+      },
+      createExecutionBudget: () =>
+        createTaskExecutionBudget({
+          now: (() => {
+            let count = 0;
+            return () => {
+              count += 1;
+              return count === 1 ? 0 : 20;
+            };
+          })(),
+          timeoutMs: 10,
+        }),
+    });
+    assert.equal((await createProject(timeoutApp)).status, 201);
+    assert.equal((await createTask(timeoutApp)).status, 201);
+    assert.equal((await decidePlan(timeoutApp, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(timeoutApp, "proj_000001", "task_000001", { headers: { "Idempotency-Key": "timeout-key" } })).status, 500);
+
+    assert.equal(developerCalls, 2);
+  });
+});
+
 function developerExecution(id: string): TaskExecution {
   return {
     id,
