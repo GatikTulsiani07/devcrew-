@@ -18,6 +18,13 @@ import {
 } from "../repositories/repository-drift.js";
 import type { ValidationSelectionEvidence } from "../validation/validation-selection.js";
 import {
+  createNoopValidationIntegrityService,
+  ValidationIntegrityError,
+  VALIDATION_INTEGRITY_SUMMARY,
+  type ValidationIntegrityEvidence,
+  type ValidationIntegrityService,
+} from "../validation/validation-integrity.js";
+import {
   createVisualRepairOrchestrator,
 } from "../orchestration/visual-repair-orchestrator.js";
 import {
@@ -86,6 +93,7 @@ export interface TaskServiceDependencies {
   createExecutionBudget?: () => TaskExecutionBudget;
   durationClock?: MonotonicClock;
   repositoryDriftVerifier?: RepositoryDriftVerifier;
+  validationIntegrityService?: ValidationIntegrityService;
 }
 
 export interface TaskService {
@@ -125,6 +133,7 @@ export function createTaskService({
   createExecutionBudget = () => createTaskExecutionBudget(),
   durationClock,
   repositoryDriftVerifier = createNoopRepositoryDriftVerifier(),
+  validationIntegrityService = createNoopValidationIntegrityService(),
 }: TaskServiceDependencies): TaskService {
   const retryOrchestrator = createRetryOrchestrator({
     store,
@@ -263,6 +272,9 @@ export function createTaskService({
           if (isRepositoryDriftApplicationError(error)) {
             throw error;
           }
+          if (isValidationIntegrityApplicationError(error)) {
+            throw error;
+          }
           const latest = await latestTaskOr(task);
           await retryOrchestrator.recordFailure(
             latest,
@@ -313,6 +325,9 @@ export function createTaskService({
             throw error;
           }
           if (isRepositoryDriftApplicationError(error)) {
+            throw error;
+          }
+          if (isValidationIntegrityApplicationError(error)) {
             throw error;
           }
           const latest = await latestTaskOr(task);
@@ -373,6 +388,9 @@ export function createTaskService({
             throw error;
           }
           if (isRepositoryDriftApplicationError(error)) {
+            throw error;
+          }
+          if (isValidationIntegrityApplicationError(error)) {
             throw error;
           }
           const latest = await latestTaskOr(task);
@@ -510,6 +528,9 @@ export function createTaskService({
           if (isRepositoryDriftApplicationError(error)) {
             throw error;
           }
+          if (isValidationIntegrityApplicationError(error)) {
+            throw error;
+          }
           const latest = await latestTaskOr(task);
           await retryOrchestrator.recordFailure(
             latest,
@@ -550,6 +571,9 @@ export function createTaskService({
         try {
           budget.throwIfExpired("PULL_REQUEST");
           await assertNoRepositoryDrift(project, task, "PULL_REQUEST", {
+            signal: budget.composeSignal(undefined, "PULL_REQUEST"),
+          });
+          await assertValidationIntegrity(project, task, "PULL_REQUEST", {
             signal: budget.composeSignal(undefined, "PULL_REQUEST"),
           });
           pullRequest = await refreshPullRequestEvidence(
@@ -609,6 +633,22 @@ export function createTaskService({
 
           if (drifted !== undefined) {
             return withResume(drifted, {
+              resumable: false,
+              lastCompletedStage: resume.lastCompletedStage,
+              nextStage: null,
+              reason: "REPOSITORY_STATE_MISMATCH",
+            });
+          }
+
+          const staleValidation =
+            await persistValidationIntegrityFailureIfPresent(
+              project,
+              task,
+              retryStageForResume(resume.nextStage),
+            );
+
+          if (staleValidation !== undefined) {
+            return withResume(staleValidation, {
               resumable: false,
               lastCompletedStage: resume.lastCompletedStage,
               nextStage: null,
@@ -820,17 +860,37 @@ export function createTaskService({
     budget?.throwIfExpired(currentWorkflowStage(active, "DEVOPS"));
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
+    const integrityBoundValidation =
+      await validationIntegrityService.bindValidation({
+        project,
+        task: copyTask(task),
+        validation,
+        signal:
+          signal ??
+          budget?.composeSignal(
+            active?.signal,
+            currentWorkflowStage(active, "DEVOPS"),
+          ) ??
+          active?.signal,
+      });
+    budget?.throwIfExpired(currentWorkflowStage(active, "DEVOPS"));
+    throwIfSignalCancelled(signal);
+    active?.throwIfCancelled();
     const timestamp = now().toISOString();
     const updatedTask: TaskSnapshot = {
       ...copyTask(task),
       status: "VALIDATION_COMPLETED",
-      validation,
+      validation: integrityBoundValidation,
       workflowFailure: undefined,
       updatedAt: timestamp,
     };
 
     const validatedTask = copyTask(await store.update(updatedTask));
-    await appendValidationActivity(task.projectId, task.id, validation);
+    await appendValidationActivity(
+      task.projectId,
+      task.id,
+      integrityBoundValidation,
+    );
 
     const repairedTask = await createVisualRepairOrchestrator({
       project,
@@ -840,6 +900,7 @@ export function createTaskService({
       now,
       activityService,
       durationClock,
+      validationIntegrityService,
       signal:
         signal ??
         budget?.composeSignal(active?.signal, currentWorkflowStage(active, "DEVOPS")) ??
@@ -870,6 +931,12 @@ export function createTaskService({
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     await assertNoRepositoryDrift(project, task, "REVIEWER", {
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "REVIEWER") ??
+        active?.signal,
+    });
+    await assertValidationIntegrity(project, task, "REVIEWER", {
       signal:
         signal ??
         budget?.composeSignal(active?.signal, "REVIEWER") ??
@@ -924,6 +991,12 @@ export function createTaskService({
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     await assertNoRepositoryDrift(project, task, "PULL_REQUEST", {
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "PULL_REQUEST") ??
+        active?.signal,
+    });
+    await assertValidationIntegrity(project, task, "PULL_REQUEST", {
       signal:
         signal ??
         budget?.composeSignal(active?.signal, "PULL_REQUEST") ??
@@ -1032,6 +1105,12 @@ export function createTaskService({
         budget?.composeSignal(active?.signal, "CHECKPOINT") ??
         active?.signal,
     });
+    await assertValidationIntegrity(undefined, task, "CHECKPOINT", {
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "CHECKPOINT") ??
+        active?.signal,
+    });
     budget?.throwIfExpired("CHECKPOINT");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -1080,6 +1159,9 @@ export function createTaskService({
     await assertNoRepositoryDrift(undefined, task, "CHECKPOINT", {
       signal: budget.composeSignal(active.signal, "CHECKPOINT"),
     });
+    await assertValidationIntegrity(undefined, task, "CHECKPOINT", {
+      signal: budget.composeSignal(active.signal, "CHECKPOINT"),
+    });
     budget.throwIfExpired("CHECKPOINT");
     active.throwIfCancelled();
     const validation = await devOpsValidator.publishValidatedTask(copyTask(task), {
@@ -1121,6 +1203,72 @@ export function createTaskService({
 
     if (drifted !== undefined) {
       throw repositoryDriftApplicationError();
+    }
+  }
+
+  async function assertValidationIntegrity(
+    project:
+      | Awaited<ReturnType<ProjectService["getProject"]>>
+      | undefined,
+    task: TaskSnapshot,
+    stage: RetryStage,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const stale = await persistValidationIntegrityFailureIfPresent(
+      project ?? (await projectService.getProject(task.projectId)),
+      task,
+      stage,
+      options.signal,
+    );
+
+    if (stale !== undefined) {
+      throw validationIntegrityApplicationError();
+    }
+  }
+
+  async function persistValidationIntegrityFailureIfPresent(
+    project:
+      | Awaited<ReturnType<ProjectService["getProject"]>>
+      | undefined,
+    task: TaskSnapshot,
+    stage: RetryStage,
+    signal?: AbortSignal,
+  ): Promise<TaskSnapshot | undefined> {
+    const resolvedProject =
+      project ?? (await projectService.getProject(task.projectId));
+
+    try {
+      await validationIntegrityService.verifyValidation({
+        project: resolvedProject,
+        task: copyTask(task),
+        signal,
+      });
+      return undefined;
+    } catch (error) {
+      if (isTaskCancellationError(error)) {
+        throw error;
+      }
+      if (!(error instanceof ValidationIntegrityError)) {
+        throw error;
+      }
+
+      const latest = await latestTaskOr(task);
+      const timestamp = now().toISOString();
+      return copyTask(
+        await store.update({
+          ...copyTask(latest),
+          workflowFailure: createWorkflowFailureEvidence(
+            {
+              stage,
+              category: "REPOSITORY_MISMATCH",
+              retryable: false,
+              summary: VALIDATION_INTEGRITY_SUMMARY,
+            },
+            timestamp,
+          ),
+          updatedAt: timestamp,
+        }),
+      );
     }
   }
 
@@ -1395,6 +1543,21 @@ function isRepositoryDriftApplicationError(error: unknown): boolean {
   return error instanceof ApplicationError && error.code === "REPOSITORY_DRIFT";
 }
 
+function validationIntegrityApplicationError(): ApplicationError {
+  return new ApplicationError(
+    "VALIDATION_EVIDENCE_STALE",
+    409,
+    VALIDATION_INTEGRITY_SUMMARY,
+  );
+}
+
+function isValidationIntegrityApplicationError(error: unknown): boolean {
+  return (
+    error instanceof ApplicationError &&
+    error.code === "VALIDATION_EVIDENCE_STALE"
+  );
+}
+
 function isDevOpsPublisher(
   devOpsValidator: DevOpsValidator,
 ): devOpsValidator is DevOpsValidator & DevOpsPublisher {
@@ -1456,6 +1619,17 @@ function copyRepositoryChanges(
     totalFilesChanged: evidence.totalFilesChanged,
     insertions: evidence.insertions,
     deletions: evidence.deletions,
+  };
+}
+
+function copyValidationIntegrity(
+  evidence: ValidationIntegrityEvidence,
+): ValidationIntegrityEvidence {
+  return {
+    repositoryStateId: evidence.repositoryStateId,
+    headSha: evidence.headSha,
+    branch: evidence.branch,
+    validatedAt: evidence.validatedAt,
   };
 }
 
@@ -1551,6 +1725,11 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                   validationSelection: copyValidationSelection(
                     task.validation.validationSelection,
                   ),
+                }),
+            ...(task.validation.integrity === undefined
+              ? {}
+              : {
+                  integrity: copyValidationIntegrity(task.validation.integrity),
                 }),
             ...(task.validation.checkpoint === undefined
               ? {}

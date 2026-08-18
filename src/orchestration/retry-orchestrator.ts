@@ -308,6 +308,13 @@ export function classifyRetryFailure(
     return classification(fallbackStage, "REPOSITORY_MISMATCH", false);
   }
 
+  if (
+    error instanceof ApplicationError &&
+    error.code === "VALIDATION_EVIDENCE_STALE"
+  ) {
+    return classification(fallbackStage, "REPOSITORY_MISMATCH", false);
+  }
+
   if (error instanceof ApplicationError && error.code === "INVALID_TASK_TRANSITION") {
     return classification(fallbackStage, "INVALID_TRANSITION", false);
   }

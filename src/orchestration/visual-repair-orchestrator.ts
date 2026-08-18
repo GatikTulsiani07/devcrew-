@@ -11,6 +11,10 @@ import {
   startWorkflowDurationTimer,
   type MonotonicClock,
 } from "../tasks/workflow-duration.js";
+import {
+  createNoopValidationIntegrityService,
+  type ValidationIntegrityService,
+} from "../validation/validation-integrity.js";
 import type {
   CancellationStage,
   DeveloperExecutor,
@@ -40,6 +44,7 @@ export interface VisualRepairOrchestratorDependencies {
   now?: () => Date;
   activityService: ActivityService;
   durationClock?: MonotonicClock;
+  validationIntegrityService?: ValidationIntegrityService;
   signal?: AbortSignal;
   setStage?: (stage: CancellationStage) => void;
 }
@@ -56,6 +61,7 @@ export function createVisualRepairOrchestrator({
   now = () => new Date(),
   activityService,
   durationClock,
+  validationIntegrityService = createNoopValidationIntegrityService(),
   signal,
   setStage,
 }: VisualRepairOrchestratorDependencies): VisualRepairOrchestrator {
@@ -166,6 +172,12 @@ export function createVisualRepairOrchestrator({
             }),
             validationTimer.finish(),
           );
+          validation = await validationIntegrityService.bindValidation({
+            project,
+            task: taskWithRepairExecution,
+            validation,
+            signal,
+          });
           throwIfSignalCancelled(signal);
           if (
             validation.browserScreenshot === undefined ||

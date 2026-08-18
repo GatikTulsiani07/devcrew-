@@ -17,6 +17,10 @@ import {
   RepositoryDriftError,
   type RepositoryDriftVerifier,
 } from "../src/repositories/repository-drift.js";
+import {
+  ValidationIntegrityError,
+  type ValidationIntegrityService,
+} from "../src/validation/validation-integrity.js";
 import { createDeterministicDeveloperExecutor } from "../src/tasks/deterministic-developer-executor.js";
 import { createDeterministicDevOpsValidator } from "../src/tasks/deterministic-devops-validator.js";
 import { createDeterministicPlanner } from "../src/tasks/deterministic-planner.js";
@@ -87,6 +91,7 @@ interface TestAppOptions {
   createExecutionBudget?: () => TaskExecutionBudget;
   durationClock?: MonotonicClock;
   repositoryDriftVerifier?: RepositoryDriftVerifier;
+  validationIntegrityService?: ValidationIntegrityService;
 }
 
 function createDeterministicProjectService(): ProjectService {
@@ -119,6 +124,7 @@ function createTestApp({
   createExecutionBudget,
   durationClock,
   repositoryDriftVerifier,
+  validationIntegrityService,
 }: TestAppOptions = {}) {
   const projectService = createDeterministicProjectService();
   let taskCount = 0;
@@ -179,6 +185,9 @@ function createTestApp({
       ...(repositoryDriftVerifier === undefined
         ? {}
         : { repositoryDriftVerifier }),
+      ...(validationIntegrityService === undefined
+        ? {}
+        : { validationIntegrityService }),
     }),
     ...(activityService === undefined ? {} : { activityService }),
   });
@@ -400,6 +409,41 @@ function failOnDriftCheck(failingCall: number): RepositoryDriftVerifier {
       calls += 1;
       if (calls === failingCall) {
         throw new RepositoryDriftError("WORKTREE_CHANGED");
+      }
+    },
+  };
+}
+
+function validationIntegrityService(
+  options: {
+    failOnVerifyCall?: number;
+    bind?: (validation: TaskValidation) => TaskValidation;
+    counter?: { bindCalls: number; verifyCalls: number };
+  } = {},
+): ValidationIntegrityService {
+  let verifyCalls = 0;
+
+  return {
+    async bindValidation({ validation }) {
+      if (options.counter !== undefined) options.counter.bindCalls += 1;
+      return (
+        options.bind?.(validation) ?? {
+          ...validation,
+          integrity: {
+            repositoryStateId: "integrity_fixture_state",
+            headSha: "1111111111111111111111111111111111111111",
+            branch: "devcrew/task-task_000001",
+            validatedAt: validation.completedAt,
+          },
+        }
+      );
+    },
+    async verifyValidation() {
+      verifyCalls += 1;
+      if (options.counter !== undefined) options.counter.verifyCalls += 1;
+      if (options.failOnVerifyCall === undefined) return;
+      if (verifyCalls >= options.failOnVerifyCall) {
+        throw new ValidationIntegrityError("WORKTREE_CHANGED");
       }
     },
   };
@@ -2946,6 +2990,51 @@ describe("task manager planning API", () => {
     assert.equal(validationCalls, 2);
   });
 
+  it("binds fresh validation integrity after Visual Repair mutates the repository state", async () => {
+    let validationCalls = 0;
+    const integrityCalls = { bindCalls: 0, verifyCalls: 0 };
+    const devOpsValidator: DevOpsValidator = {
+      async validate(): Promise<TaskValidation> {
+        validationCalls += 1;
+        return validationCalls === 1
+          ? validationWithFailedVisualReviewScreenshot()
+          : validationWithPassedVisualReview();
+      },
+    };
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      devOpsValidator,
+      validationIntegrityService: validationIntegrityService({
+        counter: integrityCalls,
+        bind: (validation) => ({
+          ...validation,
+          integrity: {
+            repositoryStateId: `state_${validation.id}`,
+            headSha: "1111111111111111111111111111111111111111",
+            branch: "devcrew/task-task_000001",
+            validatedAt: validation.completedAt,
+          },
+        }),
+      }),
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.task.visualRepair.outcome, "PASSED");
+    assert.equal(body.task.validation.id, "val_visual_passed");
+    assert.equal(
+      body.task.validation.integrity.repositoryStateId,
+      "state_val_visual_passed",
+    );
+    assert.equal(integrityCalls.bindCalls, 2);
+  });
+
   it("persists independent Visual Repair attempt durations and repair-stage evidence durations", async () => {
     let validationCalls = 0;
     const failedVisualValidation = (
@@ -3938,6 +4027,195 @@ describe("repository drift task integration", () => {
     assert.equal(replay.status, 200);
     assert.deepEqual(await replay.json(), await first.json());
     assert.equal(driftChecks, 1);
+  });
+});
+
+describe("validation integrity task integration", () => {
+  it("records validation integrity evidence and replays the original idempotent validation snapshot", async () => {
+    const calls = { bindCalls: 0, verifyCalls: 0 };
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationIntegrityService: validationIntegrityService({ counter: calls }),
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const first = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "validation-integrity-key" },
+    });
+    const replay = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "validation-integrity-key" },
+    });
+    const firstBody = await first.json();
+    const replayBody = await replay.json();
+
+    assert.equal(first.status, 200);
+    assert.equal(replay.status, 200);
+    assert.deepEqual(replayBody, firstBody);
+    assert.deepEqual(firstBody.task.validation.integrity, {
+      repositoryStateId: "integrity_fixture_state",
+      headSha: "1111111111111111111111111111111111111111",
+      branch: "devcrew/task-task_000001",
+      validatedAt: "2026-08-03T01:00:00.000Z",
+    });
+    assert.equal(calls.bindCalls, 1);
+  });
+
+  it("does not publish checkpoint or push with stale validation evidence", async () => {
+    let publishCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationIntegrityService: validationIntegrityService({
+        failOnVerifyCall: 1,
+      }),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          return validationWithPassedVisualReview();
+        },
+        async publishValidatedTask(): Promise<TaskValidation> {
+          publishCalls += 1;
+          throw new Error("checkpoint should not run with stale validation");
+        },
+      } as DevOpsValidator & DevOpsPublisher,
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app);
+    const read = await app.request("/api/v1/projects/proj_000001/tasks/task_000001");
+    const task = (await read.json()).task;
+
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error.code, "VALIDATION_EVIDENCE_STALE");
+    assert.equal(publishCalls, 0);
+    assert.equal(task.status, "VALIDATION_COMPLETED");
+    assert.equal(task.workflowFailure.stage, "GIT_CHECKPOINT");
+    assert.equal(task.workflowFailure.category, "REPOSITORY_MISMATCH");
+    assert.equal(
+      task.workflowFailure.summary,
+      "Validation evidence no longer matches the authoritative repository state.",
+    );
+  });
+
+  it("does not run Reviewer with stale validation evidence", async () => {
+    let reviewCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationIntegrityService: validationIntegrityService({
+        failOnVerifyCall: 1,
+      }),
+      taskReviewer: {
+        async review(): Promise<Awaited<ReturnType<TaskReviewer["review"]>>> {
+          reviewCalls += 1;
+          throw new Error("reviewer should not run with stale validation");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const response = await reviewTask(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(body.error.code, "VALIDATION_EVIDENCE_STALE");
+    assert.equal(reviewCalls, 0);
+  });
+
+  it("does not call Pull Request creation with stale validation evidence", async () => {
+    let prCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationIntegrityService: validationIntegrityService({
+        failOnVerifyCall: 2,
+      }),
+      pullRequestCreator: {
+        async createPullRequest() {
+          prCalls += 1;
+          throw new Error("GitHub should not be called with stale validation");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+
+    const response = await createPullRequest(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(body.error.code, "VALIDATION_EVIDENCE_STALE");
+    assert.equal(prCalls, 0);
+  });
+
+  it("resume refuses stale validation evidence without advancing the workflow", async () => {
+    let reviewCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationIntegrityService: validationIntegrityService({
+        failOnVerifyCall: 1,
+      }),
+      taskReviewer: {
+        async review(): Promise<Awaited<ReturnType<TaskReviewer["review"]>>> {
+          reviewCalls += 1;
+          throw new Error("reviewer should not run during stale resume");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const response = await resumeTask(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.task.resume, {
+      resumable: false,
+      lastCompletedStage: "VALIDATION",
+      nextStage: null,
+      reason: "REPOSITORY_STATE_MISMATCH",
+    });
+    assert.equal(body.task.workflowFailure.category, "REPOSITORY_MISMATCH");
+    assert.equal(
+      body.task.workflowFailure.summary,
+      "Validation evidence no longer matches the authoritative repository state.",
+    );
+    assert.equal(reviewCalls, 0);
+  });
+
+  it("rejects client-provided validation integrity fields through strict route schemas", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        integrity: {
+          repositoryStateId: "client",
+          branch: "client",
+          validatedAt: "2026-08-03T00:00:00.000Z",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
   });
 });
 

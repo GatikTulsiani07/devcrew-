@@ -54,6 +54,7 @@ import {
   type TaskService,
 } from "./tasks/task-service.js";
 import type { DeveloperExecutor } from "./tasks/types.js";
+import { createValidationIntegrityService } from "./validation/validation-integrity.js";
 import type { ControlledCommandRunner } from "./validation/types.js";
 
 type AppEnv = {
@@ -124,6 +125,9 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       )
         ? {
             repositoryDriftVerifier: createRepositoryDriftVerifier({
+              preparedRepositories,
+            }),
+            validationIntegrityService: createValidationIntegrityService({
               preparedRepositories,
             }),
           }
