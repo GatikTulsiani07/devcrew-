@@ -29,6 +29,14 @@ const lookup = {
   base: "main",
 };
 
+const providerIssueComment = {
+  id: 9001,
+  body: "<!-- devcrew-validation-summary -->\n\n### Devcrew validation summary",
+  created_at: "2026-08-03T08:00:00.000Z",
+  updated_at: "2026-08-03T08:01:00.000Z",
+  user: { login: "devcrew-bot" },
+};
+
 describe("GitHub pull request client", () => {
   it("parses supported GitHub repository URLs without credentials", () => {
     assert.deepEqual(parseGitHubRepositoryUrl("https://github.com/Example/Devcrew.git"), {
@@ -165,6 +173,74 @@ describe("GitHub pull request client", () => {
     assert.equal(
       requests[0].url,
       "https://api.github.com/repos/example/devcrew/pulls/42",
+    );
+  });
+
+  it("lists, creates, and updates pull request conversation comments", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      requests.push({ url: String(url), init });
+
+      if (init?.method === "GET") {
+        return new Response(JSON.stringify([providerIssueComment]), {
+          status: 200,
+        });
+      }
+
+      return new Response(JSON.stringify(providerIssueComment), {
+        status: init?.method === "PATCH" ? 200 : 201,
+      });
+    };
+
+    const client = createGitHubPullRequestClient({
+      token: "ghp_SERVER_TOKEN",
+      fetchImpl,
+    });
+
+    const listed = await client.listPullRequestComments({
+      repository: lookup.repository,
+      number: 42,
+    });
+    const created = await client.createPullRequestComment({
+      repository: lookup.repository,
+      number: 42,
+      body: providerIssueComment.body,
+    });
+    const updated = await client.updatePullRequestComment({
+      repository: lookup.repository,
+      commentId: 9001,
+      body: providerIssueComment.body,
+    });
+
+    assert.equal(listed[0].id, 9001);
+    assert.equal(created.updatedAt, "2026-08-03T08:01:00.000Z");
+    assert.equal(updated.authorLogin, "devcrew-bot");
+    assert.deepEqual(
+      requests.map((request) => ({
+        url: request.url,
+        method: request.init?.method,
+      })),
+      [
+        {
+          url: "https://api.github.com/repos/example/devcrew/issues/42/comments",
+          method: "GET",
+        },
+        {
+          url: "https://api.github.com/repos/example/devcrew/issues/42/comments",
+          method: "POST",
+        },
+        {
+          url: "https://api.github.com/repos/example/devcrew/issues/comments/9001",
+          method: "PATCH",
+        },
+      ],
+    );
+    assert.deepEqual(JSON.parse(String(requests[1].init?.body)), {
+      body: providerIssueComment.body,
+    });
+    assert.equal(
+      (requests[1].init?.headers as Record<string, string>).Authorization,
+      "Bearer ghp_SERVER_TOKEN",
     );
   });
 

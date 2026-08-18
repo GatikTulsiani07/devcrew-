@@ -63,6 +63,18 @@ function fixedRequestId(): string {
   return "req_task_test";
 }
 
+function pullRequestEvidence() {
+  return {
+    number: 42,
+    url: "https://github.com/example/devcrew/pull/42",
+    state: "OPEN" as const,
+    headBranch: "devcrew/task-task_000001",
+    baseBranch: "main",
+    commitSha: "0123456789abcdef0123456789abcdef01234567",
+    createdAt: "2026-08-03T08:00:00.000Z",
+  };
+}
+
 function withoutTaskOutcome<T>(body: T): T {
   const copy = structuredClone(body);
 
@@ -328,6 +340,21 @@ async function createPullRequest(
 ) {
   return app.request(
     `/api/v1/projects/${projectId}/tasks/${taskId}/pull-request`,
+    {
+      method: "POST",
+      ...init,
+    },
+  );
+}
+
+async function publishPullRequestSummaryComment(
+  app: ReturnType<typeof createTestApp>,
+  projectId = "proj_000001",
+  taskId = "task_000001",
+  init: RequestInit = {},
+) {
+  return app.request(
+    `/api/v1/projects/${projectId}/tasks/${taskId}/pull-request/summary-comment`,
     {
       method: "POST",
       ...init,
@@ -3967,6 +3994,39 @@ describe("repository drift task integration", () => {
     assert.equal(prCalls, 0);
   });
 
+  it("does not call Pull Request summary comment publication after drift", async () => {
+    let summaryCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      repositoryDriftVerifier: failOnDriftCheck(4),
+      pullRequestCreator: {
+        async createPullRequest() {
+          return {
+            created: true,
+            evidence: pullRequestEvidence(),
+          };
+        },
+        async publishSummaryComment() {
+          summaryCalls += 1;
+          throw new Error("GitHub should not be called after drift");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+    assert.equal((await createPullRequest(app)).status, 200);
+
+    const response = await publishPullRequestSummaryComment(app);
+
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error.code, "REPOSITORY_DRIFT");
+    assert.equal(summaryCalls, 0);
+  });
+
   it("resume refuses a drifted repository without advancing the workflow", async () => {
     let validationCalls = 0;
     const app = createTestApp({
@@ -4156,6 +4216,42 @@ describe("validation integrity task integration", () => {
     assert.equal(response.status, 409);
     assert.equal(body.error.code, "VALIDATION_EVIDENCE_STALE");
     assert.equal(prCalls, 0);
+  });
+
+  it("does not call Pull Request summary comment with stale validation evidence", async () => {
+    let summaryCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationIntegrityService: validationIntegrityService({
+        failOnVerifyCall: 3,
+      }),
+      pullRequestCreator: {
+        async createPullRequest() {
+          return {
+            created: true,
+            evidence: pullRequestEvidence(),
+          };
+        },
+        async publishSummaryComment() {
+          summaryCalls += 1;
+          throw new Error("GitHub should not be called with stale validation");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+    assert.equal((await createPullRequest(app)).status, 200);
+
+    const response = await publishPullRequestSummaryComment(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(body.error.code, "VALIDATION_EVIDENCE_STALE");
+    assert.equal(summaryCalls, 0);
   });
 
   it("resume refuses stale validation evidence without advancing the workflow", async () => {

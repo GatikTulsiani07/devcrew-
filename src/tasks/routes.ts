@@ -25,6 +25,8 @@ import {
   getTaskPathParamsSchema,
   planDecisionPathParamsSchema,
   planDecisionRequestSchema,
+  publishPullRequestSummaryCommentPathParamsSchema,
+  publishPullRequestSummaryCommentRequestSchema,
   reviewTaskPathParamsSchema,
   reviewTaskRequestSchema,
   refreshPullRequestPathParamsSchema,
@@ -294,6 +296,39 @@ export function createTaskRoutes(
     );
     return c.json({ task });
   });
+
+  routes.post(
+    "/:projectId/tasks/:taskId/pull-request/summary-comment",
+    async (c) => {
+      const params = publishPullRequestSummaryCommentPathParamsSchema.safeParse({
+        projectId: c.req.param("projectId"),
+        taskId: c.req.param("taskId"),
+      });
+      const body = await readOptionalJsonBody(c.req.text.bind(c.req));
+      const request =
+        publishPullRequestSummaryCommentRequestSchema.safeParse(body);
+
+      if (!params.success || !request.success) {
+        throw validationError();
+      }
+
+      const task = await withTaskIdempotency(
+        idempotencyStore,
+        {
+          projectId: params.data.projectId,
+          taskId: params.data.taskId,
+          operation: "PULL_REQUEST_SUMMARY_COMMENT",
+        },
+        c.req.header(IDEMPOTENCY_KEY_HEADER),
+        () =>
+          taskService.publishPullRequestSummaryComment(
+            params.data.projectId,
+            params.data.taskId,
+          ),
+      );
+      return c.json({ task });
+    },
+  );
 
   routes.post("/:projectId/tasks/:taskId/resume", async (c) => {
     const params = resumeTaskPathParamsSchema.safeParse({

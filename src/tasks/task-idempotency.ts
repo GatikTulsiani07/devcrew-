@@ -12,7 +12,8 @@ export type TaskIdempotencyOperation =
   | "RETRY"
   | "RESUME"
   | "PULL_REQUEST_CREATE"
-  | "PULL_REQUEST_REFRESH";
+  | "PULL_REQUEST_REFRESH"
+  | "PULL_REQUEST_SUMMARY_COMMENT";
 
 export interface TaskIdempotencyScope {
   projectId: string;

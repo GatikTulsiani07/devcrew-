@@ -200,6 +200,19 @@ function refreshPullRequest(app: ReturnType<typeof createTestApp>, init: Request
   );
 }
 
+function publishSummaryComment(
+  app: ReturnType<typeof createTestApp>,
+  init: RequestInit = {},
+) {
+  return app.request(
+    "/api/v1/projects/proj_000001/tasks/task_000001/pull-request/summary-comment",
+    {
+      method: "POST",
+      ...init,
+    },
+  );
+}
+
 describe("pull request task route", () => {
   it("persists PR evidence and appends the success event once", async () => {
     let callCount = 0;
@@ -674,6 +687,211 @@ describe("pull request task route", () => {
       task.task.workflowFailure.summary.includes("/Users/suniltulsiani"),
       false,
     );
+  });
+
+  it("publishes PR summary comment evidence through the task route", async () => {
+    let createCalls = 0;
+    let summaryCalls = 0;
+    const app = createTestApp({
+      async createPullRequest() {
+        createCalls += 1;
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: branch,
+            baseBranch: "main",
+            commitSha: checkpointSha,
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+      async publishSummaryComment(input) {
+        summaryCalls += 1;
+        assert.equal(input.task.pullRequest?.number, 42);
+        return {
+          action: "CREATED",
+          evidence: {
+            commentId: 9001,
+            updatedAt: "2026-08-03T08:00:00.000Z",
+          },
+        };
+      },
+    });
+    await reachReviewCompleted(app);
+    assert.equal(
+      (
+        await app.request(
+          "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+          { method: "POST" },
+        )
+      ).status,
+      200,
+    );
+
+    const response = await publishSummaryComment(app);
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).task.pullRequestSummaryComment, {
+      commentId: 9001,
+      updatedAt: "2026-08-03T08:00:00.000Z",
+    });
+    assert.deepEqual((await read.json()).task.pullRequestSummaryComment, {
+      commentId: 9001,
+      updatedAt: "2026-08-03T08:00:00.000Z",
+    });
+    assert.equal(createCalls, 1);
+    assert.equal(summaryCalls, 1);
+  });
+
+  it("replays same-key PR summary comment without a second provider call", async () => {
+    let summaryCalls = 0;
+    const app = createTestApp({
+      async createPullRequest() {
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: branch,
+            baseBranch: "main",
+            commitSha: checkpointSha,
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+      async publishSummaryComment() {
+        summaryCalls += 1;
+        return {
+          action: "CREATED",
+          evidence: {
+            commentId: 9001,
+            updatedAt: "2026-08-03T08:00:00.000Z",
+          },
+        };
+      },
+    });
+    await reachReviewCompleted(app);
+    assert.equal(
+      (
+        await app.request(
+          "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+          { method: "POST" },
+        )
+      ).status,
+      200,
+    );
+
+    const first = await publishSummaryComment(app, {
+      headers: { "Idempotency-Key": "summary-comment-key" },
+    });
+    const replay = await publishSummaryComment(app, {
+      headers: { "Idempotency-Key": "summary-comment-key" },
+    });
+
+    assert.equal(first.status, 200);
+    assert.equal(replay.status, 200);
+    assert.deepEqual(await replay.json(), await first.json());
+    assert.equal(summaryCalls, 1);
+  });
+
+  it("strictly rejects client-supplied summary comment fields", async () => {
+    const app = createTestApp({
+      async createPullRequest() {
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: branch,
+            baseBranch: "main",
+            commitSha: checkpointSha,
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+      async publishSummaryComment() {
+        throw new Error("summary comment should not be called");
+      },
+    });
+    await reachReviewCompleted(app);
+    assert.equal(
+      (
+        await app.request(
+          "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+          { method: "POST" },
+        )
+      ).status,
+      200,
+    );
+
+    for (const body of [
+      { comment: "hello" },
+      { prNumber: 123 },
+      { owner: "evil", repo: "evil" },
+      { marker: "<!-- custom -->" },
+      { validation: "passed" },
+    ]) {
+      const response = await publishSummaryComment(app, {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+    }
+  });
+
+  it("records workflowFailure when PR summary comment publication fails", async () => {
+    const app = createTestApp({
+      async createPullRequest() {
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: branch,
+            baseBranch: "main",
+            commitSha: checkpointSha,
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+      async publishSummaryComment() {
+        throw new Error("SENSITIVE_COMMENT_FAILURE ghp_SECRET");
+      },
+    });
+    await reachReviewCompleted(app);
+    assert.equal(
+      (
+        await app.request(
+          "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+          { method: "POST" },
+        )
+      ).status,
+      200,
+    );
+
+    const response = await publishSummaryComment(app);
+    const body = await response.text();
+    const task = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+
+    assert.equal(response.status, 500);
+    assert.equal(body.includes("SENSITIVE_COMMENT_FAILURE"), false);
+    assert.equal(task.task.workflowFailure.stage, "GITHUB_PULL_REQUEST_SUMMARY_COMMENT");
+    assert.equal(task.task.workflowFailure.category, "UNKNOWN_FAILURE");
+    assert.equal(task.task.workflowFailure.summary.includes("ghp_SECRET"), false);
+    assert.equal(task.task.pullRequestSummaryComment, undefined);
   });
 });
 
