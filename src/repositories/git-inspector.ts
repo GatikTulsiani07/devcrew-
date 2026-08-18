@@ -63,9 +63,12 @@ export interface GitCommandRunner {
 }
 
 export interface GitInspector {
-  assertCleanBaseline(repositoryRoot: string): Promise<void>;
-  captureEvidence(repositoryRoot: string): Promise<GitChangeEvidence>;
-  captureRepositoryChanges(repositoryRoot: string): Promise<GitRepositoryChangeInspection>;
+  assertCleanBaseline(repositoryRoot: string, signal?: AbortSignal): Promise<void>;
+  captureEvidence(repositoryRoot: string, signal?: AbortSignal): Promise<GitChangeEvidence>;
+  captureRepositoryChanges(
+    repositoryRoot: string,
+    signal?: AbortSignal,
+  ): Promise<GitRepositoryChangeInspection>;
 }
 
 export const GIT_EXECUTABLE = "git";
@@ -267,23 +270,24 @@ export function createControlledGitInspector({
 } = {}): GitInspector {
   async function readStatus(
     repositoryRoot: string,
+    signal?: AbortSignal,
   ): Promise<readonly GitChangedFile[]> {
-    const result = await run(runner, statusArgs, repositoryRoot, [0]);
+    const result = await run(runner, statusArgs, repositoryRoot, [0], signal);
 
     return parseStatusOutput(result.stdout);
   }
 
   return {
-    async assertCleanBaseline(repositoryRoot) {
-      const files = await readStatus(repositoryRoot);
+    async assertCleanBaseline(repositoryRoot, signal) {
+      const files = await readStatus(repositoryRoot, signal);
 
       if (files.length > 0) {
         throw new GitInspectionError("prepared repository baseline is not clean");
       }
     },
 
-    async captureEvidence(repositoryRoot) {
-      const files = await readStatus(repositoryRoot);
+    async captureEvidence(repositoryRoot, signal) {
+      const files = await readStatus(repositoryRoot, signal);
 
       if (files.length === 0) {
         throw new GitInspectionError("repository reported no changes");
@@ -293,13 +297,13 @@ export function createControlledGitInspector({
         throw new GitInspectionError("changed file limit exceeded");
       }
 
-      const evidence = await captureNonEmptyEvidence(repositoryRoot, files);
+      const evidence = await captureNonEmptyEvidence(repositoryRoot, files, signal);
 
       return evidence;
     },
 
-    async captureRepositoryChanges(repositoryRoot) {
-      const files = await readStatus(repositoryRoot);
+    async captureRepositoryChanges(repositoryRoot, signal) {
+      const files = await readStatus(repositoryRoot, signal);
 
       if (files.length === 0) {
         return { repositoryChanges: emptyRepositoryChanges() };
@@ -309,7 +313,11 @@ export function createControlledGitInspector({
         throw new GitInspectionError("changed file limit exceeded");
       }
 
-      const changeEvidence = await captureNonEmptyEvidence(repositoryRoot, files);
+      const changeEvidence = await captureNonEmptyEvidence(
+        repositoryRoot,
+        files,
+        signal,
+      );
 
       return {
         repositoryChanges: summarizeRepositoryChanges(changeEvidence.files),
@@ -321,18 +329,21 @@ export function createControlledGitInspector({
   async function captureNonEmptyEvidence(
     repositoryRoot: string,
     files: readonly GitChangedFile[],
+    signal?: AbortSignal,
   ): Promise<GitChangeEvidence> {
     const stats = mergeStats(
       parseNumstatOutput(
-        (await run(runner, trackedNumstatArgs, repositoryRoot, [0, 1])).stdout,
+        (await run(runner, trackedNumstatArgs, repositoryRoot, [0, 1], signal))
+          .stdout,
       ),
       parseNumstatOutput(
-        (await run(runner, stagedNumstatArgs, repositoryRoot, [0, 1])).stdout,
+        (await run(runner, stagedNumstatArgs, repositoryRoot, [0, 1], signal))
+          .stdout,
       ),
     );
     const patches: string[] = [
-      (await run(runner, trackedPatchArgs, repositoryRoot, [0, 1])).stdout,
-      (await run(runner, stagedPatchArgs, repositoryRoot, [0, 1])).stdout,
+      (await run(runner, trackedPatchArgs, repositoryRoot, [0, 1], signal)).stdout,
+      (await run(runner, stagedPatchArgs, repositoryRoot, [0, 1], signal)).stdout,
     ];
     const enriched: GitChangedFile[] = [];
 
@@ -343,6 +354,7 @@ export function createControlledGitInspector({
           untrackedDiffArgs(file.path),
           repositoryRoot,
           [0, 1],
+          signal,
         );
         const parsed = parseUntrackedDiff(untracked.stdout);
 
@@ -370,8 +382,11 @@ async function run(
   args: readonly string[],
   repositoryRoot: string,
   acceptedExitCodes: readonly number[],
+  signal?: AbortSignal,
 ): Promise<GitCommandResult> {
-  const result = await runner.run(args, repositoryRoot);
+  throwIfSignalCancelled(signal);
+  const result = await runner.run(args, repositoryRoot, { signal });
+  throwIfSignalCancelled(signal);
 
   if (
     !result.started ||

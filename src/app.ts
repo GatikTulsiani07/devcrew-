@@ -38,6 +38,7 @@ import {
   preparedRepositories as defaultPreparedRepositories,
   type PreparedRepository,
 } from "./repositories/prepared-repositories.js";
+import { createRepositoryDriftVerifier } from "./repositories/repository-drift.js";
 import { createControlledDeveloperExecutor } from "./tasks/controlled-developer-executor.js";
 import { createControlledDevOpsValidator } from "./tasks/controlled-devops-validator.js";
 import { createDeterministicDevOpsValidator } from "./tasks/deterministic-devops-validator.js";
@@ -118,6 +119,15 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       }),
       store: new InMemoryTaskStore(),
       activityService,
+      ...(preparedRepositories.some(
+        (repository) => repository.localCheckoutPath !== undefined,
+      )
+        ? {
+            repositoryDriftVerifier: createRepositoryDriftVerifier({
+              preparedRepositories,
+            }),
+          }
+        : {}),
     });
   const activityReadService =
     dependencies.activityReadService ??
