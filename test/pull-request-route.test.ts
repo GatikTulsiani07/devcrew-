@@ -254,6 +254,49 @@ describe("pull request task route", () => {
     );
   });
 
+  it("replays same-key PR creation without a second provider create call", async () => {
+    let callCount = 0;
+    const app = createTestApp({
+      async createPullRequest() {
+        callCount += 1;
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: branch,
+            baseBranch: "main",
+            commitSha: checkpointSha,
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+    });
+    await reachReviewCompleted(app);
+
+    const first = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+      { method: "POST", headers: { "Idempotency-Key": "pr-create-key" } },
+    );
+    const replay = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+      { method: "POST", headers: { "Idempotency-Key": "pr-create-key" } },
+    );
+    const activity = await app.request("/api/v1/projects/proj_000001/activity");
+
+    assert.equal(first.status, 200);
+    assert.equal(replay.status, 200);
+    assert.deepEqual(await replay.json(), await first.json());
+    assert.equal(callCount, 1);
+    assert.equal(
+      ((await activity.json()).events as Array<{ type: string }>).filter(
+        (event) => event.type === "PULL_REQUEST_CREATED",
+      ).length,
+      1,
+    );
+  });
+
   it("refreshes existing PR evidence and persists it for later reads", async () => {
     let createCalls = 0;
     let refreshCalls = 0;
@@ -302,6 +345,60 @@ describe("pull request task route", () => {
     assert.equal((await read.json()).task.pullRequest.state, "MERGED");
     assert.equal(createCalls, 1);
     assert.equal(refreshCalls, 1);
+  });
+
+  it("replays same-key PR refresh without a second provider read", async () => {
+    let refreshCalls = 0;
+    const app = createTestApp({
+      async createPullRequest() {
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: branch,
+            baseBranch: "main",
+            commitSha: checkpointSha,
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+      async refreshPullRequest(input) {
+        refreshCalls += 1;
+        return {
+          ...input.task.pullRequest!,
+          state: refreshCalls === 1 ? "MERGED" : "CLOSED",
+        };
+      },
+    });
+    await reachReviewCompleted(app);
+    assert.equal(
+      (
+        await app.request(
+          "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+          { method: "POST" },
+        )
+      ).status,
+      200,
+    );
+
+    const first = await refreshPullRequest(app, {
+      headers: { "Idempotency-Key": "pr-refresh-key" },
+    });
+    const replay = await refreshPullRequest(app, {
+      headers: { "Idempotency-Key": "pr-refresh-key" },
+    });
+    const differentKey = await refreshPullRequest(app, {
+      headers: { "Idempotency-Key": "pr-refresh-key-2" },
+    });
+
+    assert.equal(first.status, 200);
+    assert.equal(replay.status, 200);
+    assert.deepEqual(await replay.json(), await first.json());
+    assert.equal(differentKey.status, 200);
+    assert.equal((await differentKey.json()).task.pullRequest.state, "CLOSED");
+    assert.equal(refreshCalls, 2);
   });
 
   it("strictly rejects client-supplied refresh identity fields", async () => {
@@ -489,6 +586,45 @@ describe("pull request task route", () => {
       ),
       false,
     );
+  });
+
+  it("does not cache PR provider failure as success", async () => {
+    let callCount = 0;
+    const app = createTestApp({
+      async createPullRequest() {
+        callCount += 1;
+        if (callCount === 1) {
+          throw new Error("SENSITIVE_GITHUB_TOKEN_FAILURE");
+        }
+        return {
+          created: true,
+          evidence: {
+            number: 42,
+            url: "https://github.com/example/devcrew/pull/42",
+            state: "OPEN",
+            headBranch: branch,
+            baseBranch: "main",
+            commitSha: checkpointSha,
+            createdAt: "2026-08-03T07:00:00.000Z",
+          },
+        };
+      },
+    });
+    await reachReviewCompleted(app);
+
+    const failed = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+      { method: "POST", headers: { "Idempotency-Key": "pr-failure-key" } },
+    );
+    assert.equal(failed.status, 500);
+
+    const retry = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+      { method: "POST", headers: { "Idempotency-Key": "pr-failure-key" } },
+    );
+    assert.equal(retry.status, 409);
+    assert.equal((await retry.json()).error.code, "INVALID_TASK_TRANSITION");
+    assert.equal(callCount, 1);
   });
 
   it("records workflowFailure when PR refresh fails", async () => {
