@@ -11,6 +11,7 @@ import type {
 import type { VisualReviewEvidence } from "../review/visual-reviewer.js";
 import type { ProjectSnapshot } from "../projects/types.js";
 import type { ValidationSelectionEvidence } from "../validation/validation-selection.js";
+import type { ValidationIntegrityEvidence } from "../validation/validation-integrity.js";
 import type { WorkflowResumeMetadata } from "./workflow-resume.js";
 
 export type TaskStatus =
@@ -208,6 +209,7 @@ export interface TaskValidation {
   checks: readonly ValidationCheck[];
   summary: string;
   validationSelection?: ValidationSelectionEvidence;
+  integrity?: ValidationIntegrityEvidence;
   checkpoint?: GitCheckpointEvidence;
   remoteBranch?: GitRemotePushEvidence;
   browserVerification?: BrowserVerificationEvidence;
