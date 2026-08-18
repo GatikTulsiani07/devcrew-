@@ -33,6 +33,32 @@ export interface GitHubPullRequestGetInput extends GitHubPullRequestLookupInput 
   number: number;
 }
 
+export interface GitHubIssueComment {
+  id: number;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  authorLogin?: string;
+}
+
+export interface GitHubPullRequestCommentsInput {
+  repository: GitHubRepositoryRef;
+  number: number;
+  signal?: AbortSignal;
+}
+
+export interface GitHubPullRequestCommentCreateInput
+  extends GitHubPullRequestCommentsInput {
+  body: string;
+}
+
+export interface GitHubPullRequestCommentUpdateInput {
+  repository: GitHubRepositoryRef;
+  commentId: number;
+  body: string;
+  signal?: AbortSignal;
+}
+
 export interface GitHubPullRequestClient {
   findOpenPullRequest(
     input: GitHubPullRequestLookupInput,
@@ -41,6 +67,15 @@ export interface GitHubPullRequestClient {
   createPullRequest(
     input: GitHubPullRequestCreateInput,
   ): Promise<GitHubPullRequest>;
+  listPullRequestComments(
+    input: GitHubPullRequestCommentsInput,
+  ): Promise<readonly GitHubIssueComment[]>;
+  createPullRequestComment(
+    input: GitHubPullRequestCommentCreateInput,
+  ): Promise<GitHubIssueComment>;
+  updatePullRequestComment(
+    input: GitHubPullRequestCommentUpdateInput,
+  ): Promise<GitHubIssueComment>;
 }
 
 export class GitHubPullRequestClientError extends Error {
@@ -114,6 +149,51 @@ export function createGitHubPullRequestClient({
       });
 
       return parsePullRequestResponse(response, input);
+    },
+
+    async listPullRequestComments(input) {
+      const response = await requestJson({
+        token,
+        fetchImpl,
+        timeoutMs,
+        method: "GET",
+        url: repositoryUrl(input.repository, `/issues/${input.number}/comments`),
+        signal: input.signal,
+      });
+
+      if (!Array.isArray(response)) {
+        throw new GitHubPullRequestClientError("malformed provider response");
+      }
+
+      return response.map(parseIssueCommentResponse);
+    },
+
+    async createPullRequestComment(input) {
+      const response = await requestJson({
+        token,
+        fetchImpl,
+        timeoutMs,
+        method: "POST",
+        url: repositoryUrl(input.repository, `/issues/${input.number}/comments`),
+        body: { body: input.body },
+        signal: input.signal,
+      });
+
+      return parseIssueCommentResponse(response);
+    },
+
+    async updatePullRequestComment(input) {
+      const response = await requestJson({
+        token,
+        fetchImpl,
+        timeoutMs,
+        method: "PATCH",
+        url: repositoryUrl(input.repository, `/issues/comments/${input.commentId}`),
+        body: { body: input.body },
+        signal: input.signal,
+      });
+
+      return parseIssueCommentResponse(response);
     },
   };
 }
@@ -223,6 +303,40 @@ function isSha(value: string): boolean {
   return /^[0-9a-f]{40}$/i.test(value);
 }
 
+function parseIssueCommentResponse(response: unknown): GitHubIssueComment {
+  if (!isRecord(response)) {
+    throw new GitHubPullRequestClientError("malformed provider response");
+  }
+
+  const id = response.id;
+  const body = response.body;
+  const createdAt = response.created_at;
+  const updatedAt = response.updated_at;
+  const authorLogin = isRecord(response.user) ? response.user.login : undefined;
+
+  if (
+    typeof id !== "number" ||
+    !Number.isInteger(id) ||
+    id <= 0 ||
+    typeof body !== "string" ||
+    typeof createdAt !== "string" ||
+    Number.isNaN(Date.parse(createdAt)) ||
+    typeof updatedAt !== "string" ||
+    Number.isNaN(Date.parse(updatedAt)) ||
+    (authorLogin !== undefined && typeof authorLogin !== "string")
+  ) {
+    throw new GitHubPullRequestClientError("malformed provider response");
+  }
+
+  return {
+    id,
+    body,
+    createdAt,
+    updatedAt,
+    ...(typeof authorLogin === "string" ? { authorLogin } : {}),
+  };
+}
+
 async function requestJson({
   token,
   fetchImpl,
@@ -235,7 +349,7 @@ async function requestJson({
   token?: string;
   fetchImpl: typeof fetch;
   timeoutMs: number;
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PATCH";
   url: string;
   body?: Record<string, unknown>;
   signal?: AbortSignal;

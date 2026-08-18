@@ -114,6 +114,10 @@ export interface TaskService {
   cancelTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
   createPullRequest(projectId: string, taskId: string): Promise<TaskSnapshot>;
   refreshPullRequest(projectId: string, taskId: string): Promise<TaskSnapshot>;
+  publishPullRequestSummaryComment(
+    projectId: string,
+    taskId: string,
+  ): Promise<TaskSnapshot>;
   resumeTask(projectId: string, taskId: string): Promise<TaskSnapshot>;
 }
 
@@ -611,6 +615,96 @@ export function createTaskService({
       });
     },
 
+    async publishPullRequestSummaryComment(projectId, taskId) {
+      const project = await projectService.getProject(projectId);
+
+      await assertTaskExists(projectId, taskId);
+
+      return executionLock.withLock(projectId, taskId, async () => {
+        const task = await requireTask(projectId, taskId);
+
+        assertNoPendingRetry(task);
+        assertTaskNotCancelled(task);
+
+        if (task.workflowFailure !== undefined) {
+          throw new ApplicationError(
+            "INVALID_TASK_TRANSITION",
+            409,
+            "Task has an unresolved workflow failure",
+          );
+        }
+
+        if (task.pullRequest === undefined) {
+          throw new ApplicationError(
+            "INVALID_TASK_TRANSITION",
+            409,
+            "Task pull request has not been created",
+          );
+        }
+
+        const active = cancellationRegistry.register({
+          projectId,
+          taskId,
+          stage: "PULL_REQUEST",
+        });
+        const budget = createExecutionBudget();
+
+        try {
+          budget.throwIfExpired("PULL_REQUEST");
+          await assertNoRepositoryDrift(project, task, "PULL_REQUEST", {
+            signal: budget.composeSignal(active.signal, "PULL_REQUEST"),
+          });
+          await assertValidationIntegrity(project, task, "PULL_REQUEST", {
+            signal: budget.composeSignal(active.signal, "PULL_REQUEST"),
+          });
+          const result = await publishPullRequestSummaryCommentEvidence(
+            project,
+            task,
+            budget.composeSignal(active.signal, "PULL_REQUEST"),
+          );
+          budget.throwIfExpired("PULL_REQUEST");
+          active.throwIfCancelled();
+
+          const timestamp = now().toISOString();
+          return copyTask(
+            await store.update({
+              ...copyTask(task),
+              pullRequestSummaryComment: result.evidence,
+              workflowFailure: undefined,
+              updatedAt: timestamp,
+            }),
+          );
+        } catch (error) {
+          if (isTaskCancellationError(error)) {
+            await completeCancellation(await latestTaskOr(task), active.stage);
+            throw error;
+          }
+          if (isRepositoryDriftApplicationError(error)) {
+            throw error;
+          }
+          if (isValidationIntegrityApplicationError(error)) {
+            throw error;
+          }
+          const latest = await latestTaskOr(task);
+          const failedAt = now().toISOString();
+          const classification = classifyRetryFailure(error, "PULL_REQUEST");
+          await store.update({
+            ...copyTask(latest),
+            workflowFailure: createWorkflowFailureEvidence(
+              classification,
+              failedAt,
+              "GITHUB_PULL_REQUEST_SUMMARY_COMMENT",
+            ),
+            updatedAt: failedAt,
+          });
+          throw sanitizeStageError("PULL_REQUEST");
+        } finally {
+          budget.dispose();
+          active.unregister();
+        }
+      });
+    },
+
     async resumeTask(projectId, taskId) {
       const project = await projectService.getProject(projectId);
 
@@ -1069,6 +1163,26 @@ export function createTaskService({
     }
 
     return pullRequestCreator.refreshPullRequest({
+      project,
+      task: copyTask(task),
+      ...(signal === undefined ? {} : { signal }),
+    });
+  }
+
+  async function publishPullRequestSummaryCommentEvidence(
+    project: Awaited<ReturnType<ProjectService["getProject"]>>,
+    task: TaskSnapshot,
+    signal?: AbortSignal,
+  ) {
+    if (pullRequestCreator.publishSummaryComment === undefined) {
+      throw new ApplicationError(
+        "PULL_REQUEST_UNAVAILABLE",
+        503,
+        "Pull request summary comment is not configured",
+      );
+    }
+
+    return pullRequestCreator.publishSummaryComment({
       project,
       task: copyTask(task),
       ...(signal === undefined ? {} : { signal }),
@@ -1598,6 +1712,13 @@ function unavailablePullRequestCreator(): TaskPullRequestCreator {
         "Pull request refresh is not configured",
       );
     },
+    async publishSummaryComment() {
+      throw new ApplicationError(
+        "PULL_REQUEST_UNAVAILABLE",
+        503,
+        "Pull request summary comment is not configured",
+      );
+    },
   };
 }
 
@@ -1953,6 +2074,14 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
             ...(task.pullRequest.durationMs === undefined
               ? {}
               : { durationMs: task.pullRequest.durationMs }),
+          },
+        }),
+    ...(task.pullRequestSummaryComment === undefined
+      ? {}
+      : {
+          pullRequestSummaryComment: {
+            commentId: task.pullRequestSummaryComment.commentId,
+            updatedAt: task.pullRequestSummaryComment.updatedAt,
           },
         }),
     createdAt: task.createdAt,

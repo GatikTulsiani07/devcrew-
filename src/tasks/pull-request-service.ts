@@ -3,6 +3,10 @@ import {
   parseGitHubRepositoryUrl,
   sameGitHubRepository,
 } from "../github/github-pull-request-client.js";
+import {
+  buildPullRequestValidationSummary,
+  PULL_REQUEST_SUMMARY_COMMENT_MARKER,
+} from "../github/pull-request-summary-comment.js";
 import { ApplicationError } from "../errors.js";
 import { throwIfSignalCancelled } from "./task-cancellation.js";
 import {
@@ -154,6 +158,87 @@ export function createPullRequestService({
         state: refreshed.state,
       };
     },
+
+    async publishSummaryComment(input) {
+      throwIfSignalCancelled(input.signal);
+      const context = resolveContext(input, preparedRepositories);
+
+      if (input.task.pullRequest === undefined) {
+        throw new ApplicationError(
+          "INVALID_TASK_TRANSITION",
+          409,
+          "Task pull request has not been created",
+        );
+      }
+
+      const existingPullRequest = copyExistingPullRequestEvidence(
+        input.task.pullRequest,
+        context.headBranch,
+        context.baseBranch,
+        context.checkpointSha,
+      );
+      const body = buildPullRequestValidationSummary(input.task);
+      const comments = await githubClient.listPullRequestComments({
+        repository: context.repository,
+        number: existingPullRequest.number,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      });
+      throwIfSignalCancelled(input.signal);
+
+      const devcrewComments = comments.filter((comment) =>
+        comment.body.includes(PULL_REQUEST_SUMMARY_COMMENT_MARKER),
+      );
+
+      if (devcrewComments.length > 1) {
+        throw new PullRequestServiceError("ambiguous summary comments");
+      }
+
+      if (devcrewComments.length === 0) {
+        const created = await githubClient.createPullRequestComment({
+          repository: context.repository,
+          number: existingPullRequest.number,
+          body,
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+        });
+        throwIfSignalCancelled(input.signal);
+
+        return {
+          evidence: {
+            commentId: created.id,
+            updatedAt: created.updatedAt,
+          },
+          action: "CREATED",
+        };
+      }
+
+      const existingComment = devcrewComments[0];
+
+      if (existingComment.body === body) {
+        return {
+          evidence: {
+            commentId: existingComment.id,
+            updatedAt: existingComment.updatedAt,
+          },
+          action: "UNCHANGED",
+        };
+      }
+
+      const updated = await githubClient.updatePullRequestComment({
+        repository: context.repository,
+        commentId: existingComment.id,
+        body,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      });
+      throwIfSignalCancelled(input.signal);
+
+      return {
+        evidence: {
+          commentId: updated.id,
+          updatedAt: updated.updatedAt,
+        },
+        action: "UPDATED",
+      };
+    },
   };
 }
 
@@ -226,6 +311,14 @@ function resolveContext(
       409,
       "Task review is not completed",
     );
+  }
+
+  if (task.execution?.status !== "COMPLETED") {
+    throw new PullRequestServiceError("developer implementation is required");
+  }
+
+  if (task.validation?.status !== "PASSED") {
+    throw new PullRequestServiceError("validation success is required");
   }
 
   if (task.review?.verdict !== "APPROVED") {

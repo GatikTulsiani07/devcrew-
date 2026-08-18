@@ -163,6 +163,15 @@ function fakeClient({
       }
       return created;
     },
+    async listPullRequestComments() {
+      return [];
+    },
+    async createPullRequestComment() {
+      throw new Error("comment creation is not used by these tests");
+    },
+    async updatePullRequestComment() {
+      throw new Error("comment update is not used by these tests");
+    },
   };
 
   return { client, lookups, gets, creates };

@@ -86,7 +86,8 @@ export type WorkflowFailureStage =
   | "GIT_PUSH"
   | "REVIEWER"
   | "GITHUB_PULL_REQUEST"
-  | "GITHUB_PULL_REQUEST_REFRESH";
+  | "GITHUB_PULL_REQUEST_REFRESH"
+  | "GITHUB_PULL_REQUEST_SUMMARY_COMMENT";
 
 export interface TaskPlan {
   summary: string;
@@ -247,6 +248,11 @@ export interface TaskPullRequestEvidence {
   durationMs?: number;
 }
 
+export interface TaskPullRequestSummaryCommentEvidence {
+  commentId: number;
+  updatedAt: string;
+}
+
 export interface TaskOutcome {
   outcome: TaskOutcomeStatus;
   implementationCompleted: boolean;
@@ -276,6 +282,7 @@ export interface TaskSnapshot {
   cancellation?: TaskCancellationEvidence;
   review?: TaskReview;
   pullRequest?: TaskPullRequestEvidence;
+  pullRequestSummaryComment?: TaskPullRequestSummaryCommentEvidence;
   resume?: WorkflowResumeMetadata;
   taskOutcome?: TaskOutcome;
   createdAt: string;
@@ -386,6 +393,11 @@ export interface TaskPullRequestCreatorResult {
   created: boolean;
 }
 
+export interface TaskPullRequestSummaryCommentResult {
+  evidence: TaskPullRequestSummaryCommentEvidence;
+  action: "CREATED" | "UPDATED" | "UNCHANGED";
+}
+
 export interface TaskPullRequestCreator {
   createPullRequest(
     input: TaskPullRequestCreatorInput,
@@ -393,4 +405,7 @@ export interface TaskPullRequestCreator {
   refreshPullRequest?(
     input: TaskPullRequestCreatorInput,
   ): Promise<TaskPullRequestEvidence>;
+  publishSummaryComment?(
+    input: TaskPullRequestCreatorInput,
+  ): Promise<TaskPullRequestSummaryCommentResult>;
 }
