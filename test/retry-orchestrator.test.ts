@@ -177,10 +177,20 @@ describe("retry failure classification", () => {
       ),
       "DEVOPS",
     );
+    const rollback = classifyRetryFailure(
+      new ApplicationError(
+        "DEVELOPER_ROLLBACK_FAILED",
+        500,
+        "An unexpected error occurred",
+      ),
+      "DEVELOPER",
+    );
     const unknown = classifyRetryFailure(new Error("surprising"), "DEVOPS");
 
     assert.equal(invalid.category, "INVALID_TRANSITION");
     assert.equal(invalid.retryable, false);
+    assert.equal(rollback.category, "REPOSITORY_MISMATCH");
+    assert.equal(rollback.retryable, false);
     assert.equal(unknown.category, "UNKNOWN_FAILURE");
     assert.equal(unknown.retryable, false);
   });

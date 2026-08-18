@@ -19,6 +19,13 @@ import {
   type GitInspector,
 } from "../repositories/git-inspector.js";
 import {
+  createDeveloperRollbackService,
+  DeveloperRollbackError,
+  DEVELOPER_ROLLBACK_FAILED_SUMMARY,
+  type DeveloperRollbackBaseline,
+  type DeveloperRollbackService,
+} from "../repositories/developer-rollback.js";
+import {
   isTaskCancellationError,
   throwIfSignalCancelled,
 } from "./task-cancellation.js";
@@ -62,6 +69,7 @@ export interface ControlledDeveloperExecutorDependencies {
   planner: DeveloperImplementationPlanner;
   workspace?: RepositoryWorkspace;
   gitInspector?: GitInspector;
+  rollbackService?: DeveloperRollbackService;
   generateExecutionId?: () => ExecutionId;
   now?: () => Date;
 }
@@ -83,6 +91,7 @@ export function createControlledDeveloperExecutor({
   planner,
   workspace = createControlledRepositoryWorkspace(),
   gitInspector = createControlledGitInspector(),
+  rollbackService = createDeveloperRollbackService({ gitInspector }),
   generateExecutionId = () => `exec_${randomUUID()}`,
   now = () => new Date(),
 }: ControlledDeveloperExecutorDependencies): DeveloperExecutor {
@@ -96,6 +105,12 @@ export function createControlledDeveloperExecutor({
       );
       await assertBaseline(repositoryRoot, input, gitInspector);
       throwIfSignalCancelled(input.signal);
+      const rollbackBaseline = await captureRollbackBaseline(
+        rollbackService,
+        repositoryRoot,
+        input.task.id,
+        now,
+      );
 
       const startedAt = now().toISOString();
 
@@ -133,12 +148,16 @@ export function createControlledDeveloperExecutor({
         throw executionFailure();
       }
 
-      let mutation;
-
       try {
         throwIfSignalCancelled(input.signal);
-        mutation = await workspace.apply(repositoryRoot, parsed.data.operations);
-        await rollbackIfCancelled(mutation, input.signal);
+        await workspace.apply(repositoryRoot, parsed.data.operations);
+        await rollbackIfCancelled(
+          rollbackService,
+          repositoryRoot,
+          rollbackBaseline,
+          input.task,
+          input.signal,
+        );
       } catch (error) {
         if (isTaskCancellationError(error)) {
           throw error;
@@ -148,6 +167,12 @@ export function createControlledDeveloperExecutor({
           taskId: input.task.id,
           cause: describeError(error),
         });
+        await rollbackDeveloperChanges(
+          rollbackService,
+          repositoryRoot,
+          rollbackBaseline,
+          input.task,
+        );
         throw executionFailure();
       }
 
@@ -156,7 +181,13 @@ export function createControlledDeveloperExecutor({
       try {
         throwIfSignalCancelled(input.signal);
         inspection = await gitInspector.captureRepositoryChanges(repositoryRoot);
-        await rollbackIfCancelled(mutation, input.signal);
+        await rollbackIfCancelled(
+          rollbackService,
+          repositoryRoot,
+          rollbackBaseline,
+          input.task,
+          input.signal,
+        );
       } catch (error) {
         if (isTaskCancellationError(error)) {
           throw error;
@@ -166,7 +197,12 @@ export function createControlledDeveloperExecutor({
           taskId: input.task.id,
           cause: describeError(error),
         });
-        await mutation.rollback();
+        await rollbackDeveloperChanges(
+          rollbackService,
+          repositoryRoot,
+          rollbackBaseline,
+          input.task,
+        );
         throw executionFailure();
       }
 
@@ -208,8 +244,31 @@ export function createControlledDeveloperExecutor({
   };
 }
 
+async function captureRollbackBaseline(
+  rollbackService: DeveloperRollbackService,
+  repositoryRoot: string,
+  taskId: string,
+  now: () => Date,
+): Promise<DeveloperRollbackBaseline> {
+  try {
+    return await rollbackService.captureBaseline({
+      repositoryRoot,
+      now,
+    });
+  } catch (error) {
+    logger.error("Controlled developer rollback baseline capture failed", {
+      taskId,
+      cause: describeError(error),
+    });
+    throw executionFailure();
+  }
+}
+
 async function rollbackIfCancelled(
-  mutation: { rollback(): Promise<void> },
+  rollbackService: DeveloperRollbackService,
+  repositoryRoot: string,
+  baseline: DeveloperRollbackBaseline,
+  task: DeveloperExecutionInput["task"],
   signal?: AbortSignal,
 ): Promise<void> {
   if (signal?.aborted !== true) {
@@ -217,7 +276,7 @@ async function rollbackIfCancelled(
   }
 
   try {
-    await mutation.rollback();
+    await rollbackService.rollback({ repositoryRoot, baseline, task });
   } catch (error) {
     logger.error("Controlled developer rollback failed after cancellation", {
       cause: describeError(error),
@@ -226,6 +285,29 @@ async function rollbackIfCancelled(
   }
 
   throwIfSignalCancelled(signal);
+}
+
+async function rollbackDeveloperChanges(
+  rollbackService: DeveloperRollbackService,
+  repositoryRoot: string,
+  baseline: DeveloperRollbackBaseline,
+  task: DeveloperExecutionInput["task"],
+): Promise<void> {
+  try {
+    await rollbackService.rollback({ repositoryRoot, baseline, task });
+  } catch (error) {
+    if (error instanceof DeveloperRollbackError) {
+      logger.error(DEVELOPER_ROLLBACK_FAILED_SUMMARY, {
+        reason: error.reason,
+      });
+      throw rollbackFailure();
+    }
+
+    logger.error("Controlled developer rollback failed", {
+      cause: describeError(error),
+    });
+    throw rollbackFailure();
+  }
 }
 
 async function assertBaseline(
@@ -319,6 +401,14 @@ function containsUnsafeEvidence(plan: DeveloperImplementationPlan): boolean {
 function executionFailure(): ApplicationError {
   return new ApplicationError(
     "INTERNAL_ERROR",
+    500,
+    "An unexpected error occurred",
+  );
+}
+
+function rollbackFailure(): ApplicationError {
+  return new ApplicationError(
+    "DEVELOPER_ROLLBACK_FAILED",
     500,
     "An unexpected error occurred",
   );
