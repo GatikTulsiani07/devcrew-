@@ -10,6 +10,12 @@ import type {
   GitChangeEvidence,
   GitRepositoryChangeSummary,
 } from "../repositories/git-inspector.js";
+import {
+  createNoopRepositoryDriftVerifier,
+  RepositoryDriftError,
+  REPOSITORY_DRIFT_SUMMARY,
+  type RepositoryDriftVerifier,
+} from "../repositories/repository-drift.js";
 import type { ValidationSelectionEvidence } from "../validation/validation-selection.js";
 import {
   createVisualRepairOrchestrator,
@@ -79,6 +85,7 @@ export interface TaskServiceDependencies {
   executionLock?: TaskExecutionLock;
   createExecutionBudget?: () => TaskExecutionBudget;
   durationClock?: MonotonicClock;
+  repositoryDriftVerifier?: RepositoryDriftVerifier;
 }
 
 export interface TaskService {
@@ -117,6 +124,7 @@ export function createTaskService({
   executionLock = createTaskExecutionLock(),
   createExecutionBudget = () => createTaskExecutionBudget(),
   durationClock,
+  repositoryDriftVerifier = createNoopRepositoryDriftVerifier(),
 }: TaskServiceDependencies): TaskService {
   const retryOrchestrator = createRetryOrchestrator({
     store,
@@ -252,6 +260,9 @@ export function createTaskService({
             await completeCancellation(await latestTaskOr(task), active.stage);
             throw error;
           }
+          if (isRepositoryDriftApplicationError(error)) {
+            throw error;
+          }
           const latest = await latestTaskOr(task);
           await retryOrchestrator.recordFailure(
             latest,
@@ -299,6 +310,9 @@ export function createTaskService({
         } catch (error) {
           if (isTaskCancellationError(error)) {
             await completeCancellation(await latestTaskOr(task), active.stage);
+            throw error;
+          }
+          if (isRepositoryDriftApplicationError(error)) {
             throw error;
           }
           const latest = await latestTaskOr(task);
@@ -356,6 +370,9 @@ export function createTaskService({
         } catch (error) {
           if (isTaskCancellationError(error)) {
             await completeCancellation(await latestTaskOr(task), active.stage);
+            throw error;
+          }
+          if (isRepositoryDriftApplicationError(error)) {
             throw error;
           }
           const latest = await latestTaskOr(task);
@@ -490,6 +507,9 @@ export function createTaskService({
             await completeCancellation(await latestTaskOr(task), active.stage);
             throw error;
           }
+          if (isRepositoryDriftApplicationError(error)) {
+            throw error;
+          }
           const latest = await latestTaskOr(task);
           await retryOrchestrator.recordFailure(
             latest,
@@ -529,6 +549,9 @@ export function createTaskService({
 
         try {
           budget.throwIfExpired("PULL_REQUEST");
+          await assertNoRepositoryDrift(project, task, "PULL_REQUEST", {
+            signal: budget.composeSignal(undefined, "PULL_REQUEST"),
+          });
           pullRequest = await refreshPullRequestEvidence(
             project,
             task,
@@ -575,6 +598,23 @@ export function createTaskService({
 
         if (!resume.resumable || resume.nextStage === null) {
           return withResume(task, resume);
+        }
+
+        if (resume.nextStage !== "DEVELOPER") {
+          const drifted = await persistRepositoryDriftIfPresent(
+            project,
+            task,
+            retryStageForResume(resume.nextStage),
+          );
+
+          if (drifted !== undefined) {
+            return withResume(drifted, {
+              resumable: false,
+              lastCompletedStage: resume.lastCompletedStage,
+              nextStage: null,
+              reason: "REPOSITORY_STATE_MISMATCH",
+            });
+          }
         }
 
         const active = cancellationRegistry.register({
@@ -752,6 +792,15 @@ export function createTaskService({
     budget?.throwIfExpired("DEVOPS");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
+    await assertNoRepositoryDrift(project, task, "DEVOPS", {
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "DEVOPS") ??
+        active?.signal,
+    });
+    budget?.throwIfExpired("DEVOPS");
+    throwIfSignalCancelled(signal);
+    active?.throwIfCancelled();
     const timer = startWorkflowDurationTimer(durationClock);
     const validation = withDuration(
       await devOpsValidator.validate(copyTask(task), {
@@ -820,6 +869,15 @@ export function createTaskService({
     budget?.throwIfExpired("REVIEWER");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
+    await assertNoRepositoryDrift(project, task, "REVIEWER", {
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "REVIEWER") ??
+        active?.signal,
+    });
+    budget?.throwIfExpired("REVIEWER");
+    throwIfSignalCancelled(signal);
+    active?.throwIfCancelled();
     const timer = startWorkflowDurationTimer(durationClock);
     const review = withDuration(
       await taskReviewer.review(copyTask(task), project, {
@@ -862,6 +920,15 @@ export function createTaskService({
     signal?: AbortSignal,
   ): Promise<TaskSnapshot> {
     active?.setStage("PULL_REQUEST");
+    budget?.throwIfExpired("PULL_REQUEST");
+    throwIfSignalCancelled(signal);
+    active?.throwIfCancelled();
+    await assertNoRepositoryDrift(project, task, "PULL_REQUEST", {
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "PULL_REQUEST") ??
+        active?.signal,
+    });
     budget?.throwIfExpired("PULL_REQUEST");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -959,6 +1026,15 @@ export function createTaskService({
     budget?.throwIfExpired("CHECKPOINT");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
+    await assertNoRepositoryDrift(undefined, task, "CHECKPOINT", {
+      signal:
+        signal ??
+        budget?.composeSignal(active?.signal, "CHECKPOINT") ??
+        active?.signal,
+    });
+    budget?.throwIfExpired("CHECKPOINT");
+    throwIfSignalCancelled(signal);
+    active?.throwIfCancelled();
     const validation = await devOpsValidator.publishValidatedTask(copyTask(task), {
       signal:
         signal ??
@@ -1001,6 +1077,11 @@ export function createTaskService({
     active.setStage("CHECKPOINT");
     budget.throwIfExpired("CHECKPOINT");
     active.throwIfCancelled();
+    await assertNoRepositoryDrift(undefined, task, "CHECKPOINT", {
+      signal: budget.composeSignal(active.signal, "CHECKPOINT"),
+    });
+    budget.throwIfExpired("CHECKPOINT");
+    active.throwIfCancelled();
     const validation = await devOpsValidator.publishValidatedTask(copyTask(task), {
       signal: budget.composeSignal(active.signal, "CHECKPOINT"),
       setStage: (stage) => {
@@ -1021,6 +1102,72 @@ export function createTaskService({
         updatedAt: timestamp,
       }),
     );
+  }
+
+  async function assertNoRepositoryDrift(
+    project:
+      | Awaited<ReturnType<ProjectService["getProject"]>>
+      | undefined,
+    task: TaskSnapshot,
+    stage: RetryStage,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const drifted = await persistRepositoryDriftIfPresent(
+      project ?? (await projectService.getProject(task.projectId)),
+      task,
+      stage,
+      options.signal,
+    );
+
+    if (drifted !== undefined) {
+      throw repositoryDriftApplicationError();
+    }
+  }
+
+  async function persistRepositoryDriftIfPresent(
+    project:
+      | Awaited<ReturnType<ProjectService["getProject"]>>
+      | undefined,
+    task: TaskSnapshot,
+    stage: RetryStage,
+    signal?: AbortSignal,
+  ): Promise<TaskSnapshot | undefined> {
+    const resolvedProject =
+      project ?? (await projectService.getProject(task.projectId));
+
+    try {
+      await repositoryDriftVerifier.verifyTaskRepository({
+        project: resolvedProject,
+        task: copyTask(task),
+        signal,
+      });
+      return undefined;
+    } catch (error) {
+      if (isTaskCancellationError(error)) {
+        throw error;
+      }
+      if (!(error instanceof RepositoryDriftError)) {
+        throw error;
+      }
+
+      const latest = await latestTaskOr(task);
+      const timestamp = now().toISOString();
+      return copyTask(
+        await store.update({
+          ...copyTask(latest),
+          workflowFailure: createWorkflowFailureEvidence(
+            {
+              stage,
+              category: "REPOSITORY_MISMATCH",
+              retryable: false,
+              summary: REPOSITORY_DRIFT_SUMMARY,
+            },
+            timestamp,
+          ),
+          updatedAt: timestamp,
+        }),
+      );
+    }
   }
 
   async function latestTaskOr(task: TaskSnapshot): Promise<TaskSnapshot> {
@@ -1234,6 +1381,18 @@ function assertTaskNotCancelled(task: TaskSnapshot): void {
       "Task has been cancelled",
     );
   }
+}
+
+function repositoryDriftApplicationError(): ApplicationError {
+  return new ApplicationError(
+    "REPOSITORY_DRIFT",
+    409,
+    REPOSITORY_DRIFT_SUMMARY,
+  );
+}
+
+function isRepositoryDriftApplicationError(error: unknown): boolean {
+  return error instanceof ApplicationError && error.code === "REPOSITORY_DRIFT";
 }
 
 function isDevOpsPublisher(

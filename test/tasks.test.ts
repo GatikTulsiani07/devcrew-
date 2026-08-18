@@ -13,6 +13,10 @@ import { createProjectService } from "../src/projects/project-service.js";
 import type { ProjectService } from "../src/projects/project-service.js";
 import { createRetryStageFailure } from "../src/orchestration/retry-orchestrator.js";
 import type { PreparedRepository } from "../src/repositories/prepared-repositories.js";
+import {
+  RepositoryDriftError,
+  type RepositoryDriftVerifier,
+} from "../src/repositories/repository-drift.js";
 import { createDeterministicDeveloperExecutor } from "../src/tasks/deterministic-developer-executor.js";
 import { createDeterministicDevOpsValidator } from "../src/tasks/deterministic-devops-validator.js";
 import { createDeterministicPlanner } from "../src/tasks/deterministic-planner.js";
@@ -82,6 +86,7 @@ interface TestAppOptions {
   dates?: readonly string[];
   createExecutionBudget?: () => TaskExecutionBudget;
   durationClock?: MonotonicClock;
+  repositoryDriftVerifier?: RepositoryDriftVerifier;
 }
 
 function createDeterministicProjectService(): ProjectService {
@@ -113,6 +118,7 @@ function createTestApp({
   dates = ["2026-08-03T01:00:00.000Z"],
   createExecutionBudget,
   durationClock,
+  repositoryDriftVerifier,
 }: TestAppOptions = {}) {
   const projectService = createDeterministicProjectService();
   let taskCount = 0;
@@ -170,6 +176,9 @@ function createTestApp({
       ...(activityService === undefined ? {} : { activityService }),
       ...(createExecutionBudget === undefined ? {} : { createExecutionBudget }),
       ...(durationClock === undefined ? {} : { durationClock }),
+      ...(repositoryDriftVerifier === undefined
+        ? {}
+        : { repositoryDriftVerifier }),
     }),
     ...(activityService === undefined ? {} : { activityService }),
   });
@@ -371,6 +380,27 @@ function developerWithGitEvidence(
           },
         },
       };
+    },
+  };
+}
+
+function throwingDriftVerifier(): RepositoryDriftVerifier {
+  return {
+    async verifyTaskRepository() {
+      throw new RepositoryDriftError("WORKTREE_CHANGED");
+    },
+  };
+}
+
+function failOnDriftCheck(failingCall: number): RepositoryDriftVerifier {
+  let calls = 0;
+
+  return {
+    async verifyTaskRepository() {
+      calls += 1;
+      if (calls === failingCall) {
+        throw new RepositoryDriftError("WORKTREE_CHANGED");
+      }
     },
   };
 }
@@ -3703,6 +3733,211 @@ describe("task manager planning API", () => {
     const third = await retryTask(app);
     assert.equal(third.status, 409);
     assert.equal(calls, 2);
+  });
+});
+
+describe("repository drift task integration", () => {
+  it("records safe workflowFailure and does not run validation after drift", async () => {
+    let validationCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      repositoryDriftVerifier: throwingDriftVerifier(),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          validationCalls += 1;
+          return validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app);
+    const errorBody = await response.json();
+    const read = await app.request("/api/v1/projects/proj_000001/tasks/task_000001");
+    const readBody = await read.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(errorBody.error.code, "REPOSITORY_DRIFT");
+    assert.equal(validationCalls, 0);
+    assert.equal(readBody.task.workflowFailure.stage, "DEVOPS");
+    assert.equal(readBody.task.workflowFailure.category, "REPOSITORY_MISMATCH");
+    assert.equal(
+      readBody.task.workflowFailure.summary,
+      "Repository state changed after authoritative workflow evidence was recorded.",
+    );
+    assert.equal(JSON.stringify(readBody).includes("/Users/"), false);
+    assert.equal(JSON.stringify(readBody).includes("stdout"), false);
+  });
+
+  it("does not publish checkpoint or push after drift", async () => {
+    let driftChecks = 0;
+    let publishCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      repositoryDriftVerifier: {
+        async verifyTaskRepository() {
+          driftChecks += 1;
+          if (driftChecks === 2) {
+            throw new RepositoryDriftError("WORKTREE_CHANGED");
+          }
+        },
+      },
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          return validationWithPassedVisualReview();
+        },
+        async publishValidatedTask(): Promise<TaskValidation> {
+          publishCalls += 1;
+          throw new Error("checkpoint should not run after drift");
+        },
+      } as DevOpsValidator & DevOpsPublisher,
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app);
+    const read = await app.request("/api/v1/projects/proj_000001/tasks/task_000001");
+    const task = (await read.json()).task;
+
+    assert.equal(response.status, 409);
+    assert.equal(publishCalls, 0);
+    assert.equal(task.status, "VALIDATION_COMPLETED");
+    assert.equal(task.workflowFailure.stage, "GIT_CHECKPOINT");
+    assert.equal(task.workflowFailure.category, "REPOSITORY_MISMATCH");
+  });
+
+  it("does not run Reviewer after drift", async () => {
+    let reviewCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      repositoryDriftVerifier: throwingDriftVerifier(),
+      taskReviewer: {
+        async review(): Promise<Awaited<ReturnType<TaskReviewer["review"]>>> {
+          reviewCalls += 1;
+          throw new Error("reviewer should not run after drift");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 409);
+
+    const appWithoutValidationDrift = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      repositoryDriftVerifier: failOnDriftCheck(2),
+      taskReviewer: {
+        async review(): Promise<Awaited<ReturnType<TaskReviewer["review"]>>> {
+          reviewCalls += 1;
+          throw new Error("reviewer should not run after drift");
+        },
+      },
+    });
+    assert.equal((await createProject(appWithoutValidationDrift)).status, 201);
+    assert.equal((await createTask(appWithoutValidationDrift)).status, 201);
+    assert.equal((await decidePlan(appWithoutValidationDrift, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(appWithoutValidationDrift)).status, 200);
+    assert.equal((await validateTask(appWithoutValidationDrift)).status, 200);
+
+    const response = await reviewTask(appWithoutValidationDrift);
+
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error.code, "REPOSITORY_DRIFT");
+    assert.equal(reviewCalls, 0);
+  });
+
+  it("does not call Pull Request creation after drift", async () => {
+    let prCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      repositoryDriftVerifier: failOnDriftCheck(3),
+      pullRequestCreator: {
+        async createPullRequest() {
+          prCalls += 1;
+          throw new Error("GitHub should not be called after drift");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+
+    const response = await createPullRequest(app);
+
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error.code, "REPOSITORY_DRIFT");
+    assert.equal(prCalls, 0);
+  });
+
+  it("resume refuses a drifted repository without advancing the workflow", async () => {
+    let validationCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      repositoryDriftVerifier: throwingDriftVerifier(),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          validationCalls += 1;
+          return validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await resumeTask(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.task.resume, {
+      resumable: false,
+      lastCompletedStage: "DEVELOPER",
+      nextStage: null,
+      reason: "REPOSITORY_STATE_MISMATCH",
+    });
+    assert.equal(body.task.workflowFailure.category, "REPOSITORY_MISMATCH");
+    assert.equal(validationCalls, 0);
+  });
+
+  it("idempotent replay returns the cached result without rerunning drift verification", async () => {
+    let driftChecks = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      repositoryDriftVerifier: {
+        async verifyTaskRepository() {
+          driftChecks += 1;
+          if (driftChecks > 1) {
+            throw new RepositoryDriftError("WORKTREE_CHANGED");
+          }
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const first = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "drift-idempotency-key" },
+    });
+    const replay = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "drift-idempotency-key" },
+    });
+
+    assert.equal(first.status, 200);
+    assert.equal(replay.status, 200);
+    assert.deepEqual(await replay.json(), await first.json());
+    assert.equal(driftChecks, 1);
   });
 });
 

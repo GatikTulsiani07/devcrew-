@@ -304,6 +304,10 @@ export function classifyRetryFailure(
     return classifyReason("PULL_REQUEST", error.reason);
   }
 
+  if (error instanceof ApplicationError && error.code === "REPOSITORY_DRIFT") {
+    return classification(fallbackStage, "REPOSITORY_MISMATCH", false);
+  }
+
   if (error instanceof ApplicationError && error.code === "INVALID_TASK_TRANSITION") {
     return classification(fallbackStage, "INVALID_TRANSITION", false);
   }
