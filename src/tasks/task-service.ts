@@ -50,6 +50,7 @@ import {
 } from "./task-execution-budget.js";
 import {
   startWorkflowDurationTimer,
+  safeDurationMs,
   type MonotonicClock,
 } from "./workflow-duration.js";
 import { createWorkflowFailureEvidence } from "./workflow-failure.js";
@@ -79,6 +80,11 @@ import type {
   TaskSnapshot,
   TaskStore,
 } from "./types.js";
+import {
+  appendCommandAudit,
+  type CommandAuditOperation,
+  type CommandAuditStatus,
+} from "./task-command-audit.js";
 
 export type TaskIdGenerator = () => string;
 export type TaskClock = () => Date;
@@ -93,11 +99,13 @@ export interface TaskServiceDependencies {
   store: TaskStore;
   generateTaskId?: TaskIdGenerator;
   now?: TaskClock;
+  auditNow?: TaskClock;
   activityService?: ActivityService;
   cancellationRegistry?: TaskCancellationRegistry;
   executionLock?: TaskExecutionLock;
   createExecutionBudget?: () => TaskExecutionBudget;
   durationClock?: MonotonicClock;
+  auditDurationClock?: MonotonicClock;
   repositoryDriftVerifier?: RepositoryDriftVerifier;
   validationIntegrityService?: ValidationIntegrityService;
   createWorkflowCorrelationId?: WorkflowCorrelationIdFactory;
@@ -138,11 +146,13 @@ export function createTaskService({
   store,
   generateTaskId = () => `task_${randomUUID()}`,
   now = () => new Date(),
+  auditNow = () => new Date(),
   activityService = createNoopActivityService(),
   cancellationRegistry = createTaskCancellationRegistry(),
   executionLock = createTaskExecutionLock(),
   createExecutionBudget = () => createTaskExecutionBudget(),
   durationClock,
+  auditDurationClock,
   repositoryDriftVerifier = createNoopRepositoryDriftVerifier(),
   validationIntegrityService = createNoopValidationIntegrityService(),
   createWorkflowCorrelationId = defaultCreateWorkflowCorrelationId,
@@ -257,7 +267,15 @@ export function createTaskService({
 
       await assertTaskExists(projectId, taskId);
 
-      return executionLock.withLock(projectId, taskId, async () => {
+      return executionLock.withLock(
+        projectId,
+        taskId,
+        () => runCommandAudit(
+        "EXECUTE",
+        projectId,
+        taskId,
+        command,
+        async () => {
         const task = await requireTask(projectId, taskId);
 
         if (task.status !== "PLAN_APPROVED" || task.execution !== undefined) {
@@ -302,7 +320,9 @@ export function createTaskService({
           budget.dispose();
           active.unregister();
         }
-      });
+        },
+        ),
+      );
     },
 
     async validateTask(projectId, taskId) {
@@ -311,7 +331,15 @@ export function createTaskService({
 
       await assertTaskExists(projectId, taskId);
 
-      return executionLock.withLock(projectId, taskId, async () => {
+      return executionLock.withLock(
+        projectId,
+        taskId,
+        () => runCommandAudit(
+        "VALIDATE",
+        projectId,
+        taskId,
+        command,
+        async () => {
         const task = await requireTask(projectId, taskId);
 
         if (
@@ -359,7 +387,9 @@ export function createTaskService({
           budget.dispose();
           active.unregister();
         }
-      });
+        },
+        ),
+      );
     },
 
     async reviewTask(projectId, taskId) {
@@ -368,7 +398,15 @@ export function createTaskService({
 
       await assertTaskExists(projectId, taskId);
 
-      return executionLock.withLock(projectId, taskId, async () => {
+      return executionLock.withLock(
+        projectId,
+        taskId,
+        () => runCommandAudit(
+        "REVIEW",
+        projectId,
+        taskId,
+        command,
+        async () => {
         const task = await requireTask(projectId, taskId);
 
         if (task.status !== "VALIDATION_COMPLETED" || task.review !== undefined) {
@@ -424,7 +462,9 @@ export function createTaskService({
           budget.dispose();
           active.unregister();
         }
-      });
+        },
+        ),
+      );
     },
 
     async retryTask(projectId, taskId) {
@@ -433,7 +473,15 @@ export function createTaskService({
 
       await assertTaskExists(projectId, taskId);
 
-      return executionLock.withLock(projectId, taskId, async () => {
+      return executionLock.withLock(
+        projectId,
+        taskId,
+        () => runCommandAudit(
+        "RETRY",
+        projectId,
+        taskId,
+        command,
+        async () => {
         const task = await requireTask(projectId, taskId);
 
         assertTaskNotCancelled(task);
@@ -473,7 +521,9 @@ export function createTaskService({
           budget.dispose();
           active.unregister();
         }
-      });
+        },
+        ),
+      );
     },
 
     async cancelTask(projectId, taskId) {
@@ -529,7 +579,15 @@ export function createTaskService({
 
       await assertTaskExists(projectId, taskId);
 
-      return executionLock.withLock(projectId, taskId, async () => {
+      return executionLock.withLock(
+        projectId,
+        taskId,
+        () => runCommandAudit(
+        "PULL_REQUEST_CREATE",
+        projectId,
+        taskId,
+        command,
+        async () => {
         const task = await requireTask(projectId, taskId);
 
         assertNoPendingRetry(task);
@@ -566,7 +624,9 @@ export function createTaskService({
           budget.dispose();
           active.unregister();
         }
-      });
+        },
+        ),
+      );
     },
 
     async refreshPullRequest(projectId, taskId) {
@@ -575,7 +635,15 @@ export function createTaskService({
 
       await assertTaskExists(projectId, taskId);
 
-      return executionLock.withLock(projectId, taskId, async () => {
+      return executionLock.withLock(
+        projectId,
+        taskId,
+        () => runCommandAudit(
+        "PULL_REQUEST_REFRESH",
+        projectId,
+        taskId,
+        command,
+        async () => {
         const task = await requireTask(projectId, taskId);
 
         assertNoPendingRetry(task);
@@ -635,7 +703,9 @@ export function createTaskService({
             updatedAt: timestamp,
           }),
         );
-      });
+        },
+        ),
+      );
     },
 
     async publishPullRequestSummaryComment(projectId, taskId) {
@@ -644,7 +714,15 @@ export function createTaskService({
 
       await assertTaskExists(projectId, taskId);
 
-      return executionLock.withLock(projectId, taskId, async () => {
+      return executionLock.withLock(
+        projectId,
+        taskId,
+        () => runCommandAudit(
+        "PULL_REQUEST_SUMMARY_COMMENT",
+        projectId,
+        taskId,
+        command,
+        async () => {
         const task = await requireTask(projectId, taskId);
 
         assertNoPendingRetry(task);
@@ -731,7 +809,9 @@ export function createTaskService({
           budget.dispose();
           active.unregister();
         }
-      });
+        },
+        ),
+      );
     },
 
     async resumeTask(projectId, taskId) {
@@ -740,7 +820,15 @@ export function createTaskService({
 
       await assertTaskExists(projectId, taskId);
 
-      return executionLock.withLock(projectId, taskId, async () => {
+      return executionLock.withLock(
+        projectId,
+        taskId,
+        () => runCommandAudit(
+        "RESUME",
+        projectId,
+        taskId,
+        command,
+        async () => {
         const task = await requireTask(projectId, taskId);
         const resume = deriveResumeMetadata(task, isDevOpsPublisher(devOpsValidator));
 
@@ -823,7 +911,9 @@ export function createTaskService({
           budget.dispose();
           active.unregister();
         }
-      });
+        },
+        ),
+      );
     },
   };
 
@@ -845,6 +935,73 @@ export function createTaskService({
     }
 
     return task;
+  }
+
+  async function runCommandAudit(
+    operation: CommandAuditOperation,
+    projectId: string,
+    taskId: string,
+    command: WorkflowCommandContext,
+    execute: () => Promise<TaskSnapshot>,
+  ): Promise<TaskSnapshot> {
+    const startedAt = auditNow().toISOString();
+    const timer = startWorkflowDurationTimer(auditDurationClock);
+
+    try {
+      const result = await execute();
+      const completedAt = auditNow().toISOString();
+      const status = commandAuditSuccessStatus(result);
+      const failureCategory =
+        status === "FAILED"
+          ? result.workflowFailure?.category ?? "REPOSITORY_MISMATCH"
+          : undefined;
+      const audited = appendCommandAudit(result, {
+        operation,
+        workflowCorrelationId: command.workflowCorrelationId,
+        status,
+        startedAt,
+        completedAt,
+        durationMs: safeDurationMs(timer.finish()),
+        ...(failureCategory === undefined ? {} : { failureCategory }),
+      });
+
+      return copyTask(
+        await store.update({
+          ...audited,
+          updatedAt: result.updatedAt,
+        }),
+      );
+    } catch (error) {
+      const latest = await store.findByProjectAndId(projectId, taskId);
+
+      if (latest === undefined) {
+        throw error;
+      }
+
+      const completedAt = auditNow().toISOString();
+      const status = commandAuditStatus(error, latest);
+      const failureCategory =
+        status === "SUCCEEDED" || status === "CANCELLED"
+          ? undefined
+          : latest.workflowFailure?.category ??
+            classifyRetryFailure(error, commandAuditFallbackStage(operation))
+              .category;
+      const audited = appendCommandAudit(latest, {
+        operation,
+        workflowCorrelationId: command.workflowCorrelationId,
+        status,
+        startedAt,
+        completedAt,
+        durationMs: safeDurationMs(timer.finish()),
+        ...(failureCategory === undefined ? {} : { failureCategory }),
+      });
+
+      await store.update({
+        ...audited,
+        updatedAt: latest.updatedAt,
+      });
+      throw error;
+    }
   }
 
   async function retryStage(
@@ -1755,6 +1912,53 @@ function isDevOpsPublisher(
   return "publishValidatedTask" in devOpsValidator;
 }
 
+function commandAuditStatus(
+  error: unknown,
+  latest: TaskSnapshot,
+): CommandAuditStatus {
+  if (isTaskCancellationError(error)) {
+    return "CANCELLED";
+  }
+
+  if (
+    error instanceof TaskExecutionTimeoutError ||
+    latest.workflowFailure?.category === "TASK_EXECUTION_TIMEOUT"
+  ) {
+    return "TIMED_OUT";
+  }
+
+  return "FAILED";
+}
+
+function commandAuditSuccessStatus(
+  result: TaskSnapshot,
+): CommandAuditStatus {
+  return result.resume?.reason === "REPOSITORY_STATE_MISMATCH"
+    ? "FAILED"
+    : "SUCCEEDED";
+}
+
+function commandAuditFallbackStage(
+  operation: CommandAuditOperation,
+): RetryStage {
+  switch (operation) {
+    case "EXECUTE":
+      return "DEVELOPER";
+    case "VALIDATE":
+      return "DEVOPS";
+    case "REVIEW":
+      return "REVIEWER";
+    case "RETRY":
+      return "DEVELOPER";
+    case "RESUME":
+      return "DEVELOPER";
+    case "PULL_REQUEST_CREATE":
+    case "PULL_REQUEST_REFRESH":
+    case "PULL_REQUEST_SUMMARY_COMMENT":
+      return "PULL_REQUEST";
+  }
+}
+
 function withDuration<T extends object>(evidence: T, durationMs: number): T & { durationMs: number } {
   return {
     ...evidence,
@@ -2279,7 +2483,25 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                     task.pullRequestSummaryComment.workflowCorrelationId,
                 }),
             updatedAt: task.pullRequestSummaryComment.updatedAt,
-          },
+        },
+      }),
+    ...(task.resume === undefined
+      ? {}
+      : { resume: copyResumeMetadata(task.resume) }),
+    ...(task.commandAudit === undefined
+      ? {}
+      : {
+          commandAudit: task.commandAudit.map((entry) => ({
+            operation: entry.operation,
+            workflowCorrelationId: entry.workflowCorrelationId,
+            status: entry.status,
+            startedAt: entry.startedAt,
+            completedAt: entry.completedAt,
+            durationMs: entry.durationMs,
+            ...(entry.failureCategory === undefined
+              ? {}
+              : { failureCategory: entry.failureCategory }),
+          })),
         }),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
