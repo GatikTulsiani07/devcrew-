@@ -113,6 +113,7 @@ export interface TaskExecution {
   role: ExecutionRole;
   status: ExecutionStatus;
   attempt: 1;
+  workflowCorrelationId?: string;
   startedAt: string;
   completedAt: string;
   durationMs?: number;
@@ -126,15 +127,18 @@ export interface VisualRepairSourceReview {
 }
 
 export interface VisualRepairAttemptDeveloperEvidence {
+  workflowCorrelationId?: string;
   summary: string;
   changedFiles: readonly string[];
 }
 
 export interface VisualRepairAttemptValidationEvidence {
+  workflowCorrelationId?: string;
   status: "PASSED";
 }
 
 export interface VisualRepairAttemptReviewEvidence {
+  workflowCorrelationId?: string;
   status: "PASSED" | "FAILED";
   summary: string;
   findingCount: number;
@@ -142,6 +146,7 @@ export interface VisualRepairAttemptReviewEvidence {
 
 export interface VisualRepairAttempt {
   attempt: number;
+  workflowCorrelationId?: string;
   startedAt: string;
   completedAt?: string;
   durationMs?: number;
@@ -162,6 +167,7 @@ export interface VisualRepairEvidence {
 export interface RetryAttemptEvidence {
   stage: RetryStage;
   attempt: number;
+  workflowCorrelationId?: string;
   status: "FAILED" | "SUCCEEDED";
   category: RetryFailureCategory;
   startedAt: string;
@@ -172,6 +178,7 @@ export interface RetryAttemptEvidence {
 }
 
 export interface RetryRecoveryEvidence {
+  workflowCorrelationId?: string;
   failedStage?: RetryStage;
   retryAvailable: boolean;
   exhausted?: boolean;
@@ -180,6 +187,7 @@ export interface RetryRecoveryEvidence {
 
 export interface WorkflowFailureEvidence {
   stage: WorkflowFailureStage;
+  workflowCorrelationId?: string;
   category: RetryFailureCategory;
   summary: string;
   failedAt: string;
@@ -204,6 +212,7 @@ export interface TaskValidation {
   role: ValidationRole;
   status: ValidationStatus;
   attempt: 1;
+  workflowCorrelationId?: string;
   startedAt: string;
   completedAt: string;
   durationMs?: number;
@@ -230,6 +239,7 @@ export interface TaskReview {
   status: ReviewStatus;
   verdict: ReviewVerdict;
   attempt: 1;
+  workflowCorrelationId?: string;
   startedAt: string;
   completedAt: string;
   durationMs?: number;
@@ -239,6 +249,7 @@ export interface TaskReview {
 
 export interface TaskPullRequestEvidence {
   number: number;
+  workflowCorrelationId?: string;
   url: string;
   state: PullRequestState;
   headBranch: string;
@@ -250,6 +261,7 @@ export interface TaskPullRequestEvidence {
 
 export interface TaskPullRequestSummaryCommentEvidence {
   commentId: number;
+  workflowCorrelationId?: string;
   updatedAt: string;
 }
 

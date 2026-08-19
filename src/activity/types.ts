@@ -35,6 +35,7 @@ export interface ActivityEvent {
   sequence: ActivitySequence;
   projectId: string;
   taskId?: string;
+  workflowCorrelationId?: string;
   type: ActivityEventType;
   actor: ActivityActor;
   summary: string;
@@ -44,6 +45,7 @@ export interface ActivityEvent {
 export interface ActivityEventInput {
   projectId: string;
   taskId?: string;
+  workflowCorrelationId?: string;
   type: ActivityEventType;
   actor: ActivityActor;
   summary: string;

@@ -27,6 +27,7 @@ import type {
   TaskStore,
 } from "../tasks/types.js";
 import { createWorkflowFailureEvidence } from "../tasks/workflow-failure.js";
+import type { WorkflowCommandContext } from "../tasks/workflow-correlation.js";
 
 export const MAX_RETRY_ATTEMPTS = 2;
 const MAX_RETRY_ATTEMPT_EVIDENCE = 20;
@@ -59,6 +60,7 @@ export interface RetryOrchestratorDependencies {
     stage: RetryStage,
     task: TaskSnapshot,
     signal?: AbortSignal,
+    command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot>;
 }
 
@@ -67,12 +69,14 @@ export interface RetryOrchestrator {
     task: TaskSnapshot,
     fallbackStage: RetryStage,
     error: unknown,
+    command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot>;
   retry(
     task: TaskSnapshot,
     options?: {
       signal?: AbortSignal;
       setStage?: (stage: CancellationStage) => void;
+      command?: WorkflowCommandContext;
     },
   ): Promise<TaskSnapshot>;
 }
@@ -86,7 +90,7 @@ export function createRetryOrchestrator({
   runStage,
 }: RetryOrchestratorDependencies): RetryOrchestrator {
   return {
-    async recordFailure(task, fallbackStage, error) {
+    async recordFailure(task, fallbackStage, error, command) {
       const classification = classifyRetryFailure(error, fallbackStage);
       const attemptNumber = attemptsForStage(
         task.retryRecovery?.attempts ?? [],
@@ -100,6 +104,7 @@ export function createRetryOrchestrator({
       const evidence = failureAttemptEvidence({
         classification,
         attempt: attemptNumber,
+        workflowCorrelationId: command?.workflowCorrelationId,
         startedAt: timestamp,
         completedAt: timestamp,
       });
@@ -108,6 +113,7 @@ export function createRetryOrchestrator({
         await store.update({
           ...copyTask(task),
           retryRecovery: boundedRecovery({
+            workflowCorrelationId: command?.workflowCorrelationId,
             failedStage: classification.stage,
             retryAvailable,
             exhausted,
@@ -116,6 +122,8 @@ export function createRetryOrchestrator({
           workflowFailure: createWorkflowFailureEvidence(
             classification,
             timestamp,
+            undefined,
+            command?.workflowCorrelationId,
           ),
           updatedAt: timestamp,
         }),
@@ -157,6 +165,7 @@ export function createRetryOrchestrator({
       await activityService.append({
         projectId: task.projectId,
         taskId: task.id,
+        workflowCorrelationId: options.command?.workflowCorrelationId,
         type: "RETRY_STARTED",
         actor: { kind: "SYSTEM" },
         summary: `Retrying ${stageLabel(stage)}.`,
@@ -165,13 +174,19 @@ export function createRetryOrchestrator({
       const startedAt = now().toISOString();
       const timer = startWorkflowDurationTimer(durationClock);
       try {
-        const retried = await runStage(stage, copyTask(task), options.signal);
+        const retried = await runStage(
+          stage,
+          copyTask(task),
+          options.signal,
+          options.command,
+        );
         throwIfSignalCancelled(options.signal);
         const completedAt = now().toISOString();
         const durationMs = timer.finish();
         const success = successAttemptEvidence({
           stage,
           attempt: attemptNumber,
+          workflowCorrelationId: options.command?.workflowCorrelationId,
           startedAt,
           completedAt,
           durationMs,
@@ -180,6 +195,7 @@ export function createRetryOrchestrator({
         const updated = await store.update({
           ...copyTask(retried),
           retryRecovery: boundedRecovery({
+            workflowCorrelationId: options.command?.workflowCorrelationId,
             retryAvailable: false,
             exhausted: false,
             attempts: [...recovery.attempts, success],
@@ -191,6 +207,7 @@ export function createRetryOrchestrator({
         await activityService.append({
           projectId: task.projectId,
           taskId: task.id,
+          workflowCorrelationId: options.command?.workflowCorrelationId,
           type: "RETRY_COMPLETED",
           actor: { kind: "SYSTEM" },
           summary: `${stageLabel(stage)} retry succeeded.`,
@@ -208,6 +225,7 @@ export function createRetryOrchestrator({
         const failure = failureAttemptEvidence({
           classification,
           attempt: attemptNumber,
+          workflowCorrelationId: options.command?.workflowCorrelationId,
           startedAt,
           completedAt,
           durationMs,
@@ -218,6 +236,7 @@ export function createRetryOrchestrator({
         await store.update({
           ...copyTask(latest),
           retryRecovery: boundedRecovery({
+            workflowCorrelationId: options.command?.workflowCorrelationId,
             failedStage: classification.stage,
             retryAvailable: classification.retryable && !exhausted,
             exhausted: classification.retryable && exhausted,
@@ -226,6 +245,8 @@ export function createRetryOrchestrator({
           workflowFailure: createWorkflowFailureEvidence(
             classification,
             completedAt,
+            undefined,
+            options.command?.workflowCorrelationId,
           ),
           updatedAt: completedAt,
         });
@@ -234,6 +255,7 @@ export function createRetryOrchestrator({
           await activityService.append({
             projectId: task.projectId,
             taskId: task.id,
+            workflowCorrelationId: options.command?.workflowCorrelationId,
             type: "RETRY_EXHAUSTED",
             actor: { kind: "SYSTEM" },
             summary: `${stageLabel(stage)} retry limit reached.`,
@@ -491,6 +513,7 @@ function classification(
 function failureAttemptEvidence(input: {
   classification: RetryClassification;
   attempt: number;
+  workflowCorrelationId?: string;
   startedAt: string;
   completedAt: string;
   durationMs?: number;
@@ -498,6 +521,9 @@ function failureAttemptEvidence(input: {
   return {
     stage: input.classification.stage,
     attempt: input.attempt,
+    ...(input.workflowCorrelationId === undefined
+      ? {}
+      : { workflowCorrelationId: input.workflowCorrelationId }),
     status: "FAILED",
     category: input.classification.category,
     startedAt: input.startedAt,
@@ -511,6 +537,7 @@ function failureAttemptEvidence(input: {
 function successAttemptEvidence(input: {
   stage: RetryStage;
   attempt: number;
+  workflowCorrelationId?: string;
   startedAt: string;
   completedAt: string;
   durationMs?: number;
@@ -519,6 +546,9 @@ function successAttemptEvidence(input: {
   return {
     stage: input.stage,
     attempt: input.attempt,
+    ...(input.workflowCorrelationId === undefined
+      ? {}
+      : { workflowCorrelationId: input.workflowCorrelationId }),
     status: "SUCCEEDED",
     category: input.previousCategory ?? "UNKNOWN_FAILURE",
     startedAt: input.startedAt,
@@ -531,12 +561,18 @@ function successAttemptEvidence(input: {
 
 function boundedRecovery(recovery: RetryRecoveryEvidence): RetryRecoveryEvidence {
   return {
+    ...(recovery.workflowCorrelationId === undefined
+      ? {}
+      : { workflowCorrelationId: recovery.workflowCorrelationId }),
     ...(recovery.failedStage === undefined ? {} : { failedStage: recovery.failedStage }),
     retryAvailable: recovery.retryAvailable,
     exhausted: recovery.exhausted === true,
     attempts: recovery.attempts.slice(-MAX_RETRY_ATTEMPT_EVIDENCE).map((attempt) => ({
       stage: attempt.stage,
       attempt: attempt.attempt,
+      ...(attempt.workflowCorrelationId === undefined
+        ? {}
+        : { workflowCorrelationId: attempt.workflowCorrelationId }),
       status: attempt.status,
       category: attempt.category,
       startedAt: attempt.startedAt,
