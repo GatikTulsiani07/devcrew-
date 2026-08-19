@@ -32,6 +32,7 @@ import {
   type TaskExecutionBudget,
 } from "../src/tasks/task-execution-budget.js";
 import { createTaskService } from "../src/tasks/task-service.js";
+import type { WorkflowCorrelationIdFactory } from "../src/tasks/workflow-correlation.js";
 import type { MonotonicClock } from "../src/tasks/workflow-duration.js";
 import type {
   DeveloperExecutor,
@@ -92,6 +93,30 @@ function withoutTaskOutcome<T>(body: T): T {
   return copy;
 }
 
+function withoutWorkflowCorrelationIds<T>(body: T): T {
+  const copy = structuredClone(body);
+
+  const strip = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) strip(item);
+      return;
+    }
+
+    if (typeof value !== "object" || value === null) {
+      return;
+    }
+
+    delete (value as { workflowCorrelationId?: string }).workflowCorrelationId;
+
+    for (const child of Object.values(value)) {
+      strip(child);
+    }
+  };
+
+  strip(copy);
+  return copy;
+}
+
 interface TestAppOptions {
   planner?: ManagerPlanner;
   developerExecutor?: DeveloperExecutor;
@@ -104,6 +129,7 @@ interface TestAppOptions {
   durationClock?: MonotonicClock;
   repositoryDriftVerifier?: RepositoryDriftVerifier;
   validationIntegrityService?: ValidationIntegrityService;
+  createWorkflowCorrelationId?: WorkflowCorrelationIdFactory;
 }
 
 function createDeterministicProjectService(): ProjectService {
@@ -137,6 +163,7 @@ function createTestApp({
   durationClock,
   repositoryDriftVerifier,
   validationIntegrityService,
+  createWorkflowCorrelationId,
 }: TestAppOptions = {}) {
   const projectService = createDeterministicProjectService();
   let taskCount = 0;
@@ -200,6 +227,9 @@ function createTestApp({
       ...(validationIntegrityService === undefined
         ? {}
         : { validationIntegrityService }),
+      ...(createWorkflowCorrelationId === undefined
+        ? {}
+        : { createWorkflowCorrelationId }),
     }),
     ...(activityService === undefined ? {} : { activityService }),
   });
@@ -362,6 +392,21 @@ async function publishPullRequestSummaryComment(
   );
 }
 
+async function refreshPullRequest(
+  app: ReturnType<typeof createTestApp>,
+  projectId = "proj_000001",
+  taskId = "task_000001",
+  init: RequestInit = {},
+) {
+  return app.request(
+    `/api/v1/projects/${projectId}/tasks/${taskId}/pull-request/refresh`,
+    {
+      method: "POST",
+      ...init,
+    },
+  );
+}
+
 async function resumeTask(
   app: ReturnType<typeof createTestApp>,
   projectId = "proj_000001",
@@ -485,7 +530,7 @@ describe("task manager planning API", () => {
 
     assert.equal(response.status, 201);
     assert.equal(response.headers.get("X-Request-Id"), "req_task_test");
-    assert.deepEqual(await response.json(), {
+    assert.deepEqual(withoutWorkflowCorrelationIds(await response.json()), {
       task: {
         id: "task_000001",
         projectId: "proj_000001",
@@ -587,7 +632,7 @@ describe("task manager planning API", () => {
     const response = await createTask(app, "proj_missing");
 
     assert.equal(response.status, 404);
-    assert.deepEqual(await response.json(), {
+    assert.deepEqual(withoutWorkflowCorrelationIds(await response.json()), {
       requestId: "req_task_test",
       status: "error",
       error: {
@@ -608,7 +653,7 @@ describe("task manager planning API", () => {
     });
 
     assert.equal(response.status, 400);
-    assert.deepEqual(await response.json(), {
+    assert.deepEqual(withoutWorkflowCorrelationIds(await response.json()), {
       requestId: "req_task_test",
       status: "error",
       error: {
@@ -650,7 +695,7 @@ describe("task manager planning API", () => {
     );
 
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), {
+    assert.deepEqual(withoutWorkflowCorrelationIds(await response.json()), {
       task: {
         id: "task_000001",
         projectId: "proj_000001",
@@ -717,7 +762,7 @@ describe("task manager planning API", () => {
     );
 
     assert.equal(response.status, 404);
-    assert.deepEqual(await response.json(), {
+    assert.deepEqual(withoutWorkflowCorrelationIds(await response.json()), {
       requestId: "req_task_test",
       status: "error",
       error: {
@@ -819,7 +864,7 @@ describe("task manager planning API", () => {
 
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("X-Request-Id"), "req_task_test");
-    assert.deepEqual(await response.json(), {
+    assert.deepEqual(withoutWorkflowCorrelationIds(await response.json()), {
       task: {
         id: "task_000001",
         projectId: "proj_000001",
@@ -1184,7 +1229,7 @@ describe("task manager planning API", () => {
 
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("X-Request-Id"), "req_task_test");
-    assert.deepEqual(await response.json(), {
+    assert.deepEqual(withoutWorkflowCorrelationIds(await response.json()), {
       task: {
         id: "task_000001",
         projectId: "proj_000001",
@@ -1730,7 +1775,7 @@ describe("task manager planning API", () => {
 
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("X-Request-Id"), "req_task_test");
-    assert.deepEqual(await response.json(), {
+    assert.deepEqual(withoutWorkflowCorrelationIds(await response.json()), {
       task: {
         id: "task_000001",
         projectId: "proj_000001",
@@ -2364,7 +2409,7 @@ describe("task manager planning API", () => {
 
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("X-Request-Id"), "req_task_test");
-    assert.deepEqual(await response.json(), {
+    assert.deepEqual(withoutWorkflowCorrelationIds(await response.json()), {
       task: {
         id: "task_000001",
         projectId: "proj_000001",
@@ -4996,6 +5041,279 @@ describe("task route idempotency", () => {
   });
 });
 
+describe("workflow correlation IDs", () => {
+  it("assigns server-generated IDs to direct execute, validate, and review commands", async () => {
+    const ids = workflowCorrelationIds();
+    const activityStore = new InMemoryActivityStore();
+    const activityService = createActivityService({ store: activityStore });
+    const app = createTestApp({
+      createWorkflowCorrelationId: ids.next,
+      activityService,
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          return validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const executed = await executeTask(app);
+    const validated = await validateTask(app);
+    const reviewed = await reviewTask(app);
+    const executedBody = await executed.json();
+    const validatedBody = await validated.json();
+    const reviewedBody = await reviewed.json();
+
+    assert.equal(executedBody.task.execution.workflowCorrelationId, ids.at(0));
+    assert.equal(validatedBody.task.validation.workflowCorrelationId, ids.at(1));
+    assert.equal(
+      validatedBody.task.validation.browserVerification.workflowCorrelationId,
+      ids.at(1),
+    );
+    assert.equal(
+      validatedBody.task.validation.browserScreenshot.workflowCorrelationId,
+      ids.at(1),
+    );
+    assert.equal(
+      validatedBody.task.validation.visualReview.workflowCorrelationId,
+      ids.at(1),
+    );
+    assert.equal(reviewedBody.task.review.workflowCorrelationId, ids.at(2));
+
+    const activity = await app.request("/api/v1/projects/proj_000001/activity");
+    const events = (await activity.json()).events as Array<{
+      type: string;
+      workflowCorrelationId?: string;
+    }>;
+    assert.equal(
+      events.find((event) => event.type === "IMPLEMENTATION_COMPLETED")
+        ?.workflowCorrelationId,
+      ids.at(0),
+    );
+    assert.equal(
+      events.find((event) => event.type === "VALIDATION_COMPLETED")
+        ?.workflowCorrelationId,
+      ids.at(1),
+    );
+    assert.equal(
+      events.find((event) => event.type === "REVIEW_COMPLETED")
+        ?.workflowCorrelationId,
+      ids.at(2),
+    );
+  });
+
+  it("reuses the validation command ID across Visual Repair and nested repair work", async () => {
+    const ids = workflowCorrelationIds();
+    let validationCalls = 0;
+    const app = createTestApp({
+      createWorkflowCorrelationId: ids.next,
+      developerExecutor: developerWithGitEvidence(),
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          validationCalls += 1;
+          return validationCalls === 1
+            ? validationWithFailedVisualReviewScreenshot()
+            : validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app);
+    const body = await response.json();
+    const attempt = body.task.visualRepair.attempts[0];
+
+    assert.equal(response.status, 200);
+    assert.equal(body.task.execution.workflowCorrelationId, ids.at(1));
+    assert.equal(body.task.validation.workflowCorrelationId, ids.at(1));
+    assert.equal(body.task.validation.browserVerification.workflowCorrelationId, ids.at(1));
+    assert.equal(body.task.validation.browserScreenshot.workflowCorrelationId, ids.at(1));
+    assert.equal(body.task.validation.visualReview.workflowCorrelationId, ids.at(1));
+    assert.equal(attempt.workflowCorrelationId, ids.at(1));
+    assert.equal(attempt.developer.workflowCorrelationId, ids.at(1));
+    assert.equal(attempt.validation.workflowCorrelationId, ids.at(1));
+    assert.equal(attempt.visualReview.workflowCorrelationId, ids.at(1));
+  });
+
+  it("uses one retry command ID for retry evidence and nested retried stages", async () => {
+    const ids = workflowCorrelationIds();
+    let developerCalls = 0;
+    const app = createTestApp({
+      createWorkflowCorrelationId: ids.next,
+      developerExecutor: {
+        async execute(): Promise<TaskExecution> {
+          developerCalls += 1;
+          if (developerCalls === 1) {
+            throw createRetryStageFailure("DEVELOPER", "PROVIDER_TIMEOUT", true);
+          }
+          return developerExecution(`exec_retry_${developerCalls}`);
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const failed = await executeTask(app);
+    const failedRead = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const failureBody = await failedRead.json();
+    const retried = await retryTask(app);
+    const retryBody = await retried.json();
+
+    assert.equal(failed.status, 500);
+    assert.equal(failureBody.task.workflowFailure.workflowCorrelationId, ids.at(0));
+    assert.equal(retried.status, 200);
+    assert.equal(retryBody.task.execution.workflowCorrelationId, ids.at(1));
+    assert.equal(retryBody.task.retryRecovery.workflowCorrelationId, ids.at(1));
+    assert.equal(retryBody.task.retryRecovery.attempts[0].workflowCorrelationId, ids.at(0));
+    assert.equal(retryBody.task.retryRecovery.attempts[1].workflowCorrelationId, ids.at(1));
+  });
+
+  it("uses the resume command ID for the stage advanced by resume", async () => {
+    const ids = workflowCorrelationIds();
+    const app = createTestApp({
+      createWorkflowCorrelationId: ids.next,
+      developerExecutor: developerWithGitEvidence(),
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const response = await resumeTask(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.task.execution.workflowCorrelationId, ids.at(0));
+    assert.deepEqual(body.task.resume, {
+      resumable: true,
+      lastCompletedStage: "DEVELOPER",
+      nextStage: "VALIDATION",
+      reason: "DEVELOPER_COMPLETED",
+    });
+  });
+
+  it("assigns IDs to PR create, refresh, and summary-comment commands", async () => {
+    const ids = workflowCorrelationIds();
+    let refreshCalls = 0;
+    const app = createTestApp({
+      createWorkflowCorrelationId: ids.next,
+      pullRequestCreator: {
+        async createPullRequest() {
+          return { created: true, evidence: pullRequestEvidence() };
+        },
+        async refreshPullRequest() {
+          refreshCalls += 1;
+          return { ...pullRequestEvidence(), state: "OPEN" };
+        },
+        async publishSummaryComment() {
+          return {
+            action: "CREATED",
+            evidence: {
+              commentId: 101,
+              updatedAt: "2026-08-03T08:00:00.000Z",
+            },
+          };
+        },
+      },
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          return validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+
+    const created = await createPullRequest(app);
+    const refreshed = await refreshPullRequest(app);
+    const commented = await publishPullRequestSummaryComment(app);
+    const createdBody = await created.json();
+    const refreshedBody = await refreshed.json();
+    const commentedBody = await commented.json();
+
+    assert.equal(createdBody.task.pullRequest.workflowCorrelationId, ids.at(3));
+    assert.equal(refreshedBody.task.pullRequest.workflowCorrelationId, ids.at(4));
+    assert.equal(refreshCalls, 1);
+    assert.equal(
+      commentedBody.task.pullRequestSummaryComment.workflowCorrelationId,
+      ids.at(5),
+    );
+  });
+
+  it("preserves the original correlation ID on same-key replay and creates a new one for a new key", async () => {
+    const ids = workflowCorrelationIds();
+    const app = createTestApp({
+      createWorkflowCorrelationId: ids.next,
+      pullRequestCreator: {
+        async createPullRequest() {
+          return { created: true, evidence: pullRequestEvidence() };
+        },
+        async refreshPullRequest() {
+          return { ...pullRequestEvidence(), state: "OPEN" };
+        },
+      },
+      devOpsValidator: {
+        async validate(): Promise<TaskValidation> {
+          return validationWithPassedVisualReview();
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+    assert.equal((await createPullRequest(app)).status, 200);
+
+    const first = await refreshPullRequest(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "refresh-correlation" },
+    });
+    const replay = await refreshPullRequest(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "refresh-correlation" },
+    });
+    const different = await refreshPullRequest(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "refresh-correlation-2" },
+    });
+    const firstBody = await first.json();
+    const replayBody = await replay.json();
+    const differentBody = await different.json();
+
+    assert.equal(firstBody.task.pullRequest.workflowCorrelationId, ids.at(4));
+    assert.deepEqual(replayBody, firstBody);
+    assert.equal(differentBody.task.pullRequest.workflowCorrelationId, ids.at(5));
+    assert.equal(ids.generated(), 6);
+  });
+
+  it("rejects client-supplied workflowCorrelationId fields", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const response = await executeTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workflowCorrelationId: "client-controlled",
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+});
+
 function developerExecution(id: string): TaskExecution {
   return {
     id,
@@ -5120,6 +5438,21 @@ function validationWithPassedVisualReview(): TaskValidation {
       screenshotId: "shot_after_repair",
       reviewedAt: "2026-08-03T05:01:00.000Z",
     },
+  };
+}
+
+function workflowCorrelationIds() {
+  let index = 0;
+  const ids = Array.from(
+    { length: 20 },
+    (_, current) =>
+      `00000000-0000-4000-8000-${String(current + 1).padStart(12, "0")}`,
+  );
+
+  return {
+    next: () => ids[index++] ?? ids.at(-1)!,
+    at: (requested: number) => ids[requested],
+    generated: () => index,
   };
 }
 

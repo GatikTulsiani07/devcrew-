@@ -247,7 +247,17 @@ describe("pull request task route", () => {
 
     assert.equal(created.status, 200);
     assert.equal(created.headers.get("X-Request-Id"), "req_pull_request_test");
-    assert.deepEqual((await created.json()).task.pullRequest, {
+    const createdPullRequest = (await created.json()).task.pullRequest;
+    assert.match(
+      createdPullRequest.workflowCorrelationId,
+      /^[0-9a-f-]{36}$/,
+    );
+    assert.deepEqual(
+      {
+        ...createdPullRequest,
+        workflowCorrelationId: undefined,
+      },
+      {
       number: 42,
       url: "https://github.com/example/devcrew/pull/42",
       state: "OPEN",
@@ -256,6 +266,7 @@ describe("pull request task route", () => {
       commitSha: checkpointSha,
       createdAt: "2026-08-03T07:00:00.000Z",
       durationMs: 0,
+      workflowCorrelationId: undefined,
     });
     assert.equal(retried.status, 200);
     assert.equal(callCount, 2);
@@ -737,14 +748,36 @@ describe("pull request task route", () => {
     );
 
     assert.equal(response.status, 200);
-    assert.deepEqual((await response.json()).task.pullRequestSummaryComment, {
-      commentId: 9001,
-      updatedAt: "2026-08-03T08:00:00.000Z",
-    });
-    assert.deepEqual((await read.json()).task.pullRequestSummaryComment, {
-      commentId: 9001,
-      updatedAt: "2026-08-03T08:00:00.000Z",
-    });
+    const responseComment = (await response.json()).task
+      .pullRequestSummaryComment;
+    assert.match(responseComment.workflowCorrelationId, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(
+      {
+        ...responseComment,
+        workflowCorrelationId: undefined,
+      },
+      {
+        commentId: 9001,
+        updatedAt: "2026-08-03T08:00:00.000Z",
+        workflowCorrelationId: undefined,
+      },
+    );
+    const readComment = (await read.json()).task.pullRequestSummaryComment;
+    assert.equal(
+      readComment.workflowCorrelationId,
+      responseComment.workflowCorrelationId,
+    );
+    assert.deepEqual(
+      {
+        ...readComment,
+        workflowCorrelationId: undefined,
+      },
+      {
+        commentId: 9001,
+        updatedAt: "2026-08-03T08:00:00.000Z",
+        workflowCorrelationId: undefined,
+      },
+    );
     assert.equal(createCalls, 1);
     assert.equal(summaryCalls, 1);
   });

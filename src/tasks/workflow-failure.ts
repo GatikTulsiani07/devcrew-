@@ -13,9 +13,11 @@ export function createWorkflowFailureEvidence(
   classification: RetryClassification,
   failedAt: string,
   stageOverride?: WorkflowFailureStage,
+  workflowCorrelationId?: string,
 ): WorkflowFailureEvidence {
   return {
     stage: stageOverride ?? workflowFailureStageForRetryStage(classification.stage),
+    ...(workflowCorrelationId === undefined ? {} : { workflowCorrelationId }),
     category: classification.category,
     summary: safeWorkflowFailureSummary(classification.summary),
     failedAt,

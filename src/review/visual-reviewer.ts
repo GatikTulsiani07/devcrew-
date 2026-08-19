@@ -47,7 +47,9 @@ export const visualReviewEvidenceSchema = z.object({
 });
 
 export type VisualReviewFinding = z.infer<typeof visualReviewFindingSchema>;
-export type VisualReviewEvidence = z.infer<typeof visualReviewEvidenceSchema>;
+export type VisualReviewEvidence = z.infer<typeof visualReviewEvidenceSchema> & {
+  workflowCorrelationId?: string;
+};
 
 export interface VisualReviewContext {
   taskTitle: string;

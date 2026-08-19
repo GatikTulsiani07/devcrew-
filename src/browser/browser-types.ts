@@ -2,6 +2,7 @@ import type { Readable } from "node:stream";
 
 export interface BrowserVerificationEvidence {
   status: "PASSED";
+  workflowCorrelationId?: string;
   url: string;
   pageTitle?: string;
   verifiedAt: string;
@@ -15,6 +16,7 @@ export interface ScreenshotViewport {
 
 export interface BrowserScreenshotEvidence {
   status: "CAPTURED";
+  workflowCorrelationId?: string;
   id: string;
   url: string;
   viewport: ScreenshotViewport;

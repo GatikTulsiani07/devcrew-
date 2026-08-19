@@ -612,7 +612,14 @@ describe("activity API", () => {
       snapshot.events.filter((event) => event.type === "SCREENSHOT_CAPTURED").length,
       1,
     );
-    assert.deepEqual(snapshot.events.at(-1), {
+    const lastEvent = snapshot.events.at(-1);
+    assert.match(lastEvent?.workflowCorrelationId ?? "", /^[0-9a-f-]{36}$/);
+    assert.deepEqual(
+      {
+        ...lastEvent,
+        workflowCorrelationId: undefined,
+      },
+      {
       id: "evt_000008",
       sequence: 8,
       projectId: "proj_000001",
@@ -621,6 +628,7 @@ describe("activity API", () => {
       actor: { kind: "SYSTEM" },
       summary: "Frontend screenshot captured.",
       createdAt: "2026-08-03T12:08:00.000Z",
+      workflowCorrelationId: undefined,
     });
     assert.equal(JSON.stringify(snapshot).includes("/private/tmp"), false);
     assert.equal(JSON.stringify(snapshot).includes("shot_123e4567"), false);

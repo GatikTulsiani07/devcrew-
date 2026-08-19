@@ -15,6 +15,7 @@ import {
   createNoopValidationIntegrityService,
   type ValidationIntegrityService,
 } from "../validation/validation-integrity.js";
+import type { WorkflowCommandContext } from "../tasks/workflow-correlation.js";
 import type {
   CancellationStage,
   DeveloperExecutor,
@@ -47,6 +48,7 @@ export interface VisualRepairOrchestratorDependencies {
   validationIntegrityService?: ValidationIntegrityService;
   signal?: AbortSignal;
   setStage?: (stage: CancellationStage) => void;
+  command?: WorkflowCommandContext;
 }
 
 export interface VisualRepairOrchestrator {
@@ -64,6 +66,7 @@ export function createVisualRepairOrchestrator({
   validationIntegrityService = createNoopValidationIntegrityService(),
   signal,
   setStage,
+  command,
 }: VisualRepairOrchestratorDependencies): VisualRepairOrchestrator {
   return {
     async repairIfRequired(task) {
@@ -113,6 +116,9 @@ export function createVisualRepairOrchestrator({
         const attemptTimer = startWorkflowDurationTimer(durationClock);
         let attempt: VisualRepairAttempt = {
           attempt: attemptNumber,
+          ...(command === undefined
+            ? {}
+            : { workflowCorrelationId: command.workflowCorrelationId }),
           startedAt,
           sourceScreenshotId: sourceScreenshot.id,
           sourceVisualReview: summarizeSourceReview(sourceVisualReview),
@@ -128,6 +134,7 @@ export function createVisualRepairOrchestrator({
           type: "VISUAL_REPAIR_STARTED",
           actor: { kind: "AGENT", role: "FULL_STACK_DEVELOPER" },
           summary: `Visual repair attempt ${attemptNumber} started.`,
+          workflowCorrelationId: command?.workflowCorrelationId,
         });
 
         let execution: TaskExecution;
@@ -137,7 +144,7 @@ export function createVisualRepairOrchestrator({
           setStage?.("DEVELOPER");
           throwIfSignalCancelled(signal);
           const developerTimer = startWorkflowDurationTimer(durationClock);
-          execution = withDuration(
+          execution = withWorkflowCorrelation(withDuration(
             await developerExecutor.execute({
             project,
             task: repairTaskForDeveloper(current, sourceVisualReview, sourceScreenshot),
@@ -150,7 +157,7 @@ export function createVisualRepairOrchestrator({
             signal,
             }),
             developerTimer.finish(),
-          );
+          ), command);
           throwIfSignalCancelled(signal);
 
           const taskWithRepairExecution: TaskSnapshot = {
@@ -165,19 +172,20 @@ export function createVisualRepairOrchestrator({
 
           setStage?.("DEVOPS");
           const validationTimer = startWorkflowDurationTimer(durationClock);
-          validation = withDuration(
+          validation = correlateValidationEvidence(withDuration(
             await devOpsValidator.validate(taskWithRepairExecution, {
             signal,
             setStage,
             }),
             validationTimer.finish(),
-          );
+          ), command);
           validation = await validationIntegrityService.bindValidation({
             project,
             task: taskWithRepairExecution,
             validation,
             signal,
           });
+          validation = correlateValidationEvidence(validation, command);
           throwIfSignalCancelled(signal);
           if (
             validation.browserScreenshot === undefined ||
@@ -199,17 +207,32 @@ export function createVisualRepairOrchestrator({
           durationMs: attemptTimer.finish(),
           developer: {
             summary: safeText(execution.result.summary, MAX_TEXT),
+            ...(command === undefined
+              ? {}
+              : { workflowCorrelationId: command.workflowCorrelationId }),
             changedFiles: execution.result.changedFiles
               .slice(0, MAX_CHANGED_FILES)
               .map((file) => safeText(file, 240)),
           },
-          validation: { status: validation.status },
+          validation: {
+            status: validation.status,
+            ...(command === undefined
+              ? {}
+              : { workflowCorrelationId: command.workflowCorrelationId }),
+          },
           ...(validation.browserScreenshot === undefined
             ? {}
             : { screenshotId: validation.browserScreenshot.id }),
           ...(validation.visualReview === undefined
             ? {}
-            : { visualReview: summarizeAttemptReview(validation.visualReview) }),
+            : {
+                visualReview: {
+                  ...summarizeAttemptReview(validation.visualReview),
+                  ...(command === undefined
+                    ? {}
+                    : { workflowCorrelationId: command.workflowCorrelationId }),
+                },
+              }),
         };
 
         const attempts = [...(current.visualRepair?.attempts ?? []).slice(0, -1), attempt];
@@ -242,6 +265,7 @@ export function createVisualRepairOrchestrator({
           type: "VISUAL_REPAIR_COMPLETED",
           actor: { kind: "AGENT", role: "FULL_STACK_DEVELOPER" },
           summary: `Visual repair attempt ${attemptNumber} completed.`,
+          workflowCorrelationId: command?.workflowCorrelationId,
         });
         await appendValidationEvidenceEvents(current, validation);
 
@@ -282,6 +306,7 @@ export function createVisualRepairOrchestrator({
       type: "VALIDATION_COMPLETED",
       actor: { kind: "AGENT", role: "DEVOPS_ENGINEER" },
       summary: "DevOps Engineer completed validation.",
+      workflowCorrelationId: command?.workflowCorrelationId,
     });
 
     if (validation.browserVerification !== undefined) {
@@ -291,6 +316,7 @@ export function createVisualRepairOrchestrator({
         type: "BROWSER_VERIFICATION_COMPLETED",
         actor: { kind: "SYSTEM" },
         summary: "Localhost application verified.",
+        workflowCorrelationId: command?.workflowCorrelationId,
       });
     }
 
@@ -301,6 +327,7 @@ export function createVisualRepairOrchestrator({
         type: "SCREENSHOT_CAPTURED",
         actor: { kind: "SYSTEM" },
         summary: "Frontend screenshot captured.",
+        workflowCorrelationId: command?.workflowCorrelationId,
       });
     }
 
@@ -314,6 +341,7 @@ export function createVisualRepairOrchestrator({
           validation.visualReview.status === "PASSED"
             ? "Visual review passed."
             : `Visual review found ${validation.visualReview.findings.length} issues.`,
+        workflowCorrelationId: command?.workflowCorrelationId,
       });
     }
   }
@@ -325,8 +353,51 @@ export function createVisualRepairOrchestrator({
       type: "VISUAL_REPAIR_EXHAUSTED",
       actor: { kind: "SYSTEM" },
       summary: "Visual repair limit reached.",
+      workflowCorrelationId: command?.workflowCorrelationId,
     });
   }
+}
+
+function withWorkflowCorrelation<T extends object>(
+  evidence: T,
+  command?: WorkflowCommandContext,
+): T & { workflowCorrelationId?: string } {
+  return {
+    ...evidence,
+    ...(command === undefined
+      ? {}
+      : { workflowCorrelationId: command.workflowCorrelationId }),
+  };
+}
+
+function correlateValidationEvidence(
+  validation: TaskValidation,
+  command?: WorkflowCommandContext,
+): TaskValidation {
+  return {
+    ...withWorkflowCorrelation(validation, command),
+    ...(validation.browserVerification === undefined
+      ? {}
+      : {
+          browserVerification: withWorkflowCorrelation(
+            validation.browserVerification,
+            command,
+          ),
+        }),
+    ...(validation.browserScreenshot === undefined
+      ? {}
+      : {
+          browserScreenshot: withWorkflowCorrelation(
+            validation.browserScreenshot,
+            command,
+          ),
+        }),
+    ...(validation.visualReview === undefined
+      ? {}
+      : {
+          visualReview: withWorkflowCorrelation(validation.visualReview, command),
+        }),
+  };
 }
 
 function shouldRepair(task: TaskSnapshot): boolean {

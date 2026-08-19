@@ -54,6 +54,12 @@ import {
 } from "./workflow-duration.js";
 import { createWorkflowFailureEvidence } from "./workflow-failure.js";
 import {
+  createWorkflowCorrelationId as defaultCreateWorkflowCorrelationId,
+  workflowCommandContext,
+  type WorkflowCommandContext,
+  type WorkflowCorrelationIdFactory,
+} from "./workflow-correlation.js";
+import {
   deriveWorkflowResumeMetadata,
   type WorkflowResumeMetadata,
   type WorkflowResumeStage,
@@ -94,6 +100,7 @@ export interface TaskServiceDependencies {
   durationClock?: MonotonicClock;
   repositoryDriftVerifier?: RepositoryDriftVerifier;
   validationIntegrityService?: ValidationIntegrityService;
+  createWorkflowCorrelationId?: WorkflowCorrelationIdFactory;
 }
 
 export interface TaskService {
@@ -138,7 +145,10 @@ export function createTaskService({
   durationClock,
   repositoryDriftVerifier = createNoopRepositoryDriftVerifier(),
   validationIntegrityService = createNoopValidationIntegrityService(),
+  createWorkflowCorrelationId = defaultCreateWorkflowCorrelationId,
 }: TaskServiceDependencies): TaskService {
+  const newWorkflowCommand = () =>
+    workflowCommandContext(createWorkflowCorrelationId());
   const retryOrchestrator = createRetryOrchestrator({
     store,
     now,
@@ -243,6 +253,7 @@ export function createTaskService({
 
     async executeTask(projectId, taskId) {
       const project = await projectService.getProject(projectId);
+      const command = newWorkflowCommand();
 
       await assertTaskExists(projectId, taskId);
 
@@ -267,7 +278,7 @@ export function createTaskService({
         });
         const budget = createExecutionBudget();
         try {
-          return await runDeveloperStage(project, task, active, budget);
+          return await runDeveloperStage(project, task, active, budget, undefined, command);
         } catch (error) {
           if (isTaskCancellationError(error)) {
             await completeCancellation(await latestTaskOr(task), active.stage);
@@ -284,6 +295,7 @@ export function createTaskService({
             latest,
             currentWorkflowStage(active, "DEVELOPER"),
             error,
+            command,
           );
           throw sanitizeStageError("DEVELOPER");
         } finally {
@@ -295,6 +307,7 @@ export function createTaskService({
 
     async validateTask(projectId, taskId) {
       const project = await projectService.getProject(projectId);
+      const command = newWorkflowCommand();
 
       await assertTaskExists(projectId, taskId);
 
@@ -322,7 +335,7 @@ export function createTaskService({
         });
         const budget = createExecutionBudget();
         try {
-          return await runValidationWorkflow(project, task, active, budget);
+          return await runValidationWorkflow(project, task, active, budget, undefined, command);
         } catch (error) {
           if (isTaskCancellationError(error)) {
             await completeCancellation(await latestTaskOr(task), active.stage);
@@ -339,6 +352,7 @@ export function createTaskService({
             latest,
             currentWorkflowStage(active, "DEVOPS"),
             error,
+            command,
           );
           throw sanitizeStageError("DEVOPS");
         } finally {
@@ -350,6 +364,7 @@ export function createTaskService({
 
     async reviewTask(projectId, taskId) {
       const project = await projectService.getProject(projectId);
+      const command = newWorkflowCommand();
 
       await assertTaskExists(projectId, taskId);
 
@@ -385,7 +400,7 @@ export function createTaskService({
         });
         const budget = createExecutionBudget();
         try {
-          return await runReviewerStage(project, task, active, budget);
+          return await runReviewerStage(project, task, active, budget, undefined, command);
         } catch (error) {
           if (isTaskCancellationError(error)) {
             await completeCancellation(await latestTaskOr(task), active.stage);
@@ -402,6 +417,7 @@ export function createTaskService({
             latest,
             currentWorkflowStage(active, "REVIEWER"),
             error,
+            command,
           );
           throw sanitizeStageError("REVIEWER");
         } finally {
@@ -413,6 +429,7 @@ export function createTaskService({
 
     async retryTask(projectId, taskId) {
       await projectService.getProject(projectId);
+      const command = newWorkflowCommand();
 
       await assertTaskExists(projectId, taskId);
 
@@ -440,6 +457,7 @@ export function createTaskService({
                 budget.setStage(nextStage);
               }
             },
+            command,
           });
         } catch (error) {
           if (isTaskCancellationError(error)) {
@@ -447,7 +465,7 @@ export function createTaskService({
           }
           if (error instanceof TaskExecutionTimeoutError) {
             const latest = await latestTaskOr(task);
-            await retryOrchestrator.recordFailure(latest, error.stage, error);
+            await retryOrchestrator.recordFailure(latest, error.stage, error, command);
             throw sanitizeStageError(error.stage);
           }
           throw error;
@@ -507,6 +525,7 @@ export function createTaskService({
 
     async createPullRequest(projectId, taskId) {
       const project = await projectService.getProject(projectId);
+      const command = newWorkflowCommand();
 
       await assertTaskExists(projectId, taskId);
 
@@ -523,7 +542,7 @@ export function createTaskService({
         });
         const budget = createExecutionBudget();
         try {
-          return await runPullRequestStage(project, task, active, budget);
+          return await runPullRequestStage(project, task, active, budget, undefined, command);
         } catch (error) {
           if (isTaskCancellationError(error)) {
             await completeCancellation(await latestTaskOr(task), active.stage);
@@ -540,6 +559,7 @@ export function createTaskService({
             latest,
             currentWorkflowStage(active, "PULL_REQUEST"),
             error,
+            command,
           );
           throw sanitizeStageError("PULL_REQUEST");
         } finally {
@@ -551,6 +571,7 @@ export function createTaskService({
 
     async refreshPullRequest(projectId, taskId) {
       const project = await projectService.getProject(projectId);
+      const command = newWorkflowCommand();
 
       await assertTaskExists(projectId, taskId);
 
@@ -576,14 +597,15 @@ export function createTaskService({
           budget.throwIfExpired("PULL_REQUEST");
           await assertNoRepositoryDrift(project, task, "PULL_REQUEST", {
             signal: budget.composeSignal(undefined, "PULL_REQUEST"),
-          });
+          }, command);
           await assertValidationIntegrity(project, task, "PULL_REQUEST", {
             signal: budget.composeSignal(undefined, "PULL_REQUEST"),
-          });
+          }, command);
           pullRequest = await refreshPullRequestEvidence(
             project,
             task,
             budget.composeSignal(undefined, "PULL_REQUEST"),
+            command,
           );
           budget.throwIfExpired("PULL_REQUEST");
         } catch (error) {
@@ -596,6 +618,7 @@ export function createTaskService({
               classification,
               failedAt,
               "GITHUB_PULL_REQUEST_REFRESH",
+              command.workflowCorrelationId,
             ),
             updatedAt: failedAt,
           });
@@ -607,7 +630,7 @@ export function createTaskService({
         return copyTask(
           await store.update({
             ...copyTask(task),
-            pullRequest,
+            pullRequest: withWorkflowCorrelation(pullRequest, command),
             workflowFailure: undefined,
             updatedAt: timestamp,
           }),
@@ -617,6 +640,7 @@ export function createTaskService({
 
     async publishPullRequestSummaryComment(projectId, taskId) {
       const project = await projectService.getProject(projectId);
+      const command = newWorkflowCommand();
 
       await assertTaskExists(projectId, taskId);
 
@@ -653,14 +677,15 @@ export function createTaskService({
           budget.throwIfExpired("PULL_REQUEST");
           await assertNoRepositoryDrift(project, task, "PULL_REQUEST", {
             signal: budget.composeSignal(active.signal, "PULL_REQUEST"),
-          });
+          }, command);
           await assertValidationIntegrity(project, task, "PULL_REQUEST", {
             signal: budget.composeSignal(active.signal, "PULL_REQUEST"),
-          });
+          }, command);
           const result = await publishPullRequestSummaryCommentEvidence(
             project,
             task,
             budget.composeSignal(active.signal, "PULL_REQUEST"),
+            command,
           );
           budget.throwIfExpired("PULL_REQUEST");
           active.throwIfCancelled();
@@ -669,7 +694,10 @@ export function createTaskService({
           return copyTask(
             await store.update({
               ...copyTask(task),
-              pullRequestSummaryComment: result.evidence,
+              pullRequestSummaryComment: withWorkflowCorrelation(
+                result.evidence,
+                command,
+              ),
               workflowFailure: undefined,
               updatedAt: timestamp,
             }),
@@ -694,6 +722,7 @@ export function createTaskService({
               classification,
               failedAt,
               "GITHUB_PULL_REQUEST_SUMMARY_COMMENT",
+              command.workflowCorrelationId,
             ),
             updatedAt: failedAt,
           });
@@ -707,6 +736,7 @@ export function createTaskService({
 
     async resumeTask(projectId, taskId) {
       const project = await projectService.getProject(projectId);
+      const command = newWorkflowCommand();
 
       await assertTaskExists(projectId, taskId);
 
@@ -723,6 +753,8 @@ export function createTaskService({
             project,
             task,
             retryStageForResume(resume.nextStage),
+            undefined,
+            command,
           );
 
           if (drifted !== undefined) {
@@ -739,6 +771,8 @@ export function createTaskService({
               project,
               task,
               retryStageForResume(resume.nextStage),
+              undefined,
+              command,
             );
 
           if (staleValidation !== undefined) {
@@ -765,6 +799,7 @@ export function createTaskService({
             task,
             active,
             budget,
+            command,
           );
           return withResume(
             resumed,
@@ -781,6 +816,7 @@ export function createTaskService({
             latest,
             currentWorkflowStage(active, fallbackStage),
             error,
+            command,
           );
           throw sanitizeStageError(fallbackStage);
         } finally {
@@ -815,6 +851,7 @@ export function createTaskService({
     stage: RetryStage,
     task: TaskSnapshot,
     signal?: AbortSignal,
+    command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot> {
     const project = await projectService.getProject(task.projectId);
     const active = cancellationRegistry.find(task.projectId, task.id);
@@ -822,19 +859,19 @@ export function createTaskService({
 
     switch (stage) {
       case "DEVELOPER":
-        return runDeveloperStage(project, task, active, undefined, signal);
+        return runDeveloperStage(project, task, active, undefined, signal, command);
       case "DEVOPS":
       case "BROWSER":
       case "SCREENSHOT":
       case "VISUAL_REVIEW":
-        return runValidationWorkflow(project, task, active, undefined, signal);
+        return runValidationWorkflow(project, task, active, undefined, signal, command);
       case "CHECKPOINT":
       case "REMOTE_PUSH":
-        return maybePublishValidatedTask(task, active, undefined, signal);
+        return maybePublishValidatedTask(task, active, undefined, signal, command);
       case "REVIEWER":
-        return runReviewerStage(project, task, active, undefined, signal);
+        return runReviewerStage(project, task, active, undefined, signal, command);
       case "PULL_REQUEST":
-        return runPullRequestStage(project, task, active, undefined, signal);
+        return runPullRequestStage(project, task, active, undefined, signal, command);
     }
   }
 
@@ -844,22 +881,23 @@ export function createTaskService({
     task: TaskSnapshot,
     active: ActiveTaskExecution,
     budget: TaskExecutionBudget,
+    command: WorkflowCommandContext,
   ): Promise<TaskSnapshot> {
     switch (stage) {
       case "DEVELOPER":
-        return runDeveloperStage(project, task, active, budget);
+        return runDeveloperStage(project, task, active, budget, undefined, command);
       case "VALIDATION":
-        return runValidationWorkflow(project, task, active, budget);
+        return runValidationWorkflow(project, task, active, budget, undefined, command);
       case "CHECKPOINT":
       case "PUSH":
-        return maybePublishValidatedTask(task, active, budget);
+        return maybePublishValidatedTask(task, active, budget, undefined, command);
       case "REVIEWER": {
-        const verified = await verifyPublishedTaskForResume(task, active, budget);
-        return runReviewerStage(project, verified, active, budget);
+        const verified = await verifyPublishedTaskForResume(task, active, budget, command);
+        return runReviewerStage(project, verified, active, budget, undefined, command);
       }
       case "PULL_REQUEST": {
-        const verified = await verifyPublishedTaskForResume(task, active, budget);
-        return runPullRequestStage(project, verified, active, budget);
+        const verified = await verifyPublishedTaskForResume(task, active, budget, command);
+        return runPullRequestStage(project, verified, active, budget, undefined, command);
       }
       case "PLAN":
       case "VISUAL_REPAIR":
@@ -874,6 +912,7 @@ export function createTaskService({
     active?: ActiveTaskExecution,
     budget?: TaskExecutionBudget,
     signal?: AbortSignal,
+    command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot> {
     active?.setStage("DEVELOPER");
     budget?.throwIfExpired("DEVELOPER");
@@ -891,6 +930,7 @@ export function createTaskService({
       }),
       timer.finish(),
     );
+    const correlatedExecution = withWorkflowCorrelation(execution, command);
     budget?.throwIfExpired("DEVELOPER");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -898,7 +938,7 @@ export function createTaskService({
     const updatedTask: TaskSnapshot = {
       ...copyTask(task),
       status: "IMPLEMENTATION_COMPLETED",
-      execution,
+      execution: correlatedExecution,
       workflowFailure: undefined,
       updatedAt: timestamp,
     };
@@ -907,6 +947,7 @@ export function createTaskService({
     await activityService.append({
       projectId: task.projectId,
       taskId: task.id,
+      workflowCorrelationId: command?.workflowCorrelationId,
       type: "IMPLEMENTATION_COMPLETED",
       actor: { kind: "AGENT", role: "FULL_STACK_DEVELOPER" },
       summary: "Full Stack Developer completed implementation.",
@@ -921,6 +962,7 @@ export function createTaskService({
     active?: ActiveTaskExecution,
     budget?: TaskExecutionBudget,
     signal?: AbortSignal,
+    command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot> {
     active?.setStage("DEVOPS");
     budget?.throwIfExpired("DEVOPS");
@@ -931,7 +973,7 @@ export function createTaskService({
         signal ??
         budget?.composeSignal(active?.signal, "DEVOPS") ??
         active?.signal,
-    });
+    }, command);
     budget?.throwIfExpired("DEVOPS");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -951,6 +993,7 @@ export function createTaskService({
       }),
       timer.finish(),
     );
+    const correlatedValidation = correlateValidationEvidence(validation, command);
     budget?.throwIfExpired(currentWorkflowStage(active, "DEVOPS"));
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -958,7 +1001,7 @@ export function createTaskService({
       await validationIntegrityService.bindValidation({
         project,
         task: copyTask(task),
-        validation,
+        validation: correlatedValidation,
         signal:
           signal ??
           budget?.composeSignal(
@@ -974,7 +1017,7 @@ export function createTaskService({
     const updatedTask: TaskSnapshot = {
       ...copyTask(task),
       status: "VALIDATION_COMPLETED",
-      validation: integrityBoundValidation,
+      validation: correlateValidationEvidence(integrityBoundValidation, command),
       workflowFailure: undefined,
       updatedAt: timestamp,
     };
@@ -983,7 +1026,8 @@ export function createTaskService({
     await appendValidationActivity(
       task.projectId,
       task.id,
-      integrityBoundValidation,
+      correlateValidationEvidence(integrityBoundValidation, command),
+      command,
     );
 
     const repairedTask = await createVisualRepairOrchestrator({
@@ -995,6 +1039,7 @@ export function createTaskService({
       activityService,
       durationClock,
       validationIntegrityService,
+      command,
       signal:
         signal ??
         budget?.composeSignal(active?.signal, currentWorkflowStage(active, "DEVOPS")) ??
@@ -1010,7 +1055,7 @@ export function createTaskService({
     budget?.throwIfExpired(currentWorkflowStage(active, "DEVOPS"));
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
-    return maybePublishValidatedTask(repairedTask, active, budget);
+    return maybePublishValidatedTask(repairedTask, active, budget, undefined, command);
   }
 
   async function runReviewerStage(
@@ -1019,6 +1064,7 @@ export function createTaskService({
     active?: ActiveTaskExecution,
     budget?: TaskExecutionBudget,
     signal?: AbortSignal,
+    command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot> {
     active?.setStage("REVIEWER");
     budget?.throwIfExpired("REVIEWER");
@@ -1029,13 +1075,13 @@ export function createTaskService({
         signal ??
         budget?.composeSignal(active?.signal, "REVIEWER") ??
         active?.signal,
-    });
+    }, command);
     await assertValidationIntegrity(project, task, "REVIEWER", {
       signal:
         signal ??
         budget?.composeSignal(active?.signal, "REVIEWER") ??
         active?.signal,
-    });
+    }, command);
     budget?.throwIfExpired("REVIEWER");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -1049,6 +1095,7 @@ export function createTaskService({
       }),
       timer.finish(),
     );
+    const correlatedReview = withWorkflowCorrelation(review, command);
     budget?.throwIfExpired("REVIEWER");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -1056,7 +1103,7 @@ export function createTaskService({
     const updatedTask: TaskSnapshot = {
       ...copyTask(task),
       status: "REVIEW_COMPLETED",
-      review,
+      review: correlatedReview,
       workflowFailure: undefined,
       updatedAt: timestamp,
     };
@@ -1065,6 +1112,7 @@ export function createTaskService({
     await activityService.append({
       projectId: task.projectId,
       taskId: task.id,
+      workflowCorrelationId: command?.workflowCorrelationId,
       type: "REVIEW_COMPLETED",
       actor: { kind: "AGENT", role: "REVIEWER" },
       summary: "Reviewer approved the completed work.",
@@ -1079,6 +1127,7 @@ export function createTaskService({
     active?: ActiveTaskExecution,
     budget?: TaskExecutionBudget,
     signal?: AbortSignal,
+    command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot> {
     active?.setStage("PULL_REQUEST");
     budget?.throwIfExpired("PULL_REQUEST");
@@ -1089,13 +1138,13 @@ export function createTaskService({
         signal ??
         budget?.composeSignal(active?.signal, "PULL_REQUEST") ??
         active?.signal,
-    });
+    }, command);
     await assertValidationIntegrity(project, task, "PULL_REQUEST", {
       signal:
         signal ??
         budget?.composeSignal(active?.signal, "PULL_REQUEST") ??
         active?.signal,
-    });
+    }, command);
     budget?.throwIfExpired("PULL_REQUEST");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -1122,6 +1171,9 @@ export function createTaskService({
       ...copyTask(task),
       pullRequest: {
         number: result.evidence.number,
+        ...(command === undefined
+          ? {}
+          : { workflowCorrelationId: command.workflowCorrelationId }),
         url: result.evidence.url,
         state: result.evidence.state,
         headBranch: result.evidence.headBranch,
@@ -1140,6 +1192,7 @@ export function createTaskService({
       await activityService.append({
         projectId: task.projectId,
         taskId: task.id,
+        workflowCorrelationId: command?.workflowCorrelationId,
         type: "PULL_REQUEST_CREATED",
         actor: { kind: "SYSTEM" },
         summary: `Pull request #${result.evidence.number} created.`,
@@ -1153,6 +1206,7 @@ export function createTaskService({
     project: Awaited<ReturnType<ProjectService["getProject"]>>,
     task: TaskSnapshot,
     signal?: AbortSignal,
+    command?: WorkflowCommandContext,
   ) {
     if (pullRequestCreator.refreshPullRequest === undefined) {
       throw new ApplicationError(
@@ -1162,17 +1216,18 @@ export function createTaskService({
       );
     }
 
-    return pullRequestCreator.refreshPullRequest({
+    return withWorkflowCorrelation(await pullRequestCreator.refreshPullRequest({
       project,
       task: copyTask(task),
       ...(signal === undefined ? {} : { signal }),
-    });
+    }), command);
   }
 
   async function publishPullRequestSummaryCommentEvidence(
     project: Awaited<ReturnType<ProjectService["getProject"]>>,
     task: TaskSnapshot,
     signal?: AbortSignal,
+    command?: WorkflowCommandContext,
   ) {
     if (pullRequestCreator.publishSummaryComment === undefined) {
       throw new ApplicationError(
@@ -1182,11 +1237,16 @@ export function createTaskService({
       );
     }
 
-    return pullRequestCreator.publishSummaryComment({
+    const result = await pullRequestCreator.publishSummaryComment({
       project,
       task: copyTask(task),
       ...(signal === undefined ? {} : { signal }),
     });
+
+    return {
+      ...result,
+      evidence: withWorkflowCorrelation(result.evidence, command),
+    };
   }
 
   async function maybePublishValidatedTask(
@@ -1194,6 +1254,7 @@ export function createTaskService({
     active?: ActiveTaskExecution,
     budget?: TaskExecutionBudget,
     signal?: AbortSignal,
+    command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot> {
     if (
       task.status !== "VALIDATION_COMPLETED" ||
@@ -1218,13 +1279,13 @@ export function createTaskService({
         signal ??
         budget?.composeSignal(active?.signal, "CHECKPOINT") ??
         active?.signal,
-    });
+    }, command);
     await assertValidationIntegrity(undefined, task, "CHECKPOINT", {
       signal:
         signal ??
         budget?.composeSignal(active?.signal, "CHECKPOINT") ??
         active?.signal,
-    });
+    }, command);
     budget?.throwIfExpired("CHECKPOINT");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -1247,7 +1308,7 @@ export function createTaskService({
     return copyTask(
       await store.update({
         ...copyTask(task),
-        validation,
+        validation: correlateValidationEvidence(validation, command),
         workflowFailure: undefined,
         updatedAt: timestamp,
       }),
@@ -1258,6 +1319,7 @@ export function createTaskService({
     task: TaskSnapshot,
     active: ActiveTaskExecution,
     budget: TaskExecutionBudget,
+    command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot> {
     if (
       task.validation?.checkpoint === undefined ||
@@ -1272,10 +1334,10 @@ export function createTaskService({
     active.throwIfCancelled();
     await assertNoRepositoryDrift(undefined, task, "CHECKPOINT", {
       signal: budget.composeSignal(active.signal, "CHECKPOINT"),
-    });
+    }, command);
     await assertValidationIntegrity(undefined, task, "CHECKPOINT", {
       signal: budget.composeSignal(active.signal, "CHECKPOINT"),
-    });
+    }, command);
     budget.throwIfExpired("CHECKPOINT");
     active.throwIfCancelled();
     const validation = await devOpsValidator.publishValidatedTask(copyTask(task), {
@@ -1293,7 +1355,7 @@ export function createTaskService({
     return copyTask(
       await store.update({
         ...copyTask(task),
-        validation,
+        validation: correlateValidationEvidence(validation, command),
         workflowFailure: undefined,
         updatedAt: timestamp,
       }),
@@ -1307,12 +1369,14 @@ export function createTaskService({
     task: TaskSnapshot,
     stage: RetryStage,
     options: { signal?: AbortSignal } = {},
+    command?: WorkflowCommandContext,
   ): Promise<void> {
     const drifted = await persistRepositoryDriftIfPresent(
       project ?? (await projectService.getProject(task.projectId)),
       task,
       stage,
       options.signal,
+      command,
     );
 
     if (drifted !== undefined) {
@@ -1327,12 +1391,14 @@ export function createTaskService({
     task: TaskSnapshot,
     stage: RetryStage,
     options: { signal?: AbortSignal } = {},
+    command?: WorkflowCommandContext,
   ): Promise<void> {
     const stale = await persistValidationIntegrityFailureIfPresent(
       project ?? (await projectService.getProject(task.projectId)),
       task,
       stage,
       options.signal,
+      command,
     );
 
     if (stale !== undefined) {
@@ -1347,6 +1413,7 @@ export function createTaskService({
     task: TaskSnapshot,
     stage: RetryStage,
     signal?: AbortSignal,
+    command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot | undefined> {
     const resolvedProject =
       project ?? (await projectService.getProject(task.projectId));
@@ -1379,6 +1446,8 @@ export function createTaskService({
               summary: VALIDATION_INTEGRITY_SUMMARY,
             },
             timestamp,
+            undefined,
+            command?.workflowCorrelationId,
           ),
           updatedAt: timestamp,
         }),
@@ -1393,6 +1462,7 @@ export function createTaskService({
     task: TaskSnapshot,
     stage: RetryStage,
     signal?: AbortSignal,
+    command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot | undefined> {
     const resolvedProject =
       project ?? (await projectService.getProject(task.projectId));
@@ -1425,6 +1495,8 @@ export function createTaskService({
               summary: REPOSITORY_DRIFT_SUMMARY,
             },
             timestamp,
+            undefined,
+            command?.workflowCorrelationId,
           ),
           updatedAt: timestamp,
         }),
@@ -1499,6 +1571,7 @@ export function createTaskService({
     projectId: string,
     taskId: string,
     validation: TaskSnapshot["validation"],
+    command?: WorkflowCommandContext,
   ): Promise<void> {
     if (validation === undefined) return;
 
@@ -1508,6 +1581,7 @@ export function createTaskService({
       type: "VALIDATION_COMPLETED",
       actor: { kind: "AGENT", role: "DEVOPS_ENGINEER" },
       summary: "DevOps Engineer completed validation.",
+      workflowCorrelationId: command?.workflowCorrelationId,
     });
 
     if (validation.browserVerification !== undefined) {
@@ -1517,6 +1591,7 @@ export function createTaskService({
         type: "BROWSER_VERIFICATION_COMPLETED",
         actor: { kind: "SYSTEM" },
         summary: "Localhost application verified.",
+        workflowCorrelationId: command?.workflowCorrelationId,
       });
     }
 
@@ -1527,6 +1602,7 @@ export function createTaskService({
         type: "SCREENSHOT_CAPTURED",
         actor: { kind: "SYSTEM" },
         summary: "Frontend screenshot captured.",
+        workflowCorrelationId: command?.workflowCorrelationId,
       });
     }
 
@@ -1540,6 +1616,7 @@ export function createTaskService({
           validation.visualReview.status === "PASSED"
             ? "Visual review passed."
             : `Visual review found ${validation.visualReview.findings.length} issues.`,
+        workflowCorrelationId: command?.workflowCorrelationId,
       });
     }
   }
@@ -1685,6 +1762,51 @@ function withDuration<T extends object>(evidence: T, durationMs: number): T & { 
   };
 }
 
+function withWorkflowCorrelation<T extends object>(
+  evidence: T,
+  command?: WorkflowCommandContext,
+): T & { workflowCorrelationId?: string } {
+  return {
+    ...evidence,
+    ...(command === undefined
+      ? {}
+      : { workflowCorrelationId: command.workflowCorrelationId }),
+  };
+}
+
+function correlateValidationEvidence(
+  validation: NonNullable<TaskSnapshot["validation"]>,
+  command?: WorkflowCommandContext,
+): NonNullable<TaskSnapshot["validation"]> {
+  return {
+    ...withWorkflowCorrelation(validation, command),
+    ...(validation.browserVerification === undefined
+      ? {}
+      : {
+          browserVerification: withWorkflowCorrelation(
+            validation.browserVerification,
+            command,
+          ),
+        }),
+    ...(validation.browserScreenshot === undefined
+      ? {}
+      : {
+          browserScreenshot: withWorkflowCorrelation(
+            validation.browserScreenshot,
+            command,
+          ),
+        }),
+    ...(validation.visualReview === undefined
+      ? {}
+      : {
+          visualReview: withWorkflowCorrelation(
+            validation.visualReview,
+            command,
+          ),
+        }),
+  };
+}
+
 function currentWorkflowStage(
   active: ActiveTaskExecution | undefined,
   fallback: RetryStage,
@@ -1795,6 +1917,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
             role: task.execution.role,
             status: task.execution.status,
             attempt: task.execution.attempt,
+            ...(task.execution.workflowCorrelationId === undefined
+              ? {}
+              : { workflowCorrelationId: task.execution.workflowCorrelationId }),
             startedAt: task.execution.startedAt,
             completedAt: task.execution.completedAt,
             ...(task.execution.durationMs === undefined
@@ -1829,6 +1954,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
             role: task.validation.role,
             status: task.validation.status,
             attempt: task.validation.attempt,
+            ...(task.validation.workflowCorrelationId === undefined
+              ? {}
+              : { workflowCorrelationId: task.validation.workflowCorrelationId }),
             startedAt: task.validation.startedAt,
             completedAt: task.validation.completedAt,
             ...(task.validation.durationMs === undefined
@@ -1878,6 +2006,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               : {
                   browserVerification: {
                     status: task.validation.browserVerification.status,
+                    ...(task.validation.browserVerification.workflowCorrelationId === undefined
+                      ? {}
+                      : {
+                          workflowCorrelationId:
+                            task.validation.browserVerification.workflowCorrelationId,
+                        }),
                     url: task.validation.browserVerification.url,
                     ...(task.validation.browserVerification.pageTitle === undefined
                       ? {}
@@ -1899,6 +2033,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               : {
                   browserScreenshot: {
                     status: task.validation.browserScreenshot.status,
+                    ...(task.validation.browserScreenshot.workflowCorrelationId === undefined
+                      ? {}
+                      : {
+                          workflowCorrelationId:
+                            task.validation.browserScreenshot.workflowCorrelationId,
+                        }),
                     id: task.validation.browserScreenshot.id,
                     url: task.validation.browserScreenshot.url,
                     viewport: {
@@ -1919,6 +2059,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               : {
                   visualReview: {
                     status: task.validation.visualReview.status,
+                    ...(task.validation.visualReview.workflowCorrelationId === undefined
+                      ? {}
+                      : {
+                          workflowCorrelationId:
+                            task.validation.visualReview.workflowCorrelationId,
+                        }),
                     summary: task.validation.visualReview.summary,
                     findings: task.validation.visualReview.findings.map(
                       (finding) => ({ ...finding }),
@@ -1942,6 +2088,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
               : { outcome: task.visualRepair.outcome }),
             attempts: task.visualRepair.attempts.map((attempt) => ({
               attempt: attempt.attempt,
+              ...(attempt.workflowCorrelationId === undefined
+                ? {}
+                : { workflowCorrelationId: attempt.workflowCorrelationId }),
               startedAt: attempt.startedAt,
               ...(attempt.completedAt === undefined
                 ? {}
@@ -1960,6 +2109,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                 : {
                     developer: {
                       summary: attempt.developer.summary,
+                      ...(attempt.developer.workflowCorrelationId === undefined
+                        ? {}
+                        : {
+                            workflowCorrelationId:
+                              attempt.developer.workflowCorrelationId,
+                          }),
                       changedFiles: [...attempt.developer.changedFiles],
                     },
                   }),
@@ -1968,6 +2123,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                 : {
                     validation: {
                       status: attempt.validation.status,
+                      ...(attempt.validation.workflowCorrelationId === undefined
+                        ? {}
+                        : {
+                            workflowCorrelationId:
+                              attempt.validation.workflowCorrelationId,
+                          }),
                     },
                   }),
               ...(attempt.screenshotId === undefined
@@ -1978,6 +2139,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
                 : {
                     visualReview: {
                       status: attempt.visualReview.status,
+                      ...(attempt.visualReview.workflowCorrelationId === undefined
+                        ? {}
+                        : {
+                            workflowCorrelationId:
+                              attempt.visualReview.workflowCorrelationId,
+                          }),
                       summary: attempt.visualReview.summary,
                       findingCount: attempt.visualReview.findingCount,
                     },
@@ -1989,6 +2156,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
       ? {}
       : {
           retryRecovery: {
+            ...(task.retryRecovery.workflowCorrelationId === undefined
+              ? {}
+              : {
+                  workflowCorrelationId:
+                    task.retryRecovery.workflowCorrelationId,
+                }),
             ...(task.retryRecovery.failedStage === undefined
               ? {}
               : { failedStage: task.retryRecovery.failedStage }),
@@ -1999,6 +2172,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
             attempts: task.retryRecovery.attempts.map((attempt) => ({
               stage: attempt.stage,
               attempt: attempt.attempt,
+              ...(attempt.workflowCorrelationId === undefined
+                ? {}
+                : { workflowCorrelationId: attempt.workflowCorrelationId }),
               status: attempt.status,
               category: attempt.category,
               startedAt: attempt.startedAt,
@@ -2016,6 +2192,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
       : {
           workflowFailure: {
             stage: task.workflowFailure.stage,
+            ...(task.workflowFailure.workflowCorrelationId === undefined
+              ? {}
+              : {
+                  workflowCorrelationId:
+                    task.workflowFailure.workflowCorrelationId,
+                }),
             category: task.workflowFailure.category,
             summary: task.workflowFailure.summary,
             failedAt: task.workflowFailure.failedAt,
@@ -2047,6 +2229,9 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
             status: task.review.status,
             verdict: task.review.verdict,
             attempt: task.review.attempt,
+            ...(task.review.workflowCorrelationId === undefined
+              ? {}
+              : { workflowCorrelationId: task.review.workflowCorrelationId }),
             startedAt: task.review.startedAt,
             completedAt: task.review.completedAt,
             ...(task.review.durationMs === undefined
@@ -2065,6 +2250,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
       : {
           pullRequest: {
             number: task.pullRequest.number,
+            ...(task.pullRequest.workflowCorrelationId === undefined
+              ? {}
+              : {
+                  workflowCorrelationId:
+                    task.pullRequest.workflowCorrelationId,
+                }),
             url: task.pullRequest.url,
             state: task.pullRequest.state,
             headBranch: task.pullRequest.headBranch,
@@ -2081,6 +2272,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
       : {
           pullRequestSummaryComment: {
             commentId: task.pullRequestSummaryComment.commentId,
+            ...(task.pullRequestSummaryComment.workflowCorrelationId === undefined
+              ? {}
+              : {
+                  workflowCorrelationId:
+                    task.pullRequestSummaryComment.workflowCorrelationId,
+                }),
             updatedAt: task.pullRequestSummaryComment.updatedAt,
           },
         }),
