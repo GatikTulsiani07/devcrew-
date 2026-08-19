@@ -13,6 +13,7 @@ import type { ProjectSnapshot } from "../projects/types.js";
 import type { ValidationSelectionEvidence } from "../validation/validation-selection.js";
 import type { ValidationIntegrityEvidence } from "../validation/validation-integrity.js";
 import type { WorkflowResumeMetadata } from "./workflow-resume.js";
+import type { CommandAuditEntry } from "./task-command-audit.js";
 
 export type TaskStatus =
   | "WAITING_FOR_APPROVAL"
@@ -297,6 +298,7 @@ export interface TaskSnapshot {
   pullRequestSummaryComment?: TaskPullRequestSummaryCommentEvidence;
   resume?: WorkflowResumeMetadata;
   taskOutcome?: TaskOutcome;
+  commandAudit?: readonly CommandAuditEntry[];
   createdAt: string;
   updatedAt: string;
 }
