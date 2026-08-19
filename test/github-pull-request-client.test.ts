@@ -4,6 +4,8 @@ import { describe, it } from "node:test";
 import {
   createGitHubPullRequestClient,
   GitHubPullRequestClientError,
+  normalizeGitHubLogin,
+  parseAuthenticatedUserResponse,
   parseGitHubRepositoryUrl,
   parsePullRequestResponse,
 } from "../src/github/github-pull-request-client.js";
@@ -38,6 +40,42 @@ const providerIssueComment = {
 };
 
 describe("GitHub pull request client", () => {
+  it("resolves and validates the authenticated GitHub login", async () => {
+    const requests: string[] = [];
+    const client = createGitHubPullRequestClient({
+      token: "ghp_SERVER_TOKEN",
+      fetchImpl: async (url) => {
+        requests.push(String(url));
+        return new Response(JSON.stringify({ login: "DevCrew-Bot" }), {
+          status: 200,
+        });
+      },
+    });
+
+    assert.deepEqual(await client.getAuthenticatedUser?.(), {
+      login: "devcrew-bot",
+    });
+    assert.deepEqual(requests, ["https://api.github.com/user"]);
+  });
+
+  it("fails closed for malformed authenticated identity responses", () => {
+    for (const response of [
+      {},
+      { login: "" },
+      { login: "invalid login" },
+      { login: "bad\nlogin" },
+      { login: "a".repeat(40) },
+    ]) {
+      assert.throws(
+        () => parseAuthenticatedUserResponse(response),
+        GitHubPullRequestClientError,
+      );
+    }
+
+    assert.equal(normalizeGitHubLogin("DevCrew-Bot"), "devcrew-bot");
+    assert.equal(normalizeGitHubLogin("devcrew_bot"), undefined);
+  });
+
   it("parses supported GitHub repository URLs without credentials", () => {
     assert.deepEqual(parseGitHubRepositoryUrl("https://github.com/Example/Devcrew.git"), {
       owner: "example",

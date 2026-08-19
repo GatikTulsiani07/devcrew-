@@ -1,5 +1,6 @@
 import {
   type GitHubPullRequestClient,
+  normalizeGitHubLogin,
   parseGitHubRepositoryUrl,
   sameGitHubRepository,
 } from "../github/github-pull-request-client.js";
@@ -178,6 +179,13 @@ export function createPullRequestService({
         context.checkpointSha,
       );
       const body = buildPullRequestValidationSummary(input.task);
+      if (githubClient.getAuthenticatedUser === undefined) {
+        throw new PullRequestServiceError("authenticated GitHub identity is unavailable");
+      }
+      const authenticatedIdentity = await githubClient.getAuthenticatedUser(
+        input.signal === undefined ? undefined : { signal: input.signal },
+      );
+      throwIfSignalCancelled(input.signal);
       const comments = await githubClient.listPullRequestComments({
         repository: context.repository,
         number: existingPullRequest.number,
@@ -185,8 +193,11 @@ export function createPullRequestService({
       });
       throwIfSignalCancelled(input.signal);
 
-      const devcrewComments = comments.filter((comment) =>
-        comment.body.includes(PULL_REQUEST_SUMMARY_COMMENT_MARKER),
+      const devcrewComments = comments.filter(
+        (comment) =>
+          comment.body.includes(PULL_REQUEST_SUMMARY_COMMENT_MARKER) &&
+          comment.authorLogin !== undefined &&
+          normalizeGitHubLogin(comment.authorLogin) === authenticatedIdentity.login,
       );
 
       if (devcrewComments.length > 1) {
