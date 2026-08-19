@@ -176,6 +176,110 @@ describe("pull request validation summary comment", () => {
       /ambiguous summary comments/,
     );
   });
+
+  it("updates only a marked comment authored by the authenticated identity", async () => {
+    const actions: string[] = [];
+    const foreign = {
+      ...commentEvidence(1, PULL_REQUEST_SUMMARY_COMMENT_MARKER),
+      authorLogin: "attacker-user",
+    };
+    const managed = {
+      ...commentEvidence(2, `${PULL_REQUEST_SUMMARY_COMMENT_MARKER}\nold`),
+      authorLogin: "DevCrew-Bot",
+    };
+    const service = createPullRequestService({
+      preparedRepositories: [
+        {
+          id: "prepared_devcrew_main",
+          publicRepositoryUrl: "https://github.com/example/devcrew",
+          defaultBranch: "main",
+        },
+      ],
+      githubClient: fakeGitHubClient({
+        async getAuthenticatedUser() {
+          actions.push("identity");
+          return { login: "devcrew-bot" };
+        },
+        async listPullRequestComments() {
+          actions.push("list");
+          return [foreign, managed];
+        },
+        async updatePullRequestComment(input) {
+          actions.push(`update:${input.commentId}`);
+          return commentEvidence(input.commentId, input.body);
+        },
+      }),
+    });
+
+    const result = await service.publishSummaryComment!({
+      project,
+      task: reviewedTask(),
+    });
+
+    assert.equal(result.action, "UPDATED");
+    assert.deepEqual(actions, ["identity", "list", "update:2"]);
+    assert.equal(foreign.body, PULL_REQUEST_SUMMARY_COMMENT_MARKER);
+  });
+
+  it("creates a new comment when only foreign marked comments exist", async () => {
+    const actions: string[] = [];
+    const service = createPullRequestService({
+      preparedRepositories: [
+        {
+          id: "prepared_devcrew_main",
+          publicRepositoryUrl: "https://github.com/example/devcrew",
+          defaultBranch: "main",
+        },
+      ],
+      githubClient: fakeGitHubClient({
+        async listPullRequestComments() {
+          return [
+            {
+              ...commentEvidence(1, PULL_REQUEST_SUMMARY_COMMENT_MARKER),
+              authorLogin: "attacker-user",
+            },
+          ];
+        },
+        async createPullRequestComment(input) {
+          actions.push(`create:${input.body.includes("Devcrew validation summary")}`);
+          return commentEvidence(3, input.body);
+        },
+      }),
+    });
+
+    const result = await service.publishSummaryComment!({
+      project,
+      task: reviewedTask(),
+    });
+
+    assert.equal(result.action, "CREATED");
+    assert.deepEqual(actions, ["create:true"]);
+  });
+
+  it("fails safely when more than one valid managed comment exists", async () => {
+    const service = createPullRequestService({
+      preparedRepositories: [
+        {
+          id: "prepared_devcrew_main",
+          publicRepositoryUrl: "https://github.com/example/devcrew",
+          defaultBranch: "main",
+        },
+      ],
+      githubClient: fakeGitHubClient({
+        async listPullRequestComments() {
+          return [
+            commentEvidence(1, PULL_REQUEST_SUMMARY_COMMENT_MARKER),
+            commentEvidence(2, PULL_REQUEST_SUMMARY_COMMENT_MARKER),
+          ];
+        },
+      }),
+    });
+
+    await assert.rejects(
+      service.publishSummaryComment!({ project, task: reviewedTask() }),
+      /ambiguous summary comments/,
+    );
+  });
 });
 
 function reviewedTask({
@@ -332,6 +436,7 @@ function commentEvidence(id: number, body: string): GitHubIssueComment {
     body,
     createdAt: "2026-08-03T08:00:00.000Z",
     updatedAt: "2026-08-03T08:01:00.000Z",
+    authorLogin: "devcrew-bot",
   };
 }
 
@@ -358,6 +463,9 @@ function fakeGitHubClient(
     },
     async createPullRequest() {
       return pullRequest;
+    },
+    async getAuthenticatedUser() {
+      return { login: "devcrew-bot" };
     },
     async listPullRequestComments() {
       return [];

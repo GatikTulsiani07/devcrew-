@@ -41,6 +41,14 @@ export interface GitHubIssueComment {
   authorLogin?: string;
 }
 
+export interface GitHubAuthenticatedIdentity {
+  login: string;
+}
+
+export interface GitHubAuthenticatedUserInput {
+  signal?: AbortSignal;
+}
+
 export interface GitHubPullRequestCommentsInput {
   repository: GitHubRepositoryRef;
   number: number;
@@ -60,6 +68,9 @@ export interface GitHubPullRequestCommentUpdateInput {
 }
 
 export interface GitHubPullRequestClient {
+  getAuthenticatedUser?(
+    input?: GitHubAuthenticatedUserInput,
+  ): Promise<GitHubAuthenticatedIdentity>;
   findOpenPullRequest(
     input: GitHubPullRequestLookupInput,
   ): Promise<GitHubPullRequest | undefined>;
@@ -98,6 +109,19 @@ export function createGitHubPullRequestClient({
   timeoutMs?: number;
 } = {}): GitHubPullRequestClient {
   return {
+    async getAuthenticatedUser(input = {}) {
+      const response = await requestJson({
+        token,
+        fetchImpl,
+        timeoutMs,
+        method: "GET",
+        url: `${GITHUB_API_BASE_URL}/user`,
+        signal: input.signal,
+      });
+
+      return parseAuthenticatedUserResponse(response);
+    },
+
     async findOpenPullRequest(input) {
       const response = await requestJson({
         token,
@@ -297,6 +321,36 @@ export function parsePullRequestResponse(
     repository: expected.repository,
     createdAt,
   };
+}
+
+export function parseAuthenticatedUserResponse(
+  response: unknown,
+): GitHubAuthenticatedIdentity {
+  if (!isRecord(response)) {
+    throw new GitHubPullRequestClientError("malformed provider response");
+  }
+
+  const login = response.login;
+
+  if (typeof login !== "string") {
+    throw new GitHubPullRequestClientError("malformed provider response");
+  }
+
+  const normalizedLogin = normalizeGitHubLogin(login);
+
+  if (normalizedLogin === undefined) {
+    throw new GitHubPullRequestClientError("malformed provider response");
+  }
+
+  return { login: normalizedLogin };
+}
+
+export function normalizeGitHubLogin(login: string): string | undefined {
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(login)) {
+    return undefined;
+  }
+
+  return login.toLowerCase();
 }
 
 function isSha(value: string): boolean {
