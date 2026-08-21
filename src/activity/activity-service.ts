@@ -53,8 +53,16 @@ export function createActivityService({
   return {
     async append(input) {
       const snapshot = await store.list(input.projectId);
+
+      // Deduplication by event ID scoped to taskId and projectId
+      const existingEvent = snapshot.events.find(e => e.id === input.id && e.taskId === input.taskId);
+      if (existingEvent) {
+        // Return original event without inserting duplicate
+        return existingEvent;
+      }
+
       const event: ActivityEvent = {
-        id: generateEventId(),
+        id: input.id ?? generateEventId(),
         sequence: snapshot.lastSequence + 1,
         projectId: input.projectId,
         ...(input.taskId === undefined ? {} : { taskId: input.taskId }),

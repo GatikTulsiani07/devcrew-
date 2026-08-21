@@ -243,7 +243,167 @@ async function activitySnapshot(
 }
 
 describe("activity API", () => {
-  it("appends ordered activity events for the successful workflow", async () => {
+  it("appends ordered activity events for the successful workflow", async () => {  
+
+  // Deduplication tests for issue #145
+  it("inserts first event normally", async () => {
+    const { app, activityService } = createTestApp();
+    const event = await activityService.append({
+      projectId: "proj_000001",
+      taskId: "task_000001",
+      type: "TASK_CREATED",
+      actor: { kind: "HUMAN" },
+      summary: "First event",
+    });
+    const snapshot = await activityService.list("proj_000001");
+    assert.equal(snapshot.events.length, 1);
+    assert.equal(snapshot.events[0].id, event.id);
+  });
+
+  it("inserting the same event ID twice stores only one event", async () => {
+    const { app, activityService } = createTestApp();
+    const eventInput = {
+      id: "evt_duplicate",
+      projectId: "proj_000002",
+      taskId: "task_000002",
+      type: "TASK_CREATED",
+      actor: { kind: "HUMAN" },
+      summary: "Duplicate event",
+    };
+    const event1 = await activityService.append(eventInput);
+    const event2 = await activityService.append(eventInput);
+    const snapshot = await activityService.list("proj_000002");
+    // Only one event stored
+    assert.equal(snapshot.events.length, 1);
+    assert.equal(snapshot.events[0].id, "evt_duplicate");
+    // Event returned is the original event
+    assert.deepEqual(event2, event1);
+  });
+
+  it("original event remains unchanged", async () => {
+    const { app, activityService } = createTestApp();
+    const eventInput = {
+      id: "evt_original",
+      projectId: "proj_000003",
+      taskId: "task_000003",
+      type: "TASK_CREATED",
+      actor: { kind: "HUMAN" },
+      summary: "Original event",
+    };
+    const event = await activityService.append(eventInput);
+    const duplicateAttempt = await activityService.append(eventInput);
+    assert.deepEqual(duplicateAttempt, event);
+  });
+
+  it("different IDs with identical content are both preserved", async () => {
+    const { app, activityService } = createTestApp();
+
+    const eventInput1 = {
+      id: "evt_diff_1",
+      projectId: "proj_000004",
+      taskId: "task_000004",
+      type: "TASK_CREATED",
+      actor: { kind: "HUMAN" },
+      summary: "Same content",
+    };
+    const eventInput2 = { ...eventInput1, id: "evt_diff_2" };
+
+    const event1 = await activityService.append(eventInput1);
+    const event2 = await activityService.append(eventInput2);
+
+    const snapshot = await activityService.list("proj_000004");
+    assert.equal(snapshot.events.length, 2);
+    assert(snapshot.events.some(e => e.id === "evt_diff_1"));
+    assert(snapshot.events.some(e => e.id === "evt_diff_2"));
+  });
+
+  it("same-looking events across different tasks do not interfere", async () => {
+    const { app, activityService } = createTestApp();
+
+    const eventInput1 = {
+      id: "evt_task_1",
+      projectId: "proj_000005",
+      taskId: "task_000005a",
+      type: "TASK_CREATED",
+      actor: { kind: "HUMAN" },
+      summary: "Duplicate across tasks",
+    };
+
+    const eventInput2 = {
+      id: "evt_task_1",
+      projectId: "proj_000005",
+      taskId: "task_000005b",
+      type: "TASK_CREATED",
+      actor: { kind: "HUMAN" },
+      summary: "Duplicate across tasks",
+    };
+
+    const event1 = await activityService.append(eventInput1);
+    const event2 = await activityService.append(eventInput2);
+
+    const snapshot = await activityService.list("proj_000005");
+    // Both events stored because different tasks
+    assert.equal(snapshot.events.length, 2);
+  });
+
+  it("event ordering remains unchanged", async () => {
+    const { app, activityService } = createTestApp();
+    const event1 = await activityService.append({
+      id: "evt_order_1",
+      projectId: "proj_000006",
+      taskId: "task_000006",
+      type: "TASK_CREATED",
+      actor: { kind: "HUMAN" },
+      summary: "Ordered event 1",
+    });
+    const event2 = await activityService.append({
+      id: "evt_order_2",
+      projectId: "proj_000006",
+      taskId: "task_000006",
+      type: "TASK_CREATED",
+      actor: { kind: "HUMAN" },
+      summary: "Ordered event 2",
+    });
+    // Retry appending event1 again
+    await activityService.append({
+      id: "evt_order_1",
+      projectId: "proj_000006",
+      taskId: "task_000006",
+      type: "TASK_CREATED",
+      actor: { kind: "HUMAN" },
+      summary: "Ordered event 1",
+    });
+
+    const snapshot = await activityService.list("proj_000006");
+    // ordering is by sequence
+    assert.deepEqual(snapshot.events.map(e => e.id), ["evt_order_1", "evt_order_2"]);
+  });
+
+  it("workflowCorrelationId does not control deduplication", async () => {
+    const { app, activityService } = createTestApp();
+    const eventInput1 = {
+      id: "evt_corr_1",
+      projectId: "proj_000007",
+      taskId: "task_000007",
+      workflowCorrelationId: "corr_abc",
+      type: "TASK_CREATED",
+      actor: { kind: "HUMAN" },
+      summary: "Event with workflow correlation",
+    };
+    const eventInput2 = {
+      ...eventInput1,
+      workflowCorrelationId: "corr_def",
+    };
+
+    const event1 = await activityService.append(eventInput1);
+    const event2 = await activityService.append(eventInput2);
+
+    // Different IDs? No, same ID for deduplication
+    const count = (await activityService.list("proj_000007")).events.length;
+    assert.equal(count, 1);
+  });
+
+
     const { app } = createTestApp();
 
     assert.equal((await createProject(app)).status, 201);
