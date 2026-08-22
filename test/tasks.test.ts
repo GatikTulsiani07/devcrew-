@@ -32,6 +32,7 @@ import {
   type TaskExecutionBudget,
 } from "../src/tasks/task-execution-budget.js";
 import { createTaskService } from "../src/tasks/task-service.js";
+import type { TaskIdGenerator } from "../src/tasks/task-service.js";
 import type { WorkflowCorrelationIdFactory } from "../src/tasks/workflow-correlation.js";
 import type { MonotonicClock } from "../src/tasks/workflow-duration.js";
 import type {
@@ -41,6 +42,7 @@ import type {
   ManagerPlanner,
   TaskExecution,
   TaskPullRequestCreator,
+  TaskSnapshot,
   TaskValidation,
   TaskReviewer,
 } from "../src/tasks/types.js";
@@ -131,6 +133,7 @@ interface TestAppOptions {
   repositoryDriftVerifier?: RepositoryDriftVerifier;
   validationIntegrityService?: ValidationIntegrityService;
   createWorkflowCorrelationId?: WorkflowCorrelationIdFactory;
+  generateTaskId?: TaskIdGenerator;
 }
 
 function createDeterministicProjectService(): ProjectService {
@@ -165,6 +168,7 @@ function createTestApp({
   repositoryDriftVerifier,
   validationIntegrityService,
   createWorkflowCorrelationId,
+  generateTaskId,
 }: TestAppOptions = {}) {
   const projectService = createDeterministicProjectService();
   let taskCount = 0;
@@ -214,10 +218,12 @@ function createTestApp({
         }),
       ...(pullRequestCreator === undefined ? {} : { pullRequestCreator }),
       store: new InMemoryTaskStore(),
-      generateTaskId: () => {
-        taskCount += 1;
-        return `task_${String(taskCount).padStart(6, "0")}`;
-      },
+      generateTaskId:
+        generateTaskId ??
+        (() => {
+          taskCount += 1;
+          return `task_${String(taskCount).padStart(6, "0")}`;
+        }),
       now: nextDate,
       ...(activityService === undefined ? {} : { activityService }),
       ...(createExecutionBudget === undefined ? {} : { createExecutionBudget }),
@@ -811,6 +817,178 @@ describe("task manager planning API", () => {
     );
 
     assert.deepEqual(await first.json(), await second.json());
+  });
+
+  it("rejects duplicate server-generated task ids without overwriting workflow evidence", async () => {
+    let plannerCalls = 0;
+    const planner: ManagerPlanner = {
+      async createPlan() {
+        plannerCalls += 1;
+        return {
+          summary: "Original authoritative plan.",
+          steps: ["Keep original evidence intact."],
+        };
+      },
+    };
+    const app = createTestApp({
+      planner,
+      generateTaskId: () => "task_000001",
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const beforeTaskResponse = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const beforeActivity = await app.request(
+      "/api/v1/projects/proj_000001/activity",
+    );
+    const beforeTask = await beforeTaskResponse.json();
+    const beforeActivityBody = await beforeActivity.json();
+
+    const duplicate = await createTask(app, "proj_000001", {
+      title: "A different title must not matter",
+      description: "Different task text must not matter.",
+    });
+
+    assert.equal(duplicate.status, 409);
+    assert.deepEqual(await duplicate.json(), {
+      requestId: "req_task_test",
+      status: "error",
+      error: {
+        code: "TASK_ALREADY_EXISTS",
+        message: "Task already exists.",
+      },
+    });
+    assert.equal(plannerCalls, 1);
+
+    const afterTaskResponse = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const afterActivity = await app.request(
+      "/api/v1/projects/proj_000001/activity",
+    );
+
+    assert.deepEqual(await afterTaskResponse.json(), beforeTask);
+    assert.deepEqual(await afterActivity.json(), beforeActivityBody);
+    assert.equal(beforeTask.task.commandAudit.length, 1);
+  });
+
+  it("allows the same generated task id in a different project and ignores task text for identity", async () => {
+    const app = createTestApp({
+      generateTaskId: () => "task_000001",
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal(
+      (
+        await createProject(app, {
+          name: "Other",
+          publicRepositoryUrl: "https://github.com/example/other",
+          preparedRepositoryId: "prepared_other",
+        })
+      ).status,
+      201,
+    );
+
+    const first = await createTask(app, "proj_000001", {
+      title: "Shared task text",
+      description: "Same task text is not part of identity.",
+    });
+    const second = await createTask(app, "proj_000002", {
+      title: "Shared task text",
+      description: "Same task text is not part of identity.",
+    });
+
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    assert.equal((await first.json()).task.projectId, "proj_000001");
+    assert.equal((await second.json()).task.projectId, "proj_000002");
+  });
+
+  it("allows identical task text when authoritative task ids differ", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+
+    const first = await createTask(app, "proj_000001", {
+      title: "Shared task text",
+      description: "Same task text is allowed with a different task id.",
+    });
+    const second = await createTask(app, "proj_000001", {
+      title: "Shared task text",
+      description: "Same task text is allowed with a different task id.",
+    });
+
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    assert.equal((await first.json()).task.id, "task_000001");
+    assert.equal((await second.json()).task.id, "task_000002");
+  });
+
+  it("preserves the original task when the store receives a duplicate project task key", async () => {
+    const store = new InMemoryTaskStore();
+    const original: TaskSnapshot = {
+      id: "task_000001",
+      projectId: "proj_000001",
+      title: "Original task",
+      description: "Original task text.",
+      status: "REVIEW_COMPLETED",
+      plan: { summary: "Original plan", steps: ["Keep this plan."] },
+      execution: developerExecution("exec_000001"),
+      validation: validationWithPassedVisualReview(),
+      commandAudit: [
+        {
+          operation: "EXECUTE",
+          workflowCorrelationId: "workflow_original",
+          status: "SUCCEEDED",
+          startedAt: "2026-08-03T02:00:00.000Z",
+          completedAt: "2026-08-03T03:00:00.000Z",
+          durationMs: 3_600_000,
+        },
+      ],
+      createdAt: "2026-08-03T00:00:00.000Z",
+      updatedAt: "2026-08-03T08:31:00.000Z",
+    };
+    const duplicate: TaskSnapshot = {
+      ...original,
+      title: "Overwrite attempt",
+      description: "This duplicate must not replace original evidence.",
+      plan: {
+        summary: "Replacement plan",
+        steps: ["This plan must not be stored."],
+      },
+      execution: developerExecution("exec_replacement"),
+      validation: validationWithFailedVisualReview(),
+      commandAudit: [
+        {
+          operation: "VALIDATE",
+          workflowCorrelationId: "replacement_workflow",
+          status: "SUCCEEDED",
+          startedAt: "2026-08-03T12:00:00.000Z",
+          completedAt: "2026-08-03T12:00:01.000Z",
+          durationMs: 1,
+        },
+      ],
+      updatedAt: "2026-08-03T12:00:00.000Z",
+    };
+
+    await store.create(original);
+
+    await assert.rejects(
+      () => store.create(duplicate),
+      {
+        name: "ApplicationError",
+        code: "TASK_ALREADY_EXISTS",
+        status: 409,
+        message: "Task already exists.",
+      },
+    );
+
+    assert.deepEqual(
+      await store.findByProjectAndId("proj_000001", "task_000001"),
+      original,
+    );
   });
 
   it("sanitizes unexpected planner failures", async () => {

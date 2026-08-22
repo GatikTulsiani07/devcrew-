@@ -170,11 +170,20 @@ export function createTaskService({
   return {
     async createTask(projectId, input) {
       const project = await projectService.getProject(projectId);
+      const taskId = generateTaskId();
+
+      if ((await store.findByProjectAndId(projectId, taskId)) !== undefined) {
+        throw new ApplicationError(
+          "TASK_ALREADY_EXISTS",
+          409,
+          "Task already exists.",
+        );
+      }
 
       const plan = await planner.createPlan({ ...input, project });
       const timestamp = now().toISOString();
       const task: TaskSnapshot = {
-        id: generateTaskId(),
+        id: taskId,
         projectId,
         title: input.title,
         description: input.description,
