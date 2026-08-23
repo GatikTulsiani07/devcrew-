@@ -32,6 +32,7 @@ import {
   type TaskExecutionBudget,
 } from "../src/tasks/task-execution-budget.js";
 import { createTaskService } from "../src/tasks/task-service.js";
+import type { TaskIdGenerator } from "../src/tasks/task-service.js";
 import type { WorkflowCorrelationIdFactory } from "../src/tasks/workflow-correlation.js";
 import type { MonotonicClock } from "../src/tasks/workflow-duration.js";
 import type {
@@ -41,6 +42,7 @@ import type {
   ManagerPlanner,
   TaskExecution,
   TaskPullRequestCreator,
+  TaskSnapshot,
   TaskValidation,
   TaskReviewer,
 } from "../src/tasks/types.js";
@@ -107,6 +109,7 @@ function withoutWorkflowCorrelationIds<T>(body: T): T {
     }
 
     delete (value as { workflowCorrelationId?: string }).workflowCorrelationId;
+    delete (value as { commandAudit?: unknown }).commandAudit;
 
     for (const child of Object.values(value)) {
       strip(child);
@@ -130,6 +133,7 @@ interface TestAppOptions {
   repositoryDriftVerifier?: RepositoryDriftVerifier;
   validationIntegrityService?: ValidationIntegrityService;
   createWorkflowCorrelationId?: WorkflowCorrelationIdFactory;
+  generateTaskId?: TaskIdGenerator;
 }
 
 function createDeterministicProjectService(): ProjectService {
@@ -164,6 +168,7 @@ function createTestApp({
   repositoryDriftVerifier,
   validationIntegrityService,
   createWorkflowCorrelationId,
+  generateTaskId,
 }: TestAppOptions = {}) {
   const projectService = createDeterministicProjectService();
   let taskCount = 0;
@@ -213,10 +218,12 @@ function createTestApp({
         }),
       ...(pullRequestCreator === undefined ? {} : { pullRequestCreator }),
       store: new InMemoryTaskStore(),
-      generateTaskId: () => {
-        taskCount += 1;
-        return `task_${String(taskCount).padStart(6, "0")}`;
-      },
+      generateTaskId:
+        generateTaskId ??
+        (() => {
+          taskCount += 1;
+          return `task_${String(taskCount).padStart(6, "0")}`;
+        }),
       now: nextDate,
       ...(activityService === undefined ? {} : { activityService }),
       ...(createExecutionBudget === undefined ? {} : { createExecutionBudget }),
@@ -810,6 +817,178 @@ describe("task manager planning API", () => {
     );
 
     assert.deepEqual(await first.json(), await second.json());
+  });
+
+  it("rejects duplicate server-generated task ids without overwriting workflow evidence", async () => {
+    let plannerCalls = 0;
+    const planner: ManagerPlanner = {
+      async createPlan() {
+        plannerCalls += 1;
+        return {
+          summary: "Original authoritative plan.",
+          steps: ["Keep original evidence intact."],
+        };
+      },
+    };
+    const app = createTestApp({
+      planner,
+      generateTaskId: () => "task_000001",
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const beforeTaskResponse = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const beforeActivity = await app.request(
+      "/api/v1/projects/proj_000001/activity",
+    );
+    const beforeTask = await beforeTaskResponse.json();
+    const beforeActivityBody = await beforeActivity.json();
+
+    const duplicate = await createTask(app, "proj_000001", {
+      title: "A different title must not matter",
+      description: "Different task text must not matter.",
+    });
+
+    assert.equal(duplicate.status, 409);
+    assert.deepEqual(await duplicate.json(), {
+      requestId: "req_task_test",
+      status: "error",
+      error: {
+        code: "TASK_ALREADY_EXISTS",
+        message: "Task already exists.",
+      },
+    });
+    assert.equal(plannerCalls, 1);
+
+    const afterTaskResponse = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const afterActivity = await app.request(
+      "/api/v1/projects/proj_000001/activity",
+    );
+
+    assert.deepEqual(await afterTaskResponse.json(), beforeTask);
+    assert.deepEqual(await afterActivity.json(), beforeActivityBody);
+    assert.equal(beforeTask.task.commandAudit.length, 1);
+  });
+
+  it("allows the same generated task id in a different project and ignores task text for identity", async () => {
+    const app = createTestApp({
+      generateTaskId: () => "task_000001",
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal(
+      (
+        await createProject(app, {
+          name: "Other",
+          publicRepositoryUrl: "https://github.com/example/other",
+          preparedRepositoryId: "prepared_other",
+        })
+      ).status,
+      201,
+    );
+
+    const first = await createTask(app, "proj_000001", {
+      title: "Shared task text",
+      description: "Same task text is not part of identity.",
+    });
+    const second = await createTask(app, "proj_000002", {
+      title: "Shared task text",
+      description: "Same task text is not part of identity.",
+    });
+
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    assert.equal((await first.json()).task.projectId, "proj_000001");
+    assert.equal((await second.json()).task.projectId, "proj_000002");
+  });
+
+  it("allows identical task text when authoritative task ids differ", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+
+    const first = await createTask(app, "proj_000001", {
+      title: "Shared task text",
+      description: "Same task text is allowed with a different task id.",
+    });
+    const second = await createTask(app, "proj_000001", {
+      title: "Shared task text",
+      description: "Same task text is allowed with a different task id.",
+    });
+
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    assert.equal((await first.json()).task.id, "task_000001");
+    assert.equal((await second.json()).task.id, "task_000002");
+  });
+
+  it("preserves the original task when the store receives a duplicate project task key", async () => {
+    const store = new InMemoryTaskStore();
+    const original: TaskSnapshot = {
+      id: "task_000001",
+      projectId: "proj_000001",
+      title: "Original task",
+      description: "Original task text.",
+      status: "REVIEW_COMPLETED",
+      plan: { summary: "Original plan", steps: ["Keep this plan."] },
+      execution: developerExecution("exec_000001"),
+      validation: validationWithPassedVisualReview(),
+      commandAudit: [
+        {
+          operation: "EXECUTE",
+          workflowCorrelationId: "workflow_original",
+          status: "SUCCEEDED",
+          startedAt: "2026-08-03T02:00:00.000Z",
+          completedAt: "2026-08-03T03:00:00.000Z",
+          durationMs: 3_600_000,
+        },
+      ],
+      createdAt: "2026-08-03T00:00:00.000Z",
+      updatedAt: "2026-08-03T08:31:00.000Z",
+    };
+    const duplicate: TaskSnapshot = {
+      ...original,
+      title: "Overwrite attempt",
+      description: "This duplicate must not replace original evidence.",
+      plan: {
+        summary: "Replacement plan",
+        steps: ["This plan must not be stored."],
+      },
+      execution: developerExecution("exec_replacement"),
+      validation: validationWithFailedVisualReview(),
+      commandAudit: [
+        {
+          operation: "VALIDATE",
+          workflowCorrelationId: "replacement_workflow",
+          status: "SUCCEEDED",
+          startedAt: "2026-08-03T12:00:00.000Z",
+          completedAt: "2026-08-03T12:00:01.000Z",
+          durationMs: 1,
+        },
+      ],
+      updatedAt: "2026-08-03T12:00:00.000Z",
+    };
+
+    await store.create(original);
+
+    await assert.rejects(
+      () => store.create(duplicate),
+      {
+        name: "ApplicationError",
+        code: "TASK_ALREADY_EXISTS",
+        status: 409,
+        message: "Task already exists.",
+      },
+    );
+
+    assert.deepEqual(
+      await store.findByProjectAndId("proj_000001", "task_000001"),
+      original,
+    );
   });
 
   it("sanitizes unexpected planner failures", async () => {
@@ -5013,6 +5192,13 @@ describe("task route idempotency", () => {
     await started.promise;
     assert.equal((await cancelTask(cancellationApp)).status, 200);
     assert.equal((await running).status, 409);
+    const cancelledRead = await cancellationApp.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const cancelledBody = await cancelledRead.json();
+    assert.equal(cancelledBody.task.commandAudit.length, 1);
+    assert.equal(cancelledBody.task.commandAudit[0].operation, "EXECUTE");
+    assert.equal(cancelledBody.task.commandAudit[0].status, "CANCELLED");
 
     const timeoutApp = createTestApp({
       developerExecutor: {
@@ -5036,6 +5222,16 @@ describe("task route idempotency", () => {
     assert.equal((await createTask(timeoutApp)).status, 201);
     assert.equal((await decidePlan(timeoutApp, { decision: "APPROVE" })).status, 200);
     assert.equal((await executeTask(timeoutApp, "proj_000001", "task_000001", { headers: { "Idempotency-Key": "timeout-key" } })).status, 500);
+    const timeoutRead = await timeoutApp.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const timeoutBody = await timeoutRead.json();
+    assert.equal(timeoutBody.task.commandAudit.length, 1);
+    assert.equal(timeoutBody.task.commandAudit[0].status, "TIMED_OUT");
+    assert.equal(
+      timeoutBody.task.commandAudit[0].failureCategory,
+      "TASK_EXECUTION_TIMEOUT",
+    );
 
     assert.equal(developerCalls, 2);
   });
@@ -5102,6 +5298,21 @@ describe("workflow correlation IDs", () => {
         ?.workflowCorrelationId,
       ids.at(2),
     );
+
+    assert.deepEqual(
+      reviewedBody.task.commandAudit.map(
+        (entry: { operation: string; status: string; workflowCorrelationId: string }) => ({
+          operation: entry.operation,
+          status: entry.status,
+          workflowCorrelationId: entry.workflowCorrelationId,
+        }),
+      ),
+      [
+        { operation: "EXECUTE", status: "SUCCEEDED", workflowCorrelationId: ids.at(0) },
+        { operation: "VALIDATE", status: "SUCCEEDED", workflowCorrelationId: ids.at(1) },
+        { operation: "REVIEW", status: "SUCCEEDED", workflowCorrelationId: ids.at(2) },
+      ],
+    );
   });
 
   it("reuses the validation command ID across Visual Repair and nested repair work", async () => {
@@ -5138,6 +5349,16 @@ describe("workflow correlation IDs", () => {
     assert.equal(attempt.developer.workflowCorrelationId, ids.at(1));
     assert.equal(attempt.validation.workflowCorrelationId, ids.at(1));
     assert.equal(attempt.visualReview.workflowCorrelationId, ids.at(1));
+    assert.deepEqual(
+      body.task.commandAudit.map((entry: { operation: string; workflowCorrelationId: string }) => [
+        entry.operation,
+        entry.workflowCorrelationId,
+      ]),
+      [
+        ["EXECUTE", ids.at(0)],
+        ["VALIDATE", ids.at(1)],
+      ],
+    );
   });
 
   it("uses one retry command ID for retry evidence and nested retried stages", async () => {
@@ -5174,6 +5395,16 @@ describe("workflow correlation IDs", () => {
     assert.equal(retryBody.task.retryRecovery.workflowCorrelationId, ids.at(1));
     assert.equal(retryBody.task.retryRecovery.attempts[0].workflowCorrelationId, ids.at(0));
     assert.equal(retryBody.task.retryRecovery.attempts[1].workflowCorrelationId, ids.at(1));
+    assert.deepEqual(
+      retryBody.task.commandAudit.map((entry: { operation: string; status: string }) => [
+        entry.operation,
+        entry.status,
+      ]),
+      [
+        ["EXECUTE", "FAILED"],
+        ["RETRY", "SUCCEEDED"],
+      ],
+    );
   });
 
   it("uses the resume command ID for the stage advanced by resume", async () => {
@@ -5197,6 +5428,9 @@ describe("workflow correlation IDs", () => {
       nextStage: "VALIDATION",
       reason: "DEVELOPER_COMPLETED",
     });
+    assert.deepEqual(body.task.commandAudit.map((entry: { operation: string }) => entry.operation), [
+      "RESUME",
+    ]);
   });
 
   it("assigns IDs to PR create, refresh, and summary-comment commands", async () => {
@@ -5249,6 +5483,17 @@ describe("workflow correlation IDs", () => {
       commentedBody.task.pullRequestSummaryComment.workflowCorrelationId,
       ids.at(5),
     );
+    assert.deepEqual(
+      commentedBody.task.commandAudit.map((entry: { operation: string }) => entry.operation),
+      [
+        "EXECUTE",
+        "VALIDATE",
+        "REVIEW",
+        "PULL_REQUEST_CREATE",
+        "PULL_REQUEST_REFRESH",
+        "PULL_REQUEST_SUMMARY_COMMENT",
+      ],
+    );
   });
 
   it("preserves the original correlation ID on same-key replay and creates a new one for a new key", async () => {
@@ -5294,6 +5539,15 @@ describe("workflow correlation IDs", () => {
     assert.deepEqual(replayBody, firstBody);
     assert.equal(differentBody.task.pullRequest.workflowCorrelationId, ids.at(5));
     assert.equal(ids.generated(), 6);
+
+    const read = await app.request(
+      "/api/v1/projects/proj_000001/tasks/task_000001",
+    );
+    const readBody = await read.json();
+    assert.equal(readBody.task.commandAudit.length, 6);
+    assert.deepEqual(readBody.task.commandAudit, firstBody.task.commandAudit.concat(
+      differentBody.task.commandAudit.at(-1),
+    ));
   });
 
   it("rejects client-supplied workflowCorrelationId fields", async () => {
@@ -5306,6 +5560,28 @@ describe("workflow correlation IDs", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         workflowCorrelationId: "client-controlled",
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+
+  it("rejects client-supplied command audit fields", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+
+    const response = await executeTask(app, "proj_000001", "task_000001", {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        commandAudit: [],
+        status: "SUCCEEDED",
+        startedAt: "2026-08-03T00:00:00.000Z",
+        completedAt: "2026-08-03T00:00:01.000Z",
+        durationMs: 1,
+        failureCategory: "UNKNOWN_FAILURE",
       }),
     });
 
