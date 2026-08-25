@@ -53,19 +53,14 @@ export function createActivityService({
   return {
     async append(input) {
       const snapshot = await store.list(input.projectId);
-
-      // Deduplication by event ID scoped to taskId and projectId
-      const existingEvent = snapshot.events.find(e => e.id === input.id && e.taskId === input.taskId);
-      if (existingEvent) {
-        // Return original event without inserting duplicate
-        return existingEvent;
-      }
-
       const event: ActivityEvent = {
-        id: input.id ?? generateEventId(),
+        id: generateEventId(),
         sequence: snapshot.lastSequence + 1,
         projectId: input.projectId,
         ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+        ...(input.workflowCorrelationId === undefined
+          ? {}
+          : { workflowCorrelationId: input.workflowCorrelationId }),
         type: input.type,
         actor: { ...input.actor },
         summary: input.summary,
@@ -118,6 +113,9 @@ export function createNoopActivityService(): ActivityService {
         sequence: 0,
         projectId: input.projectId,
         ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
+        ...(input.workflowCorrelationId === undefined
+          ? {}
+          : { workflowCorrelationId: input.workflowCorrelationId }),
         type: input.type,
         actor: { ...input.actor },
         summary: input.summary,
