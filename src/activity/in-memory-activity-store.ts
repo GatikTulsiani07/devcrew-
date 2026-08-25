@@ -1,3 +1,4 @@
+import { ApplicationError } from "../errors.js";
 import type {
   ActivityEvent,
   ActivitySequence,
@@ -27,6 +28,15 @@ export class InMemoryActivityStore implements ActivityStore {
 
   async append(event: ActivityEvent): Promise<ActivityEvent> {
     const state = this.#stateFor(event.projectId);
+
+    if (state.events.some((storedEvent) => storedEvent.id === event.id)) {
+      throw new ApplicationError(
+        "ACTIVITY_EVENT_ALREADY_EXISTS",
+        409,
+        "Activity event already exists.",
+      );
+    }
+
     state.lastSequence = Math.max(state.lastSequence, event.sequence);
     state.events.push(copyEvent(event));
 
@@ -96,6 +106,9 @@ export function copyEvent(event: ActivityEvent): ActivityEvent {
     sequence: event.sequence,
     projectId: event.projectId,
     ...(event.taskId === undefined ? {} : { taskId: event.taskId }),
+    ...(event.workflowCorrelationId === undefined
+      ? {}
+      : { workflowCorrelationId: event.workflowCorrelationId }),
     type: event.type,
     actor: { ...event.actor },
     summary: event.summary,

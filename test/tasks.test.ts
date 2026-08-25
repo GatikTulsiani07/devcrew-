@@ -1826,9 +1826,13 @@ describe("task manager planning API", () => {
         });
       },
     };
+    let eventCount = 0;
     const activityService = createActivityService({
       store: new InMemoryActivityStore(),
-      generateEventId: () => "evt_cancelled",
+      generateEventId: () => {
+        eventCount += 1;
+        return `evt_cancelled_${eventCount}`;
+      },
       now: () => new Date("2026-08-03T12:00:00.000Z"),
     });
     const app = createTestApp({
