@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   appendCommandAudit,
+  type CommandAuditEntry,
   MAX_TASK_COMMAND_AUDIT_ENTRIES,
 } from "../src/tasks/task-command-audit.js";
 import type { TaskSnapshot } from "../src/tasks/types.js";
@@ -18,19 +19,38 @@ const task: TaskSnapshot = {
   updatedAt: "2026-08-03T00:00:00.000Z",
 };
 
+function auditEntry(
+  overrides: Partial<CommandAuditEntry> = {},
+): CommandAuditEntry {
+  return {
+    operation: "EXECUTE",
+    workflowCorrelationId: "correlation-1",
+    status: "SUCCEEDED",
+    startedAt: "2026-08-03T00:00:00.000Z",
+    completedAt: "2026-08-03T00:00:01.000Z",
+    durationMs: 1,
+    ...overrides,
+  };
+}
+
 describe("task command audit history", () => {
+  it("appends the first audit entry normally", () => {
+    const entry = auditEntry();
+    const current = appendCommandAudit(task, entry);
+
+    assert.deepEqual(current.commandAudit, [entry]);
+  });
+
   it("retains only the newest bounded entries in chronological order", () => {
     let current = task;
 
     for (let index = 0; index < MAX_TASK_COMMAND_AUDIT_ENTRIES + 1; index += 1) {
-      current = appendCommandAudit(current, {
-        operation: "EXECUTE",
+      current = appendCommandAudit(current, auditEntry({
         workflowCorrelationId: `correlation-${index}`,
-        status: "SUCCEEDED",
         startedAt: `2026-08-03T00:00:${String(index).padStart(2, "0")}.000Z`,
         completedAt: `2026-08-03T00:01:${String(index).padStart(2, "0")}.000Z`,
         durationMs: index,
-      });
+      }));
     }
 
     assert.equal(current.commandAudit?.length, MAX_TASK_COMMAND_AUDIT_ENTRIES);
@@ -41,24 +61,84 @@ describe("task command audit history", () => {
     );
   });
 
-  it("copies entries and does not mutate the source task history", () => {
-    const first = appendCommandAudit(task, {
+  it("ignores duplicate workflowCorrelationIds without changing the original entry", () => {
+    const original = auditEntry({
       operation: "VALIDATE",
-      workflowCorrelationId: "correlation-1",
+      workflowCorrelationId: "correlation-duplicate",
       status: "FAILED",
       startedAt: "2026-08-03T00:00:00.000Z",
       completedAt: "2026-08-03T00:00:01.000Z",
       durationMs: 1,
       failureCategory: "REPOSITORY_MISMATCH",
     });
-    const second = appendCommandAudit(first, {
+    const duplicate = auditEntry({
+      operation: "VALIDATE",
+      workflowCorrelationId: "correlation-duplicate",
+      status: "SUCCEEDED",
+      startedAt: "2026-08-03T00:10:00.000Z",
+      completedAt: "2026-08-03T00:10:30.000Z",
+      durationMs: 30_000,
+    });
+
+    const first = appendCommandAudit(task, original);
+    const second = appendCommandAudit(first, duplicate);
+
+    assert.deepEqual(second.commandAudit, [original]);
+  });
+
+  it("keeps otherwise identical entries separate when workflowCorrelationIds differ", () => {
+    const first = auditEntry({ workflowCorrelationId: "correlation-1" });
+    const second = auditEntry({ workflowCorrelationId: "correlation-2" });
+    const current = appendCommandAudit(appendCommandAudit(task, first), second);
+
+    assert.deepEqual(current.commandAudit, [first, second]);
+  });
+
+  it("treats duplicate workflowCorrelationIds as task-local", () => {
+    const entry = auditEntry({ workflowCorrelationId: "shared-correlation" });
+    const otherTask = { ...task, id: "task_000002" };
+
+    const first = appendCommandAudit(task, entry);
+    const second = appendCommandAudit(otherTask, entry);
+
+    assert.deepEqual(first.commandAudit, [entry]);
+    assert.deepEqual(second.commandAudit, [entry]);
+  });
+
+  it("does not evict legitimate history for a duplicate at capacity", () => {
+    let current = task;
+
+    for (let index = 0; index < MAX_TASK_COMMAND_AUDIT_ENTRIES; index += 1) {
+      current = appendCommandAudit(current, auditEntry({
+        workflowCorrelationId: `correlation-${index}`,
+        startedAt: `2026-08-03T00:00:${String(index).padStart(2, "0")}.000Z`,
+        completedAt: `2026-08-03T00:01:${String(index).padStart(2, "0")}.000Z`,
+        durationMs: index,
+      }));
+    }
+
+    const duplicate = auditEntry({
+      workflowCorrelationId: "correlation-0",
+      status: "FAILED",
+      failureCategory: "UNKNOWN_FAILURE",
+    });
+
+    assert.deepEqual(appendCommandAudit(current, duplicate), current);
+  });
+
+  it("copies entries and does not mutate the source task history", () => {
+    const first = appendCommandAudit(task, auditEntry({
+      operation: "VALIDATE",
+      workflowCorrelationId: "correlation-1",
+      status: "FAILED",
+      failureCategory: "REPOSITORY_MISMATCH",
+    }));
+    const second = appendCommandAudit(first, auditEntry({
       operation: "VALIDATE",
       workflowCorrelationId: "correlation-2",
-      status: "SUCCEEDED",
       startedAt: "2026-08-03T00:00:02.000Z",
       completedAt: "2026-08-03T00:00:03.000Z",
-      durationMs: 1,
-    });
+    }));
 
     assert.equal(task.commandAudit, undefined);
     assert.equal(first.commandAudit?.length, 1);

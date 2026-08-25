@@ -24,8 +24,22 @@ export function appendCommandAudit(
   task: TaskSnapshot,
   entry: CommandAuditEntry,
 ): TaskSnapshot {
+  const existingCommandAudit = task.commandAudit ?? [];
+
+  if (
+    existingCommandAudit.some(
+      (existingEntry) =>
+        existingEntry.workflowCorrelationId === entry.workflowCorrelationId,
+    )
+  ) {
+    return {
+      ...task,
+      commandAudit: existingCommandAudit.map(copyCommandAuditEntry),
+    };
+  }
+
   const commandAudit = [
-    ...(task.commandAudit ?? []),
+    ...existingCommandAudit,
     copyCommandAuditEntry(entry),
   ].slice(-MAX_TASK_COMMAND_AUDIT_ENTRIES);
 
