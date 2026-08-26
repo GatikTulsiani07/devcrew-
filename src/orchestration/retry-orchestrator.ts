@@ -108,16 +108,24 @@ export function createRetryOrchestrator({
         startedAt: timestamp,
         completedAt: timestamp,
       });
+      const latest =
+        (await store.findByProjectAndId(task.projectId, task.id)) ?? task;
+      const baseAttempts = latest.retryRecovery?.attempts ?? [];
+      const attempts = appendRetryAttemptEvidence(baseAttempts, evidence);
+
+      if (attempts === baseAttempts) {
+        return copyTask(latest);
+      }
 
       return copyTask(
         await store.update({
-          ...copyTask(task),
+          ...copyTask(latest),
           retryRecovery: boundedRecovery({
             workflowCorrelationId: command?.workflowCorrelationId,
             failedStage: classification.stage,
             retryAvailable,
             exhausted,
-            attempts: [...(task.retryRecovery?.attempts ?? []), evidence],
+            attempts,
           }),
           workflowFailure: createWorkflowFailureEvidence(
             classification,
@@ -192,13 +200,23 @@ export function createRetryOrchestrator({
           durationMs,
           previousCategory: previousStageAttempts.at(-1)?.category,
         });
+        const latest =
+          (await store.findByProjectAndId(task.projectId, task.id)) ?? retried;
+        const baseAttempts = latest.retryRecovery?.attempts ?? recovery.attempts;
+        const attempts = appendRetryAttemptEvidence(baseAttempts, success);
+
+        if (attempts === baseAttempts) {
+          return copyTask(latest);
+        }
+
         const updated = await store.update({
+          ...copyTask(latest),
           ...copyTask(retried),
           retryRecovery: boundedRecovery({
             workflowCorrelationId: options.command?.workflowCorrelationId,
             retryAvailable: false,
             exhausted: false,
-            attempts: [...recovery.attempts, success],
+            attempts,
           }),
           workflowFailure: undefined,
           updatedAt: completedAt,
@@ -232,6 +250,12 @@ export function createRetryOrchestrator({
         });
         const latest =
           (await store.findByProjectAndId(task.projectId, task.id)) ?? task;
+        const baseAttempts = latest.retryRecovery?.attempts ?? recovery.attempts;
+        const attempts = appendRetryAttemptEvidence(baseAttempts, failure);
+
+        if (attempts === baseAttempts) {
+          throw sanitizeStageError(classification.stage);
+        }
 
         await store.update({
           ...copyTask(latest),
@@ -240,7 +264,7 @@ export function createRetryOrchestrator({
             failedStage: classification.stage,
             retryAvailable: classification.retryable && !exhausted,
             exhausted: classification.retryable && exhausted,
-            attempts: [...recovery.attempts, failure],
+            attempts,
           }),
           workflowFailure: createWorkflowFailureEvidence(
             classification,
@@ -589,6 +613,22 @@ function attemptsForStage(
   stage: RetryStage,
 ): readonly RetryAttemptEvidence[] {
   return attempts.filter((attempt) => attempt.stage === stage);
+}
+
+function appendRetryAttemptEvidence(
+  attempts: readonly RetryAttemptEvidence[],
+  evidence: RetryAttemptEvidence,
+): readonly RetryAttemptEvidence[] {
+  if (
+    attempts.some(
+      (attempt) =>
+        attempt.stage === evidence.stage && attempt.attempt === evidence.attempt,
+    )
+  ) {
+    return attempts;
+  }
+
+  return [...attempts, evidence];
 }
 
 function safeSummary(

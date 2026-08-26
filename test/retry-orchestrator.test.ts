@@ -9,6 +9,7 @@ import {
   classifyProviderFailure,
   classifyRetryFailure,
   createRetryOrchestrator,
+  createRetryStageFailure,
   retryPolicyForStage,
 } from "../src/orchestration/retry-orchestrator.js";
 import { GitRemotePushError } from "../src/repositories/git-remote-push.js";
@@ -77,6 +78,37 @@ function memoryStore(initial: TaskSnapshot): { store: TaskStore; read: () => Tas
         return task.projectId === projectId && task.id === taskId
           ? structuredClone(task)
           : undefined;
+      },
+    },
+  };
+}
+
+function multiTaskStore(
+  initial: readonly TaskSnapshot[],
+): { store: TaskStore; read: (projectId: string, taskId: string) => TaskSnapshot } {
+  const tasks = new Map(
+    initial.map((task) => [`${task.projectId}:${task.id}`, structuredClone(task)]),
+  );
+  return {
+    read: (projectId, taskId) => {
+      const task = tasks.get(`${projectId}:${taskId}`);
+      if (task === undefined) {
+        throw new Error(`Task ${projectId}:${taskId} not found`);
+      }
+      return structuredClone(task);
+    },
+    store: {
+      async create(value) {
+        tasks.set(`${value.projectId}:${value.id}`, structuredClone(value));
+        return structuredClone(value);
+      },
+      async update(value) {
+        tasks.set(`${value.projectId}:${value.id}`, structuredClone(value));
+        return structuredClone(value);
+      },
+      async findByProjectAndId(projectId, taskId) {
+        const task = tasks.get(`${projectId}:${taskId}`);
+        return task === undefined ? undefined : structuredClone(task);
       },
     },
   };
@@ -265,6 +297,138 @@ describe("retry failure classification", () => {
         "Browser failed with retryable category LOCALHOST_STARTUP_TIMEOUT.",
       failedAt: "2026-08-03T03:00:00.000Z",
     });
+  });
+
+  it("does not append or mutate a duplicate retry failure attempt from a stale snapshot", async () => {
+    const initial: TaskSnapshot = {
+      ...retryableTask(),
+      retryRecovery: undefined,
+      workflowFailure: undefined,
+    };
+    const { store, read } = memoryStore(initial);
+    const dates = [
+      "2026-08-03T03:00:00.000Z",
+      "2026-08-03T04:00:00.000Z",
+    ];
+    let dateIndex = 0;
+    const orchestrator = createRetryOrchestrator({
+      store,
+      now: () => new Date(dates[Math.min(dateIndex++, dates.length - 1)]),
+      activityService: createNoopActivityService(),
+      runStage: async () => initial,
+    });
+
+    await orchestrator.recordFailure(
+      initial,
+      "DEVELOPER",
+      classifyProviderFailure("DEVELOPER", new Error("request timed out")),
+      { workflowCorrelationId: "wf_original" },
+    );
+    const first = read();
+    const originalAttempt = first.retryRecovery?.attempts[0];
+    const originalRecovery = structuredClone(first.retryRecovery);
+    const originalWorkflowFailure = structuredClone(first.workflowFailure);
+
+    await orchestrator.recordFailure(
+      initial,
+      "DEVELOPER",
+      createRetryStageFailure("DEVELOPER", "PROVIDER_NETWORK", true),
+      { workflowCorrelationId: "wf_duplicate" },
+    );
+    const duplicate = read();
+
+    assert.equal(duplicate.retryRecovery?.attempts.length, 1);
+    assert.deepEqual(duplicate.retryRecovery, originalRecovery);
+    assert.deepEqual(duplicate.workflowFailure, originalWorkflowFailure);
+    assert.deepEqual(duplicate.retryRecovery?.attempts[0], originalAttempt);
+    assert.equal(duplicate.retryRecovery?.retryAvailable, true);
+    assert.equal(duplicate.retryRecovery?.exhausted, false);
+  });
+
+  it("keeps different retry attempt ordinals independent even when evidence content matches", async () => {
+    const initial: TaskSnapshot = {
+      ...retryableTask(),
+      retryRecovery: {
+        failedStage: "VISUAL_REVIEW",
+        retryAvailable: true,
+        exhausted: false,
+        attempts: [
+          {
+            stage: "VISUAL_REVIEW",
+            attempt: 1,
+            status: "FAILED",
+            category: "PROVIDER_TIMEOUT",
+            retryable: true,
+            startedAt: "2026-08-03T02:00:00.000Z",
+            completedAt: "2026-08-03T02:00:00.000Z",
+            summary:
+              "Visual Review failed with retryable category PROVIDER_TIMEOUT.",
+          },
+        ],
+      },
+    };
+    const { store, read } = memoryStore(initial);
+
+    await createRetryOrchestrator({
+      store,
+      now: () => new Date("2026-08-03T02:00:00.000Z"),
+      activityService: createNoopActivityService(),
+      runStage: async () => initial,
+    }).recordFailure(
+      initial,
+      "VISUAL_REVIEW",
+      classifyProviderFailure("VISUAL_REVIEW", new Error("request timed out")),
+    );
+
+    const attempts = read().retryRecovery?.attempts;
+    assert.equal(attempts?.length, 2);
+    assert.equal(attempts?.[0].attempt, 1);
+    assert.equal(attempts?.[1].attempt, 2);
+    assert.equal(attempts?.[0].stage, attempts?.[1].stage);
+    assert.equal(attempts?.[0].status, attempts?.[1].status);
+    assert.equal(attempts?.[0].category, attempts?.[1].category);
+    assert.equal(attempts?.[0].startedAt, attempts?.[1].startedAt);
+    assert.equal(attempts?.[0].completedAt, attempts?.[1].completedAt);
+    assert.equal(attempts?.[0].summary, attempts?.[1].summary);
+  });
+
+  it("scopes duplicate retry attempt protection to one task", async () => {
+    const taskA: TaskSnapshot = {
+      ...retryableTask(),
+      retryRecovery: undefined,
+      workflowFailure: undefined,
+    };
+    const taskB: TaskSnapshot = {
+      ...taskA,
+      id: "task_000002",
+    };
+    const { store, read } = multiTaskStore([taskA, taskB]);
+    const orchestrator = createRetryOrchestrator({
+      store,
+      now: () => new Date("2026-08-03T03:00:00.000Z"),
+      activityService: createNoopActivityService(),
+      runStage: async (_stage, task) => task,
+    });
+
+    await orchestrator.recordFailure(
+      taskA,
+      "DEVELOPER",
+      classifyProviderFailure("DEVELOPER", new Error("request timed out")),
+    );
+    await orchestrator.recordFailure(
+      taskB,
+      "DEVELOPER",
+      classifyProviderFailure("DEVELOPER", new Error("request timed out")),
+    );
+
+    assert.equal(
+      read("proj_000001", "task_000001").retryRecovery?.attempts[0].attempt,
+      1,
+    );
+    assert.equal(
+      read("proj_000001", "task_000002").retryRecovery?.attempts[0].attempt,
+      1,
+    );
   });
 
   it("clears workflow failure after successful retry while preserving retry history", async () => {
