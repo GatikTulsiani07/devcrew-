@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createNoopActivityService } from "../src/activity/activity-service.js";
+import type { ActivityEventType } from "../src/activity/types.js";
 import {
   createVisualRepairOrchestrator,
   MAX_VISUAL_REPAIR_ATTEMPTS,
@@ -158,6 +159,37 @@ function memoryStore(initial: TaskSnapshot): { store: TaskStore; read: () => Tas
   };
 }
 
+function multiTaskStore(
+  initial: readonly TaskSnapshot[],
+): { store: TaskStore; read: (projectId: string, taskId: string) => TaskSnapshot } {
+  const tasks = new Map(
+    initial.map((task) => [`${task.projectId}:${task.id}`, structuredClone(task)]),
+  );
+  return {
+    read: (projectId, taskId) => {
+      const task = tasks.get(`${projectId}:${taskId}`);
+      if (task === undefined) {
+        throw new Error(`Task ${projectId}:${taskId} not found`);
+      }
+      return structuredClone(task);
+    },
+    store: {
+      async create(value) {
+        tasks.set(`${value.projectId}:${value.id}`, structuredClone(value));
+        return structuredClone(value);
+      },
+      async update(value) {
+        tasks.set(`${value.projectId}:${value.id}`, structuredClone(value));
+        return structuredClone(value);
+      },
+      async findByProjectAndId(projectId, taskId) {
+        const task = tasks.get(`${projectId}:${taskId}`);
+        return task === undefined ? undefined : structuredClone(task);
+      },
+    },
+  };
+}
+
 function developer(calls: DeveloperExecutionInput[] = []): DeveloperExecutor {
   return {
     async execute(input) {
@@ -218,6 +250,138 @@ describe("visual repair orchestrator", () => {
     assert.equal(result.visualRepair?.attempts.length, 1);
     assert.equal(result.visualRepair?.attempts[0]?.sourceScreenshotId, "shot_initial");
     assert.equal(result.visualRepair?.attempts[0]?.screenshotId, "shot_repair");
+  });
+
+  it("does not append or mutate a duplicate repair attempt from a stale snapshot", async () => {
+    const initial = failedVisualTask();
+    const { store, read } = memoryStore(initial);
+    const developerCalls: DeveloperExecutionInput[] = [];
+    const validationCalls: TaskSnapshot[] = [];
+    const events: ActivityEventType[] = [];
+
+    const first = await createVisualRepairOrchestrator({
+      project,
+      developerExecutor: developer(developerCalls),
+      devOpsValidator: devops([validation("val_repair", "shot_repair", "PASSED")], validationCalls),
+      store,
+      now: dates(),
+      durationClock: (() => {
+        const ticks = [0, 3, 5, 9, 10, 22];
+        let index = 0;
+        return () => ticks[Math.min(index++, ticks.length - 1)];
+      })(),
+      activityService: {
+        ...createNoopActivityService(),
+        async append(event) {
+          events.push(event.type);
+          return {
+            id: `evt_${events.length}`,
+            sequence: events.length,
+            createdAt: "2026-08-03T09:00:00.000Z",
+            ...event,
+          };
+        },
+      },
+      command: { workflowCorrelationId: "wf_original" },
+    }).repairIfRequired(initial);
+    const originalAttempt = structuredClone(first.visualRepair?.attempts[0]);
+    const originalRepair = structuredClone(first.visualRepair);
+
+    const duplicate = await createVisualRepairOrchestrator({
+      project,
+      developerExecutor: developer(developerCalls),
+      devOpsValidator: devops([validation("val_duplicate", "shot_duplicate", "FAILED")], validationCalls),
+      store,
+      now: dates(),
+      activityService: {
+        ...createNoopActivityService(),
+        async append(event) {
+          events.push(event.type);
+          return {
+            id: `evt_${events.length}`,
+            sequence: events.length,
+            createdAt: "2026-08-03T09:00:00.000Z",
+            ...event,
+          };
+        },
+      },
+      command: { workflowCorrelationId: "wf_duplicate" },
+    }).repairIfRequired(initial);
+
+    assert.equal(duplicate.visualRepair?.attempts.length, 1);
+    assert.deepEqual(duplicate.visualRepair, originalRepair);
+    assert.deepEqual(duplicate.visualRepair?.attempts[0], originalAttempt);
+    assert.equal(duplicate.visualRepair?.attempts[0]?.attempt, 1);
+    assert.equal(duplicate.visualRepair?.attempts[0]?.sourceScreenshotId, "shot_initial");
+    assert.equal(duplicate.visualRepair?.attempts[0]?.screenshotId, "shot_repair");
+    assert.equal(duplicate.visualRepair?.attempts[0]?.durationMs, 22);
+    assert.equal(duplicate.visualRepair?.attempts[0]?.workflowCorrelationId, "wf_original");
+    assert.deepEqual(duplicate.visualRepair?.attempts[0]?.developer, originalAttempt?.developer);
+    assert.deepEqual(duplicate.visualRepair?.attempts[0]?.validation, originalAttempt?.validation);
+    assert.deepEqual(duplicate.visualRepair?.attempts[0]?.visualReview, originalAttempt?.visualReview);
+    assert.equal(duplicate.visualRepair?.outcome, "PASSED");
+    assert.equal(read().visualRepair?.attempts.length, 1);
+    assert.equal(developerCalls.length, 1);
+    assert.equal(validationCalls.length, 1);
+    assert.deepEqual(
+      events.filter((event) => event.startsWith("VISUAL_REPAIR_")),
+      ["VISUAL_REPAIR_STARTED", "VISUAL_REPAIR_COMPLETED"],
+    );
+  });
+
+  it("keeps different repair attempt ordinals independent under one workflow correlation", async () => {
+    const initial = failedVisualTask();
+    const { store } = memoryStore(initial);
+    const developerCalls: DeveloperExecutionInput[] = [];
+
+    const result = await createVisualRepairOrchestrator({
+      project,
+      developerExecutor: developer(developerCalls),
+      devOpsValidator: devops([
+        validation("val_repair_1", "shot_repair_1", "FAILED"),
+        validation("val_repair_2", "shot_repair_2", "FAILED"),
+      ]),
+      store,
+      now: dates(),
+      activityService: createNoopActivityService(),
+      command: { workflowCorrelationId: "wf_shared" },
+    }).repairIfRequired(initial);
+
+    const attempts = result.visualRepair?.attempts;
+    assert.equal(attempts?.length, 2);
+    assert.equal(attempts?.[0].attempt, 1);
+    assert.equal(attempts?.[1].attempt, 2);
+    assert.equal(attempts?.[0].workflowCorrelationId, "wf_shared");
+    assert.equal(attempts?.[1].workflowCorrelationId, "wf_shared");
+    assert.equal(attempts?.[0].visualReview?.status, attempts?.[1].visualReview?.status);
+    assert.equal(result.visualRepair?.outcome, "EXHAUSTED");
+    assert.equal(developerCalls.length, 2);
+  });
+
+  it("scopes duplicate repair attempt protection to one task", async () => {
+    const taskA = failedVisualTask();
+    const taskB = failedVisualTask({ id: "task_000002" });
+    const { store, read } = multiTaskStore([taskA, taskB]);
+
+    for (const task of [taskA, taskB]) {
+      await createVisualRepairOrchestrator({
+        project,
+        developerExecutor: developer(),
+        devOpsValidator: devops([validation(`val_${task.id}`, `shot_${task.id}`, "PASSED")]),
+        store,
+        now: dates(),
+        activityService: createNoopActivityService(),
+      }).repairIfRequired(task);
+    }
+
+    assert.equal(
+      read(project.id, "task_000001").visualRepair?.attempts[0].attempt,
+      1,
+    );
+    assert.equal(
+      read(project.id, "task_000002").visualRepair?.attempts[0].attempt,
+      1,
+    );
   });
 
   it("does not repair PASSED, missing visual review, provider failure, or backend-only tasks", async () => {
