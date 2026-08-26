@@ -213,6 +213,28 @@ function publishSummaryComment(
   );
 }
 
+function pullRequestEvidence(overrides: {
+  number?: number;
+  url?: string;
+  state?: "OPEN" | "CLOSED" | "MERGED";
+  headBranch?: string;
+  baseBranch?: string;
+  commitSha?: string;
+  createdAt?: string;
+} = {}) {
+  const number = overrides.number ?? 42;
+
+  return {
+    number,
+    url: overrides.url ?? `https://github.com/example/devcrew/pull/${number}`,
+    state: overrides.state ?? "OPEN",
+    headBranch: overrides.headBranch ?? branch,
+    baseBranch: overrides.baseBranch ?? "main",
+    commitSha: overrides.commitSha ?? checkpointSha,
+    createdAt: overrides.createdAt ?? "2026-08-03T07:00:00.000Z",
+  };
+}
+
 describe("pull request task route", () => {
   it("persists PR evidence and appends the success event once", async () => {
     let callCount = 0;
@@ -269,7 +291,7 @@ describe("pull request task route", () => {
       workflowCorrelationId: undefined,
     });
     assert.equal(retried.status, 200);
-    assert.equal(callCount, 2);
+    assert.equal(callCount, 1);
     assert.equal(
       ((await activity.json()).events as Array<{ type: string }>).filter(
         (event) => event.type === "PULL_REQUEST_CREATED",
@@ -369,6 +391,93 @@ describe("pull request task route", () => {
     assert.equal((await read.json()).task.pullRequest.state, "MERGED");
     assert.equal(createCalls, 1);
     assert.equal(refreshCalls, 1);
+  });
+
+  it("rejects conflicting refreshed PR identity without mutating existing evidence", async () => {
+    const originalEvidence = pullRequestEvidence();
+    const conflictingEvidence = pullRequestEvidence({
+      number: 99,
+      url: "https://github.com/example/devcrew/pull/99",
+      state: "MERGED",
+      headBranch: "devcrew/task-other",
+      baseBranch: "develop",
+      commitSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      createdAt: "2026-08-03T09:00:00.000Z",
+    });
+    let refreshCalls = 0;
+    const app = createTestApp({
+      async createPullRequest() {
+        return {
+          created: true,
+          evidence: originalEvidence,
+        };
+      },
+      async refreshPullRequest() {
+        refreshCalls += 1;
+        return conflictingEvidence;
+      },
+    });
+    await reachReviewCompleted(app);
+    assert.equal(
+      (
+        await app.request(
+          "/api/v1/projects/proj_000001/tasks/task_000001/pull-request",
+          { method: "POST" },
+        )
+      ).status,
+      200,
+    );
+
+    const beforeTask = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+    const beforeActivity = await (
+      await app.request("/api/v1/projects/proj_000001/activity")
+    ).json();
+    const response = await refreshPullRequest(app);
+    const responseBody = await response.json();
+    const afterTask = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+    const afterActivity = await (
+      await app.request("/api/v1/projects/proj_000001/activity")
+    ).json();
+
+    assert.equal(response.status, 409);
+    assert.equal(responseBody.error.code, "PULL_REQUEST_EVIDENCE_CONFLICT");
+    assert.equal(
+      responseBody.error.message,
+      "Pull Request evidence conflicts with the existing task state.",
+    );
+    assert.equal(refreshCalls, 1);
+    assert.deepEqual(afterTask.task.pullRequest, beforeTask.task.pullRequest);
+    assert.equal(afterTask.task.pullRequest.number, 42);
+    assert.equal(afterTask.task.pullRequest.headBranch, branch);
+    assert.equal(afterTask.task.pullRequest.baseBranch, "main");
+    assert.equal(afterTask.task.pullRequest.commitSha, checkpointSha);
+    assert.equal(
+      afterTask.task.pullRequest.createdAt,
+      "2026-08-03T07:00:00.000Z",
+    );
+    assert.equal(afterTask.task.pullRequest.state, "OPEN");
+    assert.equal(
+      afterTask.task.pullRequest.url,
+      "https://github.com/example/devcrew/pull/42",
+    );
+    assert.equal(
+      afterActivity.events.filter(
+        (event: { type: string }) => event.type === "PULL_REQUEST_CREATED",
+      ).length,
+      beforeActivity.events.filter(
+        (event: { type: string }) => event.type === "PULL_REQUEST_CREATED",
+      ).length,
+    );
+    assert.equal(
+      afterTask.task.commandAudit.length,
+      beforeTask.task.commandAudit.length + 1,
+    );
+    assert.equal(afterTask.task.commandAudit.at(-1).operation, "PULL_REQUEST_REFRESH");
+    assert.equal(afterTask.task.commandAudit.at(-1).status, "FAILED");
   });
 
   it("replays same-key PR refresh without a second provider read", async () => {
