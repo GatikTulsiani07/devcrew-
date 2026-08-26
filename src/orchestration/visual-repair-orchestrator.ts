@@ -124,9 +124,22 @@ export function createVisualRepairOrchestrator({
           sourceVisualReview: summarizeSourceReview(sourceVisualReview),
         };
 
-        current = await persistRepairEvidence(current, {
+        const latest =
+          (await store.findByProjectAndId(current.projectId, current.id)) ??
+          current;
+        const latestAttempts = latest.visualRepair?.attempts ?? [];
+        const startedAttempts = appendVisualRepairAttemptEvidence(
+          latestAttempts,
+          attempt,
+        );
+
+        if (startedAttempts === latestAttempts) {
+          return copyTask(latest);
+        }
+
+        current = await persistRepairEvidence(latest, {
           maxAttempts: MAX_VISUAL_REPAIR_ATTEMPTS,
-          attempts: [...existingAttempts, attempt],
+          attempts: startedAttempts,
         });
         await activityService.append({
           projectId: current.projectId,
@@ -407,6 +420,17 @@ function shouldRepair(task: TaskSnapshot): boolean {
     task.visualRepair?.outcome !== "PASSED" &&
     task.visualRepair?.outcome !== "EXHAUSTED"
   );
+}
+
+function appendVisualRepairAttemptEvidence(
+  attempts: readonly VisualRepairAttempt[],
+  attempt: VisualRepairAttempt,
+): readonly VisualRepairAttempt[] {
+  if (attempts.some((existing) => existing.attempt === attempt.attempt)) {
+    return attempts;
+  }
+
+  return [...attempts, attempt];
 }
 
 function buildRepairContext(
