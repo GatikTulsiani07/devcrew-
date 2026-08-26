@@ -3569,7 +3569,7 @@ describe("task manager planning API", () => {
     assert.equal(second.status, 200);
     assert.equal(firstBody.task.pullRequest.durationMs, 5);
     assert.equal(secondBody.task.pullRequest.durationMs, 5);
-    assert.equal(pullRequestCalls, 2);
+    assert.equal(pullRequestCalls, 1);
   });
 
   it("records workflowFailure and prevents late Developer evidence after total budget expiration", async () => {

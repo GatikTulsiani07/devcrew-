@@ -76,6 +76,7 @@ import type {
   PlanDecisionInput,
   RetryStage,
   TaskPullRequestCreator,
+  TaskPullRequestEvidence,
   TaskReviewer,
   TaskSnapshot,
   TaskStore,
@@ -686,6 +687,10 @@ export function createTaskService({
           );
           budget.throwIfExpired("PULL_REQUEST");
         } catch (error) {
+          if (isPullRequestEvidenceConflict(error)) {
+            throw error;
+          }
+
           const latest = await latestTaskOr(task);
           const failedAt = now().toISOString();
           const classification = classifyRetryFailure(error, "PULL_REQUEST");
@@ -704,10 +709,15 @@ export function createTaskService({
           budget.dispose();
         }
 
+        const compatiblePullRequest = mergePullRequestEvidence(
+          task.pullRequest,
+          pullRequest,
+        );
+
         return copyTask(
           await store.update({
             ...copyTask(task),
-            pullRequest: withWorkflowCorrelation(pullRequest, command),
+            pullRequest: withWorkflowCorrelation(compatiblePullRequest, command),
             workflowFailure: undefined,
             updatedAt: timestamp,
           }),
@@ -1295,6 +1305,10 @@ export function createTaskService({
     signal?: AbortSignal,
     command?: WorkflowCommandContext,
   ): Promise<TaskSnapshot> {
+    if (task.pullRequest !== undefined) {
+      return copyTask(task);
+    }
+
     active?.setStage("PULL_REQUEST");
     budget?.throwIfExpired("PULL_REQUEST");
     throwIfSignalCancelled(signal);
@@ -1326,10 +1340,6 @@ export function createTaskService({
     budget?.throwIfExpired("PULL_REQUEST");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
-
-    if (task.pullRequest !== undefined) {
-      return copyTask(task);
-    }
 
     const durationMs = timer.finish();
     const timestamp = now().toISOString();
@@ -1886,6 +1896,40 @@ function assertTaskNotCancelled(task: TaskSnapshot): void {
       "Task has been cancelled",
     );
   }
+}
+
+function mergePullRequestEvidence(
+  existing: TaskPullRequestEvidence,
+  next: TaskPullRequestEvidence,
+): TaskPullRequestEvidence {
+  if (
+    existing.number !== next.number ||
+    existing.headBranch !== next.headBranch ||
+    existing.baseBranch !== next.baseBranch ||
+    existing.commitSha !== next.commitSha ||
+    existing.createdAt !== next.createdAt
+  ) {
+    throw new ApplicationError(
+      "PULL_REQUEST_EVIDENCE_CONFLICT",
+      409,
+      "Pull Request evidence conflicts with the existing task state.",
+    );
+  }
+
+  return {
+    ...next,
+    createdAt: existing.createdAt,
+    ...(existing.durationMs === undefined
+      ? {}
+      : { durationMs: existing.durationMs }),
+  };
+}
+
+function isPullRequestEvidenceConflict(error: unknown): boolean {
+  return (
+    error instanceof ApplicationError &&
+    error.code === "PULL_REQUEST_EVIDENCE_CONFLICT"
+  );
 }
 
 function repositoryDriftApplicationError(): ApplicationError {
