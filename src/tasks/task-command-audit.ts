@@ -1,5 +1,7 @@
+import { ApplicationError } from "../errors.js";
 import type { TaskIdempotencyOperation } from "./task-idempotency.js";
 import type { RetryFailureCategory, TaskSnapshot } from "./types.js";
+import { MAX_WORKFLOW_DURATION_MS } from "./workflow-duration.js";
 
 export const MAX_TASK_COMMAND_AUDIT_ENTRIES = 50;
 
@@ -20,10 +22,23 @@ export interface CommandAuditEntry {
   failureCategory?: RetryFailureCategory;
 }
 
+export class CommandAuditDurationError extends ApplicationError {
+  constructor() {
+    super(
+      "INVALID_COMMAND_AUDIT_DURATION",
+      500,
+      "Invalid command audit duration",
+    );
+    this.name = "CommandAuditDurationError";
+  }
+}
+
 export function appendCommandAudit(
   task: TaskSnapshot,
   entry: CommandAuditEntry,
 ): TaskSnapshot {
+  assertValidCommandAuditDuration(entry.durationMs);
+
   const existingCommandAudit = task.commandAudit ?? [];
 
   if (
@@ -47,6 +62,17 @@ export function appendCommandAudit(
     ...task,
     commandAudit,
   };
+}
+
+function assertValidCommandAuditDuration(durationMs: number): void {
+  if (
+    !Number.isFinite(durationMs) ||
+    !Number.isInteger(durationMs) ||
+    durationMs < 0 ||
+    durationMs > MAX_WORKFLOW_DURATION_MS
+  ) {
+    throw new CommandAuditDurationError();
+  }
 }
 
 export function copyCommandAuditEntry(

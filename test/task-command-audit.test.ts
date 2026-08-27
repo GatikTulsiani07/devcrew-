@@ -3,10 +3,12 @@ import { describe, it } from "node:test";
 
 import {
   appendCommandAudit,
+  CommandAuditDurationError,
   type CommandAuditEntry,
   MAX_TASK_COMMAND_AUDIT_ENTRIES,
 } from "../src/tasks/task-command-audit.js";
 import type { TaskSnapshot } from "../src/tasks/types.js";
+import { MAX_WORKFLOW_DURATION_MS } from "../src/tasks/workflow-duration.js";
 
 const task: TaskSnapshot = {
   id: "task_000001",
@@ -39,6 +41,40 @@ describe("task command audit history", () => {
     const current = appendCommandAudit(task, entry);
 
     assert.deepEqual(current.commandAudit, [entry]);
+  });
+
+  it("accepts zero, positive, and exact maximum durations", () => {
+    const entries = [
+      auditEntry({ workflowCorrelationId: "correlation-zero", durationMs: 0 }),
+      auditEntry({
+        workflowCorrelationId: "correlation-positive",
+        durationMs: 1,
+      }),
+      auditEntry({
+        workflowCorrelationId: "correlation-maximum",
+        durationMs: MAX_WORKFLOW_DURATION_MS,
+      }),
+    ];
+
+    const current = entries.reduce(appendCommandAudit, task);
+
+    assert.deepEqual(current.commandAudit, entries);
+  });
+
+  it("rejects invalid durations before appending", () => {
+    for (const durationMs of [
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      1.5,
+      MAX_WORKFLOW_DURATION_MS + 1,
+    ]) {
+      assert.throws(
+        () => appendCommandAudit(task, auditEntry({ durationMs })),
+        CommandAuditDurationError,
+      );
+    }
   });
 
   it("retains only the newest bounded entries in chronological order", () => {
@@ -124,6 +160,33 @@ describe("task command audit history", () => {
     });
 
     assert.deepEqual(appendCommandAudit(current, duplicate), current);
+  });
+
+  it("preserves existing history and capacity when rejecting an invalid duration", () => {
+    let current = task;
+
+    for (let index = 0; index < MAX_TASK_COMMAND_AUDIT_ENTRIES; index += 1) {
+      current = appendCommandAudit(current, auditEntry({
+        workflowCorrelationId: `correlation-${index}`,
+        startedAt: `2026-08-03T00:00:${String(index).padStart(2, "0")}.000Z`,
+        completedAt: `2026-08-03T00:01:${String(index).padStart(2, "0")}.000Z`,
+        durationMs: index,
+      }));
+    }
+
+    const before = structuredClone(current.commandAudit);
+
+    assert.throws(
+      () =>
+        appendCommandAudit(current, auditEntry({
+          workflowCorrelationId: "correlation-invalid",
+          durationMs: MAX_WORKFLOW_DURATION_MS + 1,
+        })),
+      CommandAuditDurationError,
+    );
+    assert.deepEqual(current.commandAudit, before);
+    assert.equal(current.commandAudit?.length, MAX_TASK_COMMAND_AUDIT_ENTRIES);
+    assert.equal(current.commandAudit?.[0].workflowCorrelationId, "correlation-0");
   });
 
   it("copies entries and does not mutate the source task history", () => {
