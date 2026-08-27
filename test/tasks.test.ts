@@ -2858,6 +2858,49 @@ describe("task manager planning API", () => {
     );
   });
 
+  it("does not append duplicate Reviewer activity or command audit for the same workflow command", async () => {
+    const ids = [
+      "workflow_execute",
+      "workflow_validate",
+      "workflow_review",
+      "workflow_review",
+    ];
+    let idIndex = 0;
+    const activityStore = new InMemoryActivityStore();
+    const activityService = createActivityService({ store: activityStore });
+    const app = createTestApp({
+      activityService,
+      createWorkflowCorrelationId: () => ids[idIndex++] ?? "workflow_review",
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+
+    const duplicate = await reviewTask(app);
+    const task = await (
+      await app.request("/api/v1/projects/proj_000001/tasks/task_000001")
+    ).json();
+    const activity = await app.request("/api/v1/projects/proj_000001/activity");
+    const events = (await activity.json()).events as Array<{ type: string }>;
+
+    assert.equal(duplicate.status, 409);
+    assert.equal(task.task.review.workflowCorrelationId, "workflow_review");
+    assert.equal(
+      task.task.commandAudit.filter(
+        (entry: { workflowCorrelationId: string }) =>
+          entry.workflowCorrelationId === "workflow_review",
+      ).length,
+      1,
+    );
+    assert.equal(
+      events.filter((event) => event.type === "REVIEW_COMPLETED").length,
+      1,
+    );
+  });
+
   it("returns project not found for review in an unknown project", async () => {
     const app = createTestApp();
 
