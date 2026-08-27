@@ -54,6 +54,7 @@ import {
   findValidationProfile,
   validationProfiles,
 } from "../validation/validation-profiles.js";
+import { bindValidationProfile } from "../validation/validation-profile-binding.js";
 import { selectValidationPlan } from "../validation/validation-selection.js";
 import {
   createControlledCommandRunner,
@@ -241,7 +242,7 @@ export function createControlledDevOpsValidator({
         }
       }
 
-      return {
+      return bindValidationProfile({
         id: generateValidationId(),
         role: "DEVOPS_ENGINEER",
         status: "PASSED",
@@ -260,7 +261,10 @@ export function createControlledDevOpsValidator({
         ...(browserVerification === undefined ? {} : { browserVerification }),
         ...(browserScreenshot === undefined ? {} : { browserScreenshot }),
         ...(visualReview === undefined ? {} : { visualReview }),
-      };
+      }, {
+        profile,
+        capabilities: repository.capabilities,
+      });
     },
 
     async publishValidatedTask(task, options = {}): Promise<TaskValidation> {
