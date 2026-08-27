@@ -15,6 +15,10 @@ import {
   createNoopValidationIntegrityService,
   type ValidationIntegrityService,
 } from "../validation/validation-integrity.js";
+import {
+  createNoopValidationProfileBindingService,
+  type ValidationProfileBindingService,
+} from "../validation/validation-profile-binding.js";
 import { prepareValidationEvidencePersistence } from "../tasks/validation-evidence-persistence.js";
 import type { WorkflowCommandContext } from "../tasks/workflow-correlation.js";
 import type {
@@ -47,6 +51,7 @@ export interface VisualRepairOrchestratorDependencies {
   activityService: ActivityService;
   durationClock?: MonotonicClock;
   validationIntegrityService?: ValidationIntegrityService;
+  validationProfileBindingService?: ValidationProfileBindingService;
   signal?: AbortSignal;
   setStage?: (stage: CancellationStage) => void;
   command?: WorkflowCommandContext;
@@ -65,6 +70,7 @@ export function createVisualRepairOrchestrator({
   activityService,
   durationClock,
   validationIntegrityService = createNoopValidationIntegrityService(),
+  validationProfileBindingService = createNoopValidationProfileBindingService(),
   signal,
   setStage,
   command,
@@ -186,13 +192,18 @@ export function createVisualRepairOrchestrator({
 
           setStage?.("DEVOPS");
           const validationTimer = startWorkflowDurationTimer(durationClock);
-          validation = correlateValidationEvidence(withDuration(
+          validation = withDuration(
             await devOpsValidator.validate(taskWithRepairExecution, {
             signal,
             setStage,
             }),
             validationTimer.finish(),
-          ), command);
+          );
+          validation = validationProfileBindingService.bindValidation({
+            project,
+            validation,
+          });
+          validation = correlateValidationEvidence(validation, command);
           validation = await validationIntegrityService.bindValidation({
             project,
             task: taskWithRepairExecution,

@@ -236,6 +236,17 @@ describe("visual repair orchestrator", () => {
       store,
       now: dates(),
       activityService: createNoopActivityService(),
+      validationProfileBindingService: {
+        bindValidation({ validation }) {
+          return {
+            ...validation,
+            validationProfileFingerprint: `profile_${validation.id}`,
+          };
+        },
+        verifyValidation() {
+          throw new Error("unused");
+        },
+      },
     }).repairIfRequired(initial);
 
     assert.equal(developerCalls.length, 1);
@@ -243,6 +254,10 @@ describe("visual repair orchestrator", () => {
     assert.equal(validationCalls[0]?.validation, undefined);
     assert.equal(result.execution?.id, "exec_repair_1");
     assert.equal(result.validation?.id, "val_repair");
+    assert.equal(
+      result.validation?.validationProfileFingerprint,
+      "profile_val_repair",
+    );
     assert.equal(result.validation?.browserScreenshot?.id, "shot_repair");
     assert.equal(result.validation?.visualReview?.screenshotId, "shot_repair");
     assert.equal(result.visualRepair?.maxAttempts, MAX_VISUAL_REPAIR_ATTEMPTS);

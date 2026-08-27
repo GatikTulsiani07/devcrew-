@@ -25,6 +25,12 @@ import {
   type ValidationIntegrityService,
 } from "../validation/validation-integrity.js";
 import {
+  createNoopValidationProfileBindingService,
+  ValidationProfileBindingError,
+  VALIDATION_PROFILE_BINDING_SUMMARY,
+  type ValidationProfileBindingService,
+} from "../validation/validation-profile-binding.js";
+import {
   createVisualRepairOrchestrator,
 } from "../orchestration/visual-repair-orchestrator.js";
 import {
@@ -111,6 +117,7 @@ export interface TaskServiceDependencies {
   auditDurationClock?: MonotonicClock;
   repositoryDriftVerifier?: RepositoryDriftVerifier;
   validationIntegrityService?: ValidationIntegrityService;
+  validationProfileBindingService?: ValidationProfileBindingService;
   createWorkflowCorrelationId?: WorkflowCorrelationIdFactory;
 }
 
@@ -158,6 +165,7 @@ export function createTaskService({
   auditDurationClock,
   repositoryDriftVerifier = createNoopRepositoryDriftVerifier(),
   validationIntegrityService = createNoopValidationIntegrityService(),
+  validationProfileBindingService = createNoopValidationProfileBindingService(),
   createWorkflowCorrelationId = defaultCreateWorkflowCorrelationId,
 }: TaskServiceDependencies): TaskService {
   const newWorkflowCommand = () =>
@@ -681,6 +689,7 @@ export function createTaskService({
           await assertValidationIntegrity(project, task, "PULL_REQUEST", {
             signal: budget.composeSignal(undefined, "PULL_REQUEST"),
           }, command);
+          await assertValidationProfileBinding(project, task, "PULL_REQUEST", command);
           pullRequest = await refreshPullRequestEvidence(
             project,
             task,
@@ -780,6 +789,7 @@ export function createTaskService({
           await assertValidationIntegrity(project, task, "PULL_REQUEST", {
             signal: budget.composeSignal(active.signal, "PULL_REQUEST"),
           }, command);
+          await assertValidationProfileBinding(project, task, "PULL_REQUEST", command);
           const result = await publishPullRequestSummaryCommentEvidence(
             project,
             task,
@@ -886,6 +896,22 @@ export function createTaskService({
 
           if (staleValidation !== undefined) {
             return withResume(staleValidation, {
+              resumable: false,
+              lastCompletedStage: resume.lastCompletedStage,
+              nextStage: null,
+              reason: "REPOSITORY_STATE_MISMATCH",
+            });
+          }
+
+          const staleProfile = await persistValidationProfileFailureIfPresent(
+            project,
+            task,
+            retryStageForResume(resume.nextStage),
+            command,
+          );
+
+          if (staleProfile !== undefined) {
+            return withResume(staleProfile, {
               resumable: false,
               lastCompletedStage: resume.lastCompletedStage,
               nextStage: null,
@@ -1171,7 +1197,11 @@ export function createTaskService({
       }),
       timer.finish(),
     );
-    const correlatedValidation = correlateValidationEvidence(validation, command);
+    const profileBoundValidation = validationProfileBindingService.bindValidation({
+      project,
+      validation,
+    });
+    const correlatedValidation = correlateValidationEvidence(profileBoundValidation, command);
     budget?.throwIfExpired(currentWorkflowStage(active, "DEVOPS"));
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -1220,6 +1250,7 @@ export function createTaskService({
       activityService,
       durationClock,
       validationIntegrityService,
+      validationProfileBindingService,
       command,
       signal:
         signal ??
@@ -1263,6 +1294,7 @@ export function createTaskService({
         budget?.composeSignal(active?.signal, "REVIEWER") ??
         active?.signal,
     }, command);
+    await assertValidationProfileBinding(project, task, "REVIEWER", command);
     budget?.throwIfExpired("REVIEWER");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -1332,6 +1364,7 @@ export function createTaskService({
         budget?.composeSignal(active?.signal, "PULL_REQUEST") ??
         active?.signal,
     }, command);
+    await assertValidationProfileBinding(project, task, "PULL_REQUEST", command);
     budget?.throwIfExpired("PULL_REQUEST");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -1469,6 +1502,7 @@ export function createTaskService({
         budget?.composeSignal(active?.signal, "CHECKPOINT") ??
         active?.signal,
     }, command);
+    await assertValidationProfileBinding(undefined, task, "CHECKPOINT", command);
     budget?.throwIfExpired("CHECKPOINT");
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
@@ -1521,6 +1555,7 @@ export function createTaskService({
     await assertValidationIntegrity(undefined, task, "CHECKPOINT", {
       signal: budget.composeSignal(active.signal, "CHECKPOINT"),
     }, command);
+    await assertValidationProfileBinding(undefined, task, "CHECKPOINT", command);
     budget.throwIfExpired("CHECKPOINT");
     active.throwIfCancelled();
     const validation = await devOpsValidator.publishValidatedTask(copyTask(task), {
@@ -1586,6 +1621,69 @@ export function createTaskService({
 
     if (stale !== undefined) {
       throw validationIntegrityApplicationError();
+    }
+  }
+
+  async function assertValidationProfileBinding(
+    project:
+      | Awaited<ReturnType<ProjectService["getProject"]>>
+      | undefined,
+    task: TaskSnapshot,
+    stage: RetryStage,
+    command?: WorkflowCommandContext,
+  ): Promise<void> {
+    const stale = await persistValidationProfileFailureIfPresent(
+      project,
+      task,
+      stage,
+      command,
+    );
+
+    if (stale !== undefined) {
+      throw validationIntegrityApplicationError();
+    }
+  }
+
+  async function persistValidationProfileFailureIfPresent(
+    project:
+      | Awaited<ReturnType<ProjectService["getProject"]>>
+      | undefined,
+    task: TaskSnapshot,
+    stage: RetryStage,
+    command?: WorkflowCommandContext,
+  ): Promise<TaskSnapshot | undefined> {
+    const resolvedProject =
+      project ?? (await projectService.getProject(task.projectId));
+
+    try {
+      validationProfileBindingService.verifyValidation({
+        project: resolvedProject,
+        validation: task.validation,
+      });
+      return undefined;
+    } catch (error) {
+      if (!(error instanceof ValidationProfileBindingError)) {
+        throw error;
+      }
+
+      const timestamp = now().toISOString();
+      return copyTask(
+        await store.update({
+          ...copyTask(task),
+          workflowFailure: createWorkflowFailureEvidence(
+            {
+              stage,
+              category: "REPOSITORY_MISMATCH",
+              retryable: false,
+              summary: VALIDATION_PROFILE_BINDING_SUMMARY,
+            },
+            timestamp,
+            undefined,
+            command?.workflowCorrelationId,
+          ),
+          updatedAt: timestamp,
+        }),
+      );
     }
   }
 
@@ -2230,6 +2328,12 @@ function copyTask(task: TaskSnapshot): TaskSnapshot {
             ...(task.validation.durationMs === undefined
               ? {}
               : { durationMs: task.validation.durationMs }),
+            ...(task.validation.validationProfileFingerprint === undefined
+              ? {}
+              : {
+                  validationProfileFingerprint:
+                    task.validation.validationProfileFingerprint,
+                }),
             checks: task.validation.checks.map((check) => ({
               name: check.name,
               status: check.status,

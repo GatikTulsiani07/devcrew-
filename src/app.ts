@@ -55,6 +55,7 @@ import {
 } from "./tasks/task-service.js";
 import type { DeveloperExecutor } from "./tasks/types.js";
 import { createValidationIntegrityService } from "./validation/validation-integrity.js";
+import { createValidationProfileBindingService } from "./validation/validation-profile-binding.js";
 import type { ControlledCommandRunner } from "./validation/types.js";
 
 type AppEnv = {
@@ -120,6 +121,9 @@ export function createApp(dependencies: AppDependencies): Hono<AppEnv> {
       }),
       store: new InMemoryTaskStore(),
       activityService,
+      validationProfileBindingService: createValidationProfileBindingService({
+        preparedRepositories,
+      }),
       ...(preparedRepositories.some(
         (repository) => repository.localCheckoutPath !== undefined,
       )

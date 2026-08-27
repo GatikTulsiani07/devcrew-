@@ -21,6 +21,10 @@ import {
   ValidationIntegrityError,
   type ValidationIntegrityService,
 } from "../src/validation/validation-integrity.js";
+import {
+  ValidationProfileBindingError,
+  type ValidationProfileBindingService,
+} from "../src/validation/validation-profile-binding.js";
 import { createDeterministicDeveloperExecutor } from "../src/tasks/deterministic-developer-executor.js";
 import { createDeterministicDevOpsValidator } from "../src/tasks/deterministic-devops-validator.js";
 import { createDeterministicPlanner } from "../src/tasks/deterministic-planner.js";
@@ -132,6 +136,7 @@ interface TestAppOptions {
   durationClock?: MonotonicClock;
   repositoryDriftVerifier?: RepositoryDriftVerifier;
   validationIntegrityService?: ValidationIntegrityService;
+  validationProfileBindingService?: ValidationProfileBindingService;
   createWorkflowCorrelationId?: WorkflowCorrelationIdFactory;
   generateTaskId?: TaskIdGenerator;
 }
@@ -167,6 +172,7 @@ function createTestApp({
   durationClock,
   repositoryDriftVerifier,
   validationIntegrityService,
+  validationProfileBindingService,
   createWorkflowCorrelationId,
   generateTaskId,
 }: TestAppOptions = {}) {
@@ -234,6 +240,9 @@ function createTestApp({
       ...(validationIntegrityService === undefined
         ? {}
         : { validationIntegrityService }),
+      ...(validationProfileBindingService === undefined
+        ? {}
+        : { validationProfileBindingService }),
       ...(createWorkflowCorrelationId === undefined
         ? {}
         : { createWorkflowCorrelationId }),
@@ -523,6 +532,29 @@ function validationIntegrityService(
       if (options.failOnVerifyCall === undefined) return;
       if (verifyCalls >= options.failOnVerifyCall) {
         throw new ValidationIntegrityError("WORKTREE_CHANGED");
+      }
+    },
+  };
+}
+
+function validationProfileBindingService(
+  options: {
+    failOnVerify?: boolean;
+    fingerprint?: string;
+  } = {},
+): ValidationProfileBindingService {
+  const fingerprint = options.fingerprint ?? "profile_fixture_fingerprint";
+
+  return {
+    bindValidation({ validation }) {
+      return {
+        ...validation,
+        validationProfileFingerprint: fingerprint,
+      };
+    },
+    verifyValidation({ validation }) {
+      if (options.failOnVerify || validation?.validationProfileFingerprint !== fingerprint) {
+        throw new ValidationProfileBindingError("PROFILE_MISMATCH");
       }
     },
   };
@@ -4583,6 +4615,252 @@ describe("validation integrity task integration", () => {
 
     assert.equal(response.status, 400);
     assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+  });
+
+  it("records validation profile binding evidence during validation", async () => {
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationProfileBindingService: validationProfileBindingService({
+        fingerprint: "profile_current",
+      }),
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const response = await validateTask(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.task.validation.validationProfileFingerprint, "profile_current");
+  });
+
+  it("preserves profile binding on same-key replay and uses current binding for new validation", async () => {
+    let currentFingerprint = "profile_first";
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationProfileBindingService: {
+        bindValidation({ validation }) {
+          return {
+            ...validation,
+            validationProfileFingerprint: currentFingerprint,
+          };
+        },
+        verifyValidation() {
+          // Not used by this test.
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    const first = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "profile-binding-key" },
+    });
+    currentFingerprint = "profile_second";
+    const replay = await validateTask(app, "proj_000001", "task_000001", {
+      headers: { "Idempotency-Key": "profile-binding-key" },
+    });
+
+    assert.equal(first.status, 200);
+    assert.equal(replay.status, 200);
+    assert.equal(
+      (await replay.json()).task.validation.validationProfileFingerprint,
+      "profile_first",
+    );
+
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal(
+      (await decidePlan(app, { decision: "APPROVE" }, "proj_000001", "task_000002")).status,
+      200,
+    );
+    assert.equal((await executeTask(app, "proj_000001", "task_000002")).status, 200);
+
+    const next = await validateTask(app, "proj_000001", "task_000002");
+    assert.equal(next.status, 200);
+    assert.equal(
+      (await next.json()).task.validation.validationProfileFingerprint,
+      "profile_second",
+    );
+  });
+
+  it("does not run Reviewer with stale validation profile binding", async () => {
+    let reviewCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationProfileBindingService: validationProfileBindingService({
+        failOnVerify: true,
+      }),
+      taskReviewer: {
+        async review(): Promise<Awaited<ReturnType<TaskReviewer["review"]>>> {
+          reviewCalls += 1;
+          throw new Error("reviewer should not run with stale profile");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const response = await reviewTask(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(body.error.code, "VALIDATION_EVIDENCE_STALE");
+    assert.equal(reviewCalls, 0);
+  });
+
+  it("does not call Pull Request creation with stale validation profile binding", async () => {
+    let stale = false;
+    let prCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationProfileBindingService: {
+        bindValidation({ validation }) {
+          return {
+            ...validation,
+            validationProfileFingerprint: "profile_current",
+          };
+        },
+        verifyValidation({ validation }) {
+          if (stale || validation?.validationProfileFingerprint !== "profile_current") {
+            throw new ValidationProfileBindingError("PROFILE_MISMATCH");
+          }
+        },
+      },
+      pullRequestCreator: {
+        async createPullRequest() {
+          prCalls += 1;
+          throw new Error("GitHub should not be called with stale profile");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+    stale = true;
+
+    const response = await createPullRequest(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(body.error.code, "VALIDATION_EVIDENCE_STALE");
+    assert.equal(prCalls, 0);
+  });
+
+  it("does not call Pull Request summary comment with stale validation profile binding", async () => {
+    let stale = false;
+    let summaryCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationProfileBindingService: {
+        bindValidation({ validation }) {
+          return {
+            ...validation,
+            validationProfileFingerprint: "profile_current",
+          };
+        },
+        verifyValidation({ validation }) {
+          if (stale || validation?.validationProfileFingerprint !== "profile_current") {
+            throw new ValidationProfileBindingError("PROFILE_MISMATCH");
+          }
+        },
+      },
+      pullRequestCreator: {
+        async createPullRequest() {
+          return {
+            created: true,
+            evidence: pullRequestEvidence(),
+          };
+        },
+        async publishSummaryComment() {
+          summaryCalls += 1;
+          throw new Error("GitHub should not be called with stale profile");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+    assert.equal((await reviewTask(app)).status, 200);
+    assert.equal((await createPullRequest(app)).status, 200);
+    stale = true;
+
+    const response = await publishPullRequestSummaryComment(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(body.error.code, "VALIDATION_EVIDENCE_STALE");
+    assert.equal(summaryCalls, 0);
+  });
+
+  it("resume refuses stale validation profile binding without advancing", async () => {
+    let reviewCalls = 0;
+    const app = createTestApp({
+      developerExecutor: developerWithGitEvidence(),
+      validationProfileBindingService: validationProfileBindingService({
+        failOnVerify: true,
+      }),
+      taskReviewer: {
+        async review(): Promise<Awaited<ReturnType<TaskReviewer["review"]>>> {
+          reviewCalls += 1;
+          throw new Error("reviewer should not run during stale profile resume");
+        },
+      },
+    });
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+    assert.equal((await validateTask(app)).status, 200);
+
+    const response = await resumeTask(app);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.task.resume, {
+      resumable: false,
+      lastCompletedStage: "VALIDATION",
+      nextStage: null,
+      reason: "REPOSITORY_STATE_MISMATCH",
+    });
+    assert.equal(
+      body.task.workflowFailure.summary,
+      "Validation evidence was produced with an outdated validation profile.",
+    );
+    assert.equal(reviewCalls, 0);
+  });
+
+  it("rejects client-provided validation profile fields through strict route schemas", async () => {
+    const app = createTestApp();
+    assert.equal((await createProject(app)).status, 201);
+    assert.equal((await createTask(app)).status, 201);
+    assert.equal((await decidePlan(app, { decision: "APPROVE" })).status, 200);
+    assert.equal((await executeTask(app)).status, 200);
+
+    for (const field of [
+      "validationProfileId",
+      "validationProfileVersion",
+      "validationProfileFingerprint",
+    ]) {
+      const response = await validateTask(app, "proj_000001", "task_000001", {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: "client" }),
+      });
+
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).error.code, "VALIDATION_FAILED");
+    }
   });
 });
 

@@ -217,6 +217,7 @@ export interface TaskValidation {
   startedAt: string;
   completedAt: string;
   durationMs?: number;
+  validationProfileFingerprint?: string;
   checks: readonly ValidationCheck[];
   summary: string;
   validationSelection?: ValidationSelectionEvidence;

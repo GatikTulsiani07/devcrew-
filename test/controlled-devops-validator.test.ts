@@ -8,6 +8,7 @@ import type { PreparedRepository } from "../src/repositories/prepared-repositori
 import { createControlledDevOpsValidator } from "../src/tasks/controlled-devops-validator.js";
 import type { TaskSnapshot } from "../src/tasks/types.js";
 import type { ControlledCommandRunner } from "../src/validation/types.js";
+import { validationProfileFingerprint } from "../src/validation/validation-profile-binding.js";
 import { validationProfiles } from "../src/validation/validation-profiles.js";
 
 const task: TaskSnapshot = {
@@ -200,6 +201,10 @@ describe("controlled DevOps validator", () => {
       attempt: 1,
       startedAt: "2026-08-03T04:00:00.000Z",
       completedAt: "2026-08-03T04:00:00.000Z",
+      validationProfileFingerprint: validationProfileFingerprint({
+        profile: validationProfiles[0],
+        capabilities: repository.capabilities,
+      }),
       checks: [
         { name: "typecheck", status: "PASSED", summary: "Type checking completed successfully." },
         { name: "tests", status: "PASSED", summary: "Automated tests completed successfully." },
