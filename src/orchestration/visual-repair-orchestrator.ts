@@ -285,7 +285,9 @@ export function createVisualRepairOrchestrator({
           summary: `Visual repair attempt ${attemptNumber} completed.`,
           workflowCorrelationId: command?.workflowCorrelationId,
         });
-        await appendValidationEvidenceEvents(current, validation);
+        await appendValidationEvidenceEvents(current, current.validation, {
+          screenshotCaptured: persistence.screenshotEvidenceAttached,
+        });
 
         if (validation.visualReview?.status === "PASSED") {
           return copyTask(current);
@@ -316,8 +318,11 @@ export function createVisualRepairOrchestrator({
 
   async function appendValidationEvidenceEvents(
     task: TaskSnapshot,
-    validation: TaskValidation,
+    validation: TaskValidation | undefined,
+    options: { screenshotCaptured?: boolean } = {},
   ): Promise<void> {
+    if (validation === undefined) return;
+
     await activityService.append({
       projectId: task.projectId,
       taskId: task.id,
@@ -338,7 +343,10 @@ export function createVisualRepairOrchestrator({
       });
     }
 
-    if (validation.browserScreenshot !== undefined) {
+    if (
+      validation.browserScreenshot !== undefined &&
+      options.screenshotCaptured !== false
+    ) {
       await activityService.append({
         projectId: task.projectId,
         taskId: task.id,

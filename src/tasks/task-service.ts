@@ -1206,8 +1206,9 @@ export function createTaskService({
     await appendValidationActivity(
       task.projectId,
       task.id,
-      correlateValidationEvidence(integrityBoundValidation, command),
+      validatedTask.validation,
       command,
+      { screenshotCaptured: persistence.screenshotEvidenceAttached },
     );
 
     const repairedTask = await createVisualRepairOrchestrator({
@@ -1754,6 +1755,7 @@ export function createTaskService({
     taskId: string,
     validation: TaskSnapshot["validation"],
     command?: WorkflowCommandContext,
+    options: { screenshotCaptured?: boolean } = {},
   ): Promise<void> {
     if (validation === undefined) return;
 
@@ -1777,7 +1779,10 @@ export function createTaskService({
       });
     }
 
-    if (validation.browserScreenshot !== undefined) {
+    if (
+      validation.browserScreenshot !== undefined &&
+      options.screenshotCaptured !== false
+    ) {
       await activityService.append({
         projectId,
         taskId,

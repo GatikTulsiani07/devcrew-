@@ -16,6 +16,7 @@ describe("validation evidence persistence", () => {
     });
 
     assert.equal(result.persisted, true);
+    assert.equal(result.screenshotEvidenceAttached, true);
     assert.equal(result.task.status, "VALIDATION_COMPLETED");
     assert.deepEqual(result.task.validation, validation);
     assert.equal(result.task.updatedAt, "2026-08-03T03:00:00.000Z");
@@ -44,6 +45,7 @@ describe("validation evidence persistence", () => {
     });
 
     assert.equal(result.persisted, false);
+    assert.equal(result.screenshotEvidenceAttached, false);
     assert.deepEqual(result.task, original);
     assert.equal(result.task.status, "REVIEW_COMPLETED");
     assert.equal(result.task.validation?.status, originalValidation.status);
@@ -82,8 +84,159 @@ describe("validation evidence persistence", () => {
     });
 
     assert.equal(result.persisted, true);
+    assert.equal(result.screenshotEvidenceAttached, true);
     assert.deepEqual(result.task.validation, replacement);
     assert.equal(result.task.updatedAt, "2026-08-03T04:00:00.000Z");
+  });
+
+  it("does not replace screenshot evidence for a duplicate screenshot id in the same validation command", () => {
+    const originalValidation = validationEvidence("val_original", "workflow_shared");
+    const original = taskSnapshot({ validation: originalValidation });
+    const replacement = validationEvidence("val_replacement", "workflow_shared");
+    replacement.browserScreenshot = {
+      ...replacement.browserScreenshot!,
+      id: originalValidation.browserScreenshot!.id,
+      workflowCorrelationId: "workflow_shared",
+      url: "http://127.0.0.1:3000/replacement",
+      capturedAt: "2026-08-03T03:00:40.000Z",
+      durationMs: 999,
+    };
+    replacement.visualReview = {
+      ...replacement.visualReview!,
+      workflowCorrelationId: "workflow_shared",
+      screenshotId: originalValidation.browserScreenshot!.id,
+      summary: "Replacement visual review must not replace original linkage.",
+      reviewedAt: "2026-08-03T03:00:50.000Z",
+      durationMs: 888,
+    };
+
+    const result = prepareValidationEvidencePersistence({
+      currentTask: original,
+      validation: replacement,
+      updatedAt: "2026-08-03T04:00:00.000Z",
+      allowSameWorkflowCorrelationReplacement: true,
+    });
+
+    assert.equal(result.persisted, true);
+    assert.equal(result.screenshotEvidenceAttached, false);
+    assert.deepEqual(
+      result.task.validation?.browserScreenshot,
+      originalValidation.browserScreenshot,
+    );
+    assert.deepEqual(
+      result.task.validation?.visualReview,
+      originalValidation.visualReview,
+    );
+    assert.equal(result.task.validation?.id, replacement.id);
+  });
+
+  it("allows different screenshot ids under the same validation command", () => {
+    const original = taskSnapshot({
+      validation: validationEvidence("val_original", "workflow_shared"),
+    });
+    const replacement = validationEvidence("val_repair", "workflow_shared");
+
+    const result = prepareValidationEvidencePersistence({
+      currentTask: original,
+      validation: replacement,
+      updatedAt: "2026-08-03T04:00:00.000Z",
+      allowSameWorkflowCorrelationReplacement: true,
+    });
+
+    assert.equal(result.persisted, true);
+    assert.equal(result.screenshotEvidenceAttached, true);
+    assert.equal(result.task.validation?.browserScreenshot?.id, "shot_replacement");
+    assert.equal(result.task.validation?.visualReview?.screenshotId, "shot_replacement");
+  });
+
+  it("allows the same screenshot id under a different validation command", () => {
+    const original = taskSnapshot({
+      validation: validationEvidence("val_original", "workflow_original"),
+    });
+    const replacement = validationEvidence("val_replacement", "workflow_next");
+    replacement.browserScreenshot = {
+      ...replacement.browserScreenshot!,
+      id: original.validation!.browserScreenshot!.id,
+      workflowCorrelationId: "workflow_next",
+    };
+    replacement.visualReview = {
+      ...replacement.visualReview!,
+      workflowCorrelationId: "workflow_next",
+      screenshotId: original.validation!.browserScreenshot!.id,
+    };
+
+    const result = prepareValidationEvidencePersistence({
+      currentTask: original,
+      validation: replacement,
+      updatedAt: "2026-08-03T04:00:00.000Z",
+      allowSameWorkflowCorrelationReplacement: true,
+    });
+
+    assert.equal(result.persisted, true);
+    assert.equal(result.screenshotEvidenceAttached, true);
+    assert.deepEqual(result.task.validation?.browserScreenshot, replacement.browserScreenshot);
+    assert.deepEqual(result.task.validation?.visualReview, replacement.visualReview);
+  });
+
+  it("does not deduplicate different screenshot ids with identical metadata", () => {
+    const original = taskSnapshot({
+      validation: validationEvidence("val_original", "workflow_shared"),
+    });
+    const replacement = validationEvidence("val_replacement", "workflow_shared");
+    replacement.browserScreenshot = {
+      ...replacement.browserScreenshot!,
+      id: "shot_distinct",
+      url: original.validation!.browserScreenshot!.url,
+      viewport: { ...original.validation!.browserScreenshot!.viewport },
+      capturedAt: original.validation!.browserScreenshot!.capturedAt,
+      durationMs: original.validation!.browserScreenshot!.durationMs,
+    };
+    replacement.visualReview = {
+      ...replacement.visualReview!,
+      screenshotId: "shot_distinct",
+    };
+
+    const result = prepareValidationEvidencePersistence({
+      currentTask: original,
+      validation: replacement,
+      updatedAt: "2026-08-03T04:00:00.000Z",
+      allowSameWorkflowCorrelationReplacement: true,
+    });
+
+    assert.equal(result.persisted, true);
+    assert.equal(result.screenshotEvidenceAttached, true);
+    assert.equal(result.task.validation?.browserScreenshot?.id, "shot_distinct");
+  });
+
+  it("scopes duplicate screenshot detection to the current task", () => {
+    const original = taskSnapshot({
+      id: "task_000001",
+      validation: validationEvidence("val_original", "workflow_shared"),
+    });
+    const otherTask = taskSnapshot({
+      id: "task_000002",
+      validation: undefined,
+    });
+    const otherTaskValidation = validationEvidence("val_replacement", "workflow_shared");
+    otherTaskValidation.browserScreenshot = {
+      ...otherTaskValidation.browserScreenshot!,
+      id: original.validation!.browserScreenshot!.id,
+    };
+    otherTaskValidation.visualReview = {
+      ...otherTaskValidation.visualReview!,
+      screenshotId: original.validation!.browserScreenshot!.id,
+    };
+
+    const result = prepareValidationEvidencePersistence({
+      currentTask: otherTask,
+      validation: otherTaskValidation,
+      updatedAt: "2026-08-03T04:00:00.000Z",
+      allowSameWorkflowCorrelationReplacement: true,
+    });
+
+    assert.equal(result.persisted, true);
+    assert.equal(result.screenshotEvidenceAttached, true);
+    assert.equal(result.task.id, "task_000002");
   });
 
   it("allows explicit internal refreshes under the same workflow command", () => {
@@ -100,6 +253,7 @@ describe("validation evidence persistence", () => {
     });
 
     assert.equal(result.persisted, true);
+    assert.equal(result.screenshotEvidenceAttached, true);
     assert.deepEqual(result.task.validation, replacement);
     assert.equal(result.task.updatedAt, "2026-08-03T04:00:00.000Z");
   });
