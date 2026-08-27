@@ -269,6 +269,47 @@ describe("in-memory activity store", () => {
     });
   });
 
+  it("rejects invalid numeric sequences without changing activity state", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    await store.append(first);
+    const before = await store.list("proj_000001");
+
+    for (const sequence of [-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 1.5]) {
+      await assert.rejects(
+        () => store.append(activityEvent({ id: `evt_${sequence}`, sequence })),
+        {
+          name: "ApplicationError",
+          code: "INVALID_ACTIVITY_SEQUENCE",
+          status: 500,
+          message: "Invalid Activity sequence.",
+        },
+      );
+      assert.deepEqual(await store.list("proj_000001"), before);
+    }
+  });
+
+  it("rejects stale and skipped sequences without consuming the next sequence", async () => {
+    const store = new InMemoryActivityStore();
+    await store.append(activityEvent());
+    const before = await store.list("proj_000001");
+
+    for (const sequence of [1, 3]) {
+      await assert.rejects(
+        () => store.append(activityEvent({ id: `evt_${sequence}`, sequence })),
+        { code: "INVALID_ACTIVITY_SEQUENCE" },
+      );
+      assert.deepEqual(await store.list("proj_000001"), before);
+    }
+
+    const next = activityEvent({ id: "evt_000002", sequence: 2 });
+    assert.deepEqual(await store.append(next), next);
+    assert.deepEqual((await store.list("proj_000001")).events, [
+      activityEvent(),
+      next,
+    ]);
+  });
+
   it("rejects duplicate authoritative event IDs without changing original evidence", async () => {
     const store = new InMemoryActivityStore();
     const original = activityEvent();
