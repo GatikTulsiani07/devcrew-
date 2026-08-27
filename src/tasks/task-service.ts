@@ -66,6 +66,7 @@ import {
   type WorkflowResumeStage,
 } from "./workflow-resume.js";
 import { deriveTaskOutcome } from "./task-outcome.js";
+import { prepareValidationEvidencePersistence } from "./validation-evidence-persistence.js";
 import type {
   CancellationStage,
   CreateTaskInput,
@@ -1190,15 +1191,17 @@ export function createTaskService({
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const timestamp = now().toISOString();
-    const updatedTask: TaskSnapshot = {
-      ...copyTask(task),
-      status: "VALIDATION_COMPLETED",
+    const persistence = prepareValidationEvidencePersistence({
+      currentTask: await latestTaskOr(task),
       validation: correlateValidationEvidence(integrityBoundValidation, command),
-      workflowFailure: undefined,
       updatedAt: timestamp,
-    };
+    });
 
-    const validatedTask = copyTask(await store.update(updatedTask));
+    if (!persistence.persisted) {
+      return persistence.task;
+    }
+
+    const validatedTask = copyTask(await store.update(persistence.task));
     await appendValidationActivity(
       task.projectId,
       task.id,
@@ -1481,14 +1484,14 @@ export function createTaskService({
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const timestamp = now().toISOString();
-    return copyTask(
-      await store.update({
-        ...copyTask(task),
-        validation: correlateValidationEvidence(validation, command),
-        workflowFailure: undefined,
-        updatedAt: timestamp,
-      }),
-    );
+    const persistence = prepareValidationEvidencePersistence({
+      currentTask: task,
+      validation: correlateValidationEvidence(validation, command),
+      updatedAt: timestamp,
+      allowSameWorkflowCorrelationReplacement: true,
+    });
+
+    return copyTask(await store.update(persistence.task));
   }
 
   async function verifyPublishedTaskForResume(
@@ -1528,14 +1531,14 @@ export function createTaskService({
     budget.throwIfExpired(currentWorkflowStage(active, "CHECKPOINT"));
     active.throwIfCancelled();
     const timestamp = now().toISOString();
-    return copyTask(
-      await store.update({
-        ...copyTask(task),
-        validation: correlateValidationEvidence(validation, command),
-        workflowFailure: undefined,
-        updatedAt: timestamp,
-      }),
-    );
+    const persistence = prepareValidationEvidencePersistence({
+      currentTask: task,
+      validation: correlateValidationEvidence(validation, command),
+      updatedAt: timestamp,
+      allowSameWorkflowCorrelationReplacement: true,
+    });
+
+    return copyTask(await store.update(persistence.task));
   }
 
   async function assertNoRepositoryDrift(

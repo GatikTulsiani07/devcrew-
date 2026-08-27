@@ -15,6 +15,7 @@ import {
   createNoopValidationIntegrityService,
   type ValidationIntegrityService,
 } from "../validation/validation-integrity.js";
+import { prepareValidationEvidencePersistence } from "../tasks/validation-evidence-persistence.js";
 import type { WorkflowCommandContext } from "../tasks/workflow-correlation.js";
 import type {
   CancellationStage,
@@ -257,20 +258,24 @@ export function createVisualRepairOrchestrator({
               ? "EXHAUSTED"
               : undefined;
 
-        current = await store.update({
-          ...copyTask(current),
-          status: "VALIDATION_COMPLETED",
-          execution,
-          validation,
-          review: undefined,
-          pullRequest: undefined,
-          visualRepair: {
-            maxAttempts: MAX_VISUAL_REPAIR_ATTEMPTS,
-            ...(outcome === undefined ? {} : { outcome }),
-            attempts,
+        const completedAt = now().toISOString();
+        const persistence = prepareValidationEvidencePersistence({
+          currentTask: {
+            ...copyTask(current),
+            execution,
+            review: undefined,
+            pullRequest: undefined,
+            visualRepair: {
+              maxAttempts: MAX_VISUAL_REPAIR_ATTEMPTS,
+              ...(outcome === undefined ? {} : { outcome }),
+              attempts,
+            },
           },
-          updatedAt: now().toISOString(),
+          validation,
+          updatedAt: completedAt,
+          allowSameWorkflowCorrelationReplacement: true,
         });
+        current = await store.update(persistence.task);
 
         await activityService.append({
           projectId: current.projectId,
