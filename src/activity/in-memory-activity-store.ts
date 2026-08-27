@@ -37,6 +37,20 @@ export class InMemoryActivityStore implements ActivityStore {
       );
     }
 
+    const expectedSequence = state.lastSequence + 1;
+    if (
+      !Number.isFinite(event.sequence) ||
+      !Number.isInteger(event.sequence) ||
+      event.sequence < 0 ||
+      event.sequence !== expectedSequence
+    ) {
+      throw new ApplicationError(
+        "INVALID_ACTIVITY_SEQUENCE",
+        500,
+        "Invalid Activity sequence.",
+      );
+    }
+
     state.lastSequence = Math.max(state.lastSequence, event.sequence);
     state.events.push(copyEvent(event));
 
