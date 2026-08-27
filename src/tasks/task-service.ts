@@ -66,6 +66,7 @@ import {
   type WorkflowResumeStage,
 } from "./workflow-resume.js";
 import { deriveTaskOutcome } from "./task-outcome.js";
+import { prepareReviewEvidencePersistence } from "./review-evidence-persistence.js";
 import { prepareValidationEvidencePersistence } from "./validation-evidence-persistence.js";
 import type {
   CancellationStage,
@@ -1279,15 +1280,17 @@ export function createTaskService({
     throwIfSignalCancelled(signal);
     active?.throwIfCancelled();
     const timestamp = now().toISOString();
-    const updatedTask: TaskSnapshot = {
-      ...copyTask(task),
-      status: "REVIEW_COMPLETED",
+    const persistence = prepareReviewEvidencePersistence({
+      currentTask: await latestTaskOr(task),
       review: correlatedReview,
-      workflowFailure: undefined,
       updatedAt: timestamp,
-    };
+    });
 
-    const reviewedTask = copyTask(await store.update(updatedTask));
+    if (!persistence.persisted) {
+      return persistence.task;
+    }
+
+    const reviewedTask = copyTask(await store.update(persistence.task));
     await activityService.append({
       projectId: task.projectId,
       taskId: task.id,
