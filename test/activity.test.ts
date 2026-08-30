@@ -6,7 +6,10 @@ import {
   createActivityService,
   type ActivityService,
 } from "../src/activity/activity-service.js";
-import { InMemoryActivityStore } from "../src/activity/in-memory-activity-store.js";
+import {
+  InMemoryActivityStore,
+  MAX_ACTIVITY_SUMMARY_LENGTH,
+} from "../src/activity/in-memory-activity-store.js";
 import type { ActivityEvent } from "../src/activity/types.js";
 import { createApp } from "../src/app.js";
 import type { DatabaseHealth } from "../src/db/health.js";
@@ -368,6 +371,151 @@ describe("in-memory activity store", () => {
     });
   });
 
+  it("accepts valid Activity summaries up to the exact limit", async () => {
+    const store = new InMemoryActivityStore();
+    const normal = activityEvent({
+      id: "evt_000001",
+      sequence: 1,
+      summary: "Validation completed.",
+    });
+    const short = activityEvent({
+      id: "evt_000002",
+      sequence: 2,
+      summary: "Ok.",
+    });
+    const exactLimit = activityEvent({
+      id: "evt_000003",
+      sequence: 3,
+      summary: "X".repeat(MAX_ACTIVITY_SUMMARY_LENGTH),
+    });
+
+    assert.deepEqual(await store.append(normal), normal);
+    assert.deepEqual(await store.append(short), short);
+    assert.deepEqual(await store.append(exactLimit), exactLimit);
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [normal, short, exactLimit],
+      lastSequence: 3,
+    });
+  });
+
+  it("preserves surrounding whitespace on valid Activity summaries", async () => {
+    const store = new InMemoryActivityStore();
+    const event = activityEvent({
+      summary: "  Validation completed.  ",
+    });
+
+    assert.deepEqual(await store.append(event), event);
+    assert.equal(
+      (await store.list("proj_000001")).events[0]?.summary,
+      event.summary,
+    );
+  });
+
+  it("rejects blank and oversized Activity summaries without changing activity state", async () => {
+    const store = new InMemoryActivityStore({ maxEventsPerProject: 2 });
+    const first = activityEvent({
+      id: "evt_000001",
+      sequence: 1,
+      summary: "First event",
+    });
+    const second = activityEvent({
+      id: "evt_000002",
+      sequence: 2,
+      summary: "Second event",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    await store.append(first);
+    await store.append(second);
+    const before = await store.list("proj_000001");
+
+    const invalidSummaries = [
+      "",
+      "   ",
+      "\n\t",
+      "X".repeat(MAX_ACTIVITY_SUMMARY_LENGTH + 1),
+      "X".repeat(MAX_ACTIVITY_SUMMARY_LENGTH * 3),
+    ];
+
+    for (const [index, summary] of invalidSummaries.entries()) {
+      await assert.rejects(
+        () =>
+          store.append(
+            activityEvent({
+              id: `evt_invalid_summary_${index}`,
+              sequence: 3,
+              summary,
+              createdAt: "2026-08-03T12:03:00.000Z",
+            }),
+          ),
+        {
+          name: "ApplicationError",
+          code: "INVALID_ACTIVITY_SUMMARY",
+          status: 500,
+          message: "Invalid Activity summary.",
+        },
+      );
+      assert.deepEqual(await store.list("proj_000001"), before);
+    }
+  });
+
+  it("rejects invalid Activity summaries without consuming sequence state", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    await store.append(first);
+    const before = await store.list("proj_000001");
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_invalid_summary",
+            sequence: 2,
+            summary: "   ",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      { code: "INVALID_ACTIVITY_SUMMARY" },
+    );
+    assert.deepEqual(await store.list("proj_000001"), before);
+
+    const next = activityEvent({
+      id: "evt_000002",
+      sequence: 2,
+      summary: "Validation completed.",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    assert.deepEqual(await store.append(next), next);
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [first, next],
+      lastSequence: 2,
+    });
+  });
+
+  it("does not notify Activity subscribers when summary validation fails", async () => {
+    const store = new InMemoryActivityStore();
+    const received: ActivityEvent[] = [];
+    store.subscribe("proj_000001", (event) => {
+      received.push(event);
+    });
+    const first = activityEvent();
+    await store.append(first);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_invalid_summary",
+            sequence: 2,
+            summary: "",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      { code: "INVALID_ACTIVITY_SUMMARY" },
+    );
+
+    assert.deepEqual(received, [first]);
+  });
+
   it("rejects invalid numeric sequences without changing activity state", async () => {
     const store = new InMemoryActivityStore();
     const first = activityEvent();
@@ -493,6 +641,90 @@ describe("in-memory activity store", () => {
     });
   });
 
+  it("preserves duplicate event ID behavior when summaries are invalid", async () => {
+    const store = new InMemoryActivityStore();
+    const original = activityEvent();
+    await store.append(original);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: original.id,
+            sequence: 2,
+            summary: "",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      {
+        name: "ApplicationError",
+        code: "ACTIVITY_EVENT_ALREADY_EXISTS",
+        status: 409,
+        message: "Activity event already exists.",
+      },
+    );
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [original],
+      lastSequence: 1,
+    });
+  });
+
+  it("preserves sequence validation behavior when summaries are invalid", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    await store.append(first);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_invalid_sequence_and_summary",
+            sequence: 3,
+            summary: "",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      {
+        name: "ApplicationError",
+        code: "INVALID_ACTIVITY_SEQUENCE",
+        status: 500,
+        message: "Invalid Activity sequence.",
+      },
+    );
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [first],
+      lastSequence: 1,
+    });
+  });
+
+  it("preserves timestamp validation behavior when summaries are invalid", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    await store.append(first);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_invalid_timestamp_and_summary",
+            sequence: 2,
+            summary: "",
+            createdAt: "not-a-date",
+          }),
+        ),
+      {
+        name: "ApplicationError",
+        code: "INVALID_ACTIVITY_TIMESTAMP",
+        status: 500,
+        message: "Invalid Activity timestamp.",
+      },
+    );
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [first],
+      lastSequence: 1,
+    });
+  });
+
   it("keeps invalid timestamp rejection project-local", async () => {
     const store = new InMemoryActivityStore();
     const projectAEvent = activityEvent({ projectId: "proj_a" });
@@ -532,6 +764,58 @@ describe("in-memory activity store", () => {
     assert.deepEqual(await store.list("proj_b"), {
       events: [projectBEvent, projectBNext],
       lastSequence: 2,
+    });
+  });
+
+  it("keeps invalid summary rejection project-local", async () => {
+    const store = new InMemoryActivityStore({ maxEventsPerProject: 2 });
+    const projectAEvent = activityEvent({ projectId: "proj_a" });
+    const projectBFirst = activityEvent({
+      id: "evt_b_000001",
+      projectId: "proj_b",
+      summary: "Project B first event",
+    });
+    const projectBSecond = activityEvent({
+      id: "evt_b_000002",
+      projectId: "proj_b",
+      sequence: 2,
+      summary: "Project B second event",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    await store.append(projectAEvent);
+    await store.append(projectBFirst);
+    await store.append(projectBSecond);
+    const projectABefore = await store.list("proj_a");
+    const projectBBefore = await store.list("proj_b");
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_a_invalid_summary",
+            projectId: "proj_a",
+            sequence: 2,
+            summary: "",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      { code: "INVALID_ACTIVITY_SUMMARY" },
+    );
+
+    assert.deepEqual(await store.list("proj_a"), projectABefore);
+    assert.deepEqual(await store.list("proj_b"), projectBBefore);
+
+    const projectBNext = activityEvent({
+      id: "evt_b_000003",
+      projectId: "proj_b",
+      sequence: 3,
+      summary: "Project B next event",
+      createdAt: "2026-08-03T12:03:00.000Z",
+    });
+    assert.deepEqual(await store.append(projectBNext), projectBNext);
+    assert.deepEqual(await store.list("proj_b"), {
+      events: [projectBSecond, projectBNext],
+      lastSequence: 3,
     });
   });
 
