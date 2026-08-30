@@ -10,7 +10,10 @@ import {
   InMemoryActivityStore,
   MAX_ACTIVITY_SUMMARY_LENGTH,
 } from "../src/activity/in-memory-activity-store.js";
-import type { ActivityEvent } from "../src/activity/types.js";
+import {
+  ACTIVITY_EVENT_TYPES,
+  type ActivityEvent,
+} from "../src/activity/types.js";
 import { createApp } from "../src/app.js";
 import type { DatabaseHealth } from "../src/db/health.js";
 import { InMemoryProjectStore } from "../src/projects/in-memory-project-store.js";
@@ -491,6 +494,138 @@ describe("in-memory activity store", () => {
     });
   });
 
+  it("accepts supported Activity event types", async () => {
+    const store = new InMemoryActivityStore();
+
+    for (const [index, type] of ACTIVITY_EVENT_TYPES.entries()) {
+      const event = activityEvent({
+        id: `evt_${String(index + 1).padStart(6, "0")}`,
+        sequence: index + 1,
+        type,
+        summary: `Accepted ${type}`,
+        createdAt: `2026-08-03T12:${String(index + 1).padStart(2, "0")}:00.000Z`,
+      });
+
+      assert.deepEqual(await store.append(event), event);
+    }
+
+    const snapshot = await store.list("proj_000001");
+    assert.deepEqual(
+      snapshot.events.map((event) => event.type),
+      [...ACTIVITY_EVENT_TYPES],
+    );
+    assert.equal(snapshot.lastSequence, ACTIVITY_EVENT_TYPES.length);
+  });
+
+  it("rejects malformed Activity event types without changing activity state", async () => {
+    const store = new InMemoryActivityStore({ maxEventsPerProject: 2 });
+    const first = activityEvent({
+      id: "evt_000001",
+      sequence: 1,
+      summary: "First event",
+    });
+    const second = activityEvent({
+      id: "evt_000002",
+      sequence: 2,
+      summary: "Second event",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    await store.append(first);
+    await store.append(second);
+    const before = await store.list("proj_000001");
+
+    const invalidTypes = [
+      "",
+      "   ",
+      "UNKNOWN_EVENT",
+      "TASK_CREATE",
+      "task_created",
+    ];
+
+    for (const [index, type] of invalidTypes.entries()) {
+      await assert.rejects(
+        () =>
+          store.append(
+            activityEvent({
+              id: `evt_invalid_type_${index}`,
+              sequence: 3,
+              type: type as ActivityEvent["type"],
+              summary: "Invalid runtime event type.",
+              createdAt: "2026-08-03T12:03:00.000Z",
+            }),
+          ),
+        {
+          name: "ApplicationError",
+          code: "INVALID_ACTIVITY_EVENT_TYPE",
+          status: 500,
+          message: "Invalid Activity event type.",
+        },
+      );
+      assert.deepEqual(await store.list("proj_000001"), before);
+    }
+  });
+
+  it("rejects invalid Activity event types without consuming sequence state", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    await store.append(first);
+    const before = await store.list("proj_000001");
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_invalid_type",
+            sequence: 2,
+            type: "UNKNOWN_EVENT" as ActivityEvent["type"],
+            summary: "Invalid runtime event type.",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      { code: "INVALID_ACTIVITY_EVENT_TYPE" },
+    );
+    assert.deepEqual(await store.list("proj_000001"), before);
+
+    const next = activityEvent({
+      id: "evt_000002",
+      sequence: 2,
+      type: "VALIDATION_COMPLETED",
+      summary: "Validation completed.",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    assert.deepEqual(await store.append(next), next);
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [first, next],
+      lastSequence: 2,
+    });
+  });
+
+  it("does not notify Activity subscribers when event type validation fails", async () => {
+    const store = new InMemoryActivityStore();
+    const received: ActivityEvent[] = [];
+    store.subscribe("proj_000001", (event) => {
+      received.push(event);
+    });
+    const first = activityEvent();
+    await store.append(first);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_invalid_type",
+            sequence: 2,
+            type: "UNKNOWN_EVENT" as ActivityEvent["type"],
+            summary: "Invalid runtime event type.",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      { code: "INVALID_ACTIVITY_EVENT_TYPE" },
+    );
+
+    assert.deepEqual(received, [first]);
+  });
+
   it("does not notify Activity subscribers when summary validation fails", async () => {
     const store = new InMemoryActivityStore();
     const received: ActivityEvent[] = [];
@@ -725,6 +860,122 @@ describe("in-memory activity store", () => {
     });
   });
 
+  it("preserves duplicate event ID behavior when event types are invalid", async () => {
+    const store = new InMemoryActivityStore();
+    const original = activityEvent();
+    await store.append(original);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: original.id,
+            sequence: 2,
+            type: "UNKNOWN_EVENT" as ActivityEvent["type"],
+            summary: "Invalid runtime event type.",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      {
+        name: "ApplicationError",
+        code: "ACTIVITY_EVENT_ALREADY_EXISTS",
+        status: 409,
+        message: "Activity event already exists.",
+      },
+    );
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [original],
+      lastSequence: 1,
+    });
+  });
+
+  it("preserves sequence validation behavior when event types are invalid", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    await store.append(first);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_invalid_sequence_and_type",
+            sequence: 3,
+            type: "UNKNOWN_EVENT" as ActivityEvent["type"],
+            summary: "Invalid runtime event type.",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      {
+        name: "ApplicationError",
+        code: "INVALID_ACTIVITY_SEQUENCE",
+        status: 500,
+        message: "Invalid Activity sequence.",
+      },
+    );
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [first],
+      lastSequence: 1,
+    });
+  });
+
+  it("preserves timestamp validation behavior when event types are invalid", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    await store.append(first);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_invalid_timestamp_and_type",
+            sequence: 2,
+            type: "UNKNOWN_EVENT" as ActivityEvent["type"],
+            summary: "Invalid runtime event type.",
+            createdAt: "not-a-date",
+          }),
+        ),
+      {
+        name: "ApplicationError",
+        code: "INVALID_ACTIVITY_TIMESTAMP",
+        status: 500,
+        message: "Invalid Activity timestamp.",
+      },
+    );
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [first],
+      lastSequence: 1,
+    });
+  });
+
+  it("preserves summary validation behavior when event types are invalid", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    await store.append(first);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_invalid_summary_and_type",
+            sequence: 2,
+            type: "UNKNOWN_EVENT" as ActivityEvent["type"],
+            summary: "",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      {
+        name: "ApplicationError",
+        code: "INVALID_ACTIVITY_SUMMARY",
+        status: 500,
+        message: "Invalid Activity summary.",
+      },
+    );
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [first],
+      lastSequence: 1,
+    });
+  });
+
   it("keeps invalid timestamp rejection project-local", async () => {
     const store = new InMemoryActivityStore();
     const projectAEvent = activityEvent({ projectId: "proj_a" });
@@ -800,6 +1051,59 @@ describe("in-memory activity store", () => {
           }),
         ),
       { code: "INVALID_ACTIVITY_SUMMARY" },
+    );
+
+    assert.deepEqual(await store.list("proj_a"), projectABefore);
+    assert.deepEqual(await store.list("proj_b"), projectBBefore);
+
+    const projectBNext = activityEvent({
+      id: "evt_b_000003",
+      projectId: "proj_b",
+      sequence: 3,
+      summary: "Project B next event",
+      createdAt: "2026-08-03T12:03:00.000Z",
+    });
+    assert.deepEqual(await store.append(projectBNext), projectBNext);
+    assert.deepEqual(await store.list("proj_b"), {
+      events: [projectBSecond, projectBNext],
+      lastSequence: 3,
+    });
+  });
+
+  it("keeps invalid event type rejection project-local", async () => {
+    const store = new InMemoryActivityStore({ maxEventsPerProject: 2 });
+    const projectAEvent = activityEvent({ projectId: "proj_a" });
+    const projectBFirst = activityEvent({
+      id: "evt_b_000001",
+      projectId: "proj_b",
+      summary: "Project B first event",
+    });
+    const projectBSecond = activityEvent({
+      id: "evt_b_000002",
+      projectId: "proj_b",
+      sequence: 2,
+      summary: "Project B second event",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    await store.append(projectAEvent);
+    await store.append(projectBFirst);
+    await store.append(projectBSecond);
+    const projectABefore = await store.list("proj_a");
+    const projectBBefore = await store.list("proj_b");
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_a_invalid_type",
+            projectId: "proj_a",
+            sequence: 2,
+            type: "UNKNOWN_EVENT" as ActivityEvent["type"],
+            summary: "Invalid runtime event type.",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      { code: "INVALID_ACTIVITY_EVENT_TYPE" },
     );
 
     assert.deepEqual(await store.list("proj_a"), projectABefore);

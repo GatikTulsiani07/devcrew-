@@ -1,14 +1,20 @@
 import { ApplicationError } from "../errors.js";
-import type {
-  ActivityEvent,
-  ActivitySequence,
-  ActivitySnapshot,
-  ActivityStore,
-  ActivitySubscriber,
-  ActivitySubscription,
+import {
+  ACTIVITY_EVENT_TYPES,
+  type ActivityEventType,
+  type ActivityEvent,
+  type ActivitySequence,
+  type ActivitySnapshot,
+  type ActivityStore,
+  type ActivitySubscriber,
+  type ActivitySubscription,
 } from "./types.js";
 
 export const MAX_ACTIVITY_SUMMARY_LENGTH = 500;
+
+const activityEventTypeSet: ReadonlySet<ActivityEventType> = new Set(
+  ACTIVITY_EVENT_TYPES,
+);
 
 export interface InMemoryActivityStoreOptions {
   maxEventsPerProject?: number;
@@ -66,6 +72,14 @@ export class InMemoryActivityStore implements ActivityStore {
         "INVALID_ACTIVITY_SUMMARY",
         500,
         "Invalid Activity summary.",
+      );
+    }
+
+    if (!isValidActivityEventType(event.type)) {
+      throw new ApplicationError(
+        "INVALID_ACTIVITY_EVENT_TYPE",
+        500,
+        "Invalid Activity event type.",
       );
     }
 
@@ -144,6 +158,13 @@ function isCanonicalActivityTimestamp(value: string): boolean {
 function isValidActivitySummary(value: string): boolean {
   return (
     value.trim().length > 0 && value.length <= MAX_ACTIVITY_SUMMARY_LENGTH
+  );
+}
+
+function isValidActivityEventType(value: unknown): value is ActivityEventType {
+  return (
+    typeof value === "string" &&
+    activityEventTypeSet.has(value as ActivityEventType)
   );
 }
 
