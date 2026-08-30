@@ -8,6 +8,7 @@ import {
 } from "../src/activity/activity-service.js";
 import {
   InMemoryActivityStore,
+  MAX_ACTIVITY_EVENT_ID_LENGTH,
   MAX_ACTIVITY_SUMMARY_LENGTH,
 } from "../src/activity/in-memory-activity-store.js";
 import {
@@ -292,6 +293,156 @@ describe("in-memory activity store", () => {
       events: [first, second],
       lastSequence: 2,
     });
+  });
+
+  it("accepts valid Activity event IDs up to the exact limit", async () => {
+    const store = new InMemoryActivityStore();
+    const normal = activityEvent({
+      id: "evt_123e4567-e89b-42d3-a456-426614174000",
+      sequence: 1,
+    });
+    const opaque = activityEvent({
+      id: "opaque.valid-id:2",
+      sequence: 2,
+      summary: "Opaque valid event ID.",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    const exactLimit = activityEvent({
+      id: "X".repeat(MAX_ACTIVITY_EVENT_ID_LENGTH),
+      sequence: 3,
+      summary: "Exact limit event ID.",
+      createdAt: "2026-08-03T12:03:00.000Z",
+    });
+    const printablePunctuation = activityEvent({
+      id: "evt_.:-printable-id",
+      sequence: 4,
+      summary: "Printable punctuation event ID.",
+      createdAt: "2026-08-03T12:04:00.000Z",
+    });
+
+    assert.deepEqual(await store.append(normal), normal);
+    assert.deepEqual(await store.append(opaque), opaque);
+    assert.deepEqual(await store.append(exactLimit), exactLimit);
+    assert.deepEqual(
+      await store.append(printablePunctuation),
+      printablePunctuation,
+    );
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [normal, opaque, exactLimit, printablePunctuation],
+      lastSequence: 4,
+    });
+  });
+
+  it("rejects malformed Activity event IDs without changing activity state", async () => {
+    const store = new InMemoryActivityStore({ maxEventsPerProject: 2 });
+    const first = activityEvent({
+      id: "evt_000001",
+      sequence: 1,
+      summary: "First event",
+    });
+    const second = activityEvent({
+      id: "evt_000002",
+      sequence: 2,
+      summary: "Second event",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    await store.append(first);
+    await store.append(second);
+    const before = await store.list("proj_000001");
+
+    const invalidIds = [
+      "",
+      "   ",
+      "\n\t",
+      "X".repeat(MAX_ACTIVITY_EVENT_ID_LENGTH + 1),
+      "X".repeat(MAX_ACTIVITY_EVENT_ID_LENGTH * 3),
+      "evt_bad\nid",
+      "evt_bad\rid",
+      "evt_bad\0id",
+      "evt_bad\u007Fid",
+    ];
+
+    for (const id of invalidIds) {
+      await assert.rejects(
+        () =>
+          store.append(
+            activityEvent({
+              id,
+              sequence: 3,
+              summary: "Invalid event ID.",
+              createdAt: "2026-08-03T12:03:00.000Z",
+            }),
+          ),
+        {
+          name: "ApplicationError",
+          code: "INVALID_ACTIVITY_EVENT_ID",
+          status: 500,
+          message: "Invalid Activity event ID.",
+        },
+      );
+      assert.deepEqual(await store.list("proj_000001"), before);
+    }
+  });
+
+  it("rejects invalid Activity event IDs without consuming sequence state", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    await store.append(first);
+    const before = await store.list("proj_000001");
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: " ",
+            sequence: 2,
+            summary: "Invalid event ID.",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      {
+        code: "INVALID_ACTIVITY_EVENT_ID",
+        message: "Invalid Activity event ID.",
+      },
+    );
+    assert.deepEqual(await store.list("proj_000001"), before);
+
+    const next = activityEvent({
+      id: "evt_000002",
+      sequence: 2,
+      summary: "Next valid event",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    assert.deepEqual(await store.append(next), next);
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [first, next],
+      lastSequence: 2,
+    });
+  });
+
+  it("does not notify Activity subscribers when event ID validation fails", async () => {
+    const store = new InMemoryActivityStore();
+    const received: ActivityEvent[] = [];
+    store.subscribe("proj_000001", (event) => {
+      received.push(event);
+    });
+    const first = activityEvent();
+    await store.append(first);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "",
+            sequence: 2,
+            summary: "Invalid event ID.",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      { code: "INVALID_ACTIVITY_EVENT_ID" },
+    );
+
+    assert.deepEqual(received, [first]);
   });
 
   it("rejects malformed Activity timestamps without changing activity state", async () => {
@@ -1015,6 +1166,58 @@ describe("in-memory activity store", () => {
     assert.deepEqual(await store.list("proj_b"), {
       events: [projectBEvent, projectBNext],
       lastSequence: 2,
+    });
+  });
+
+  it("keeps invalid event ID rejection project-local", async () => {
+    const store = new InMemoryActivityStore({ maxEventsPerProject: 2 });
+    const projectAEvent = activityEvent({ projectId: "proj_a" });
+    const projectBFirst = activityEvent({
+      id: "evt_b_000001",
+      projectId: "proj_b",
+      summary: "Project B first event",
+    });
+    const projectBSecond = activityEvent({
+      id: "evt_b_000002",
+      projectId: "proj_b",
+      sequence: 2,
+      summary: "Project B second event",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    await store.append(projectAEvent);
+    await store.append(projectBFirst);
+    await store.append(projectBSecond);
+    const projectABefore = await store.list("proj_a");
+    const projectBBefore = await store.list("proj_b");
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "",
+            projectId: "proj_a",
+            sequence: 2,
+            summary: "Invalid event ID.",
+            createdAt: "2026-08-03T12:02:00.000Z",
+          }),
+        ),
+      { code: "INVALID_ACTIVITY_EVENT_ID" },
+    );
+
+    assert.deepEqual(await store.list("proj_a"), projectABefore);
+    assert.deepEqual(await store.list("proj_b"), projectBBefore);
+
+    const projectBNext = activityEvent({
+      id: "evt_b_000003",
+      projectId: "proj_b",
+      sequence: 3,
+      summary: "Project B next event",
+      createdAt: "2026-08-03T12:03:00.000Z",
+    });
+    assert.deepEqual(await store.append(projectBNext), projectBNext);
+    assert.deepEqual(await store.list("proj_b"), {
+      events: [projectBSecond, projectBNext],
+      lastSequence: 3,
     });
   });
 

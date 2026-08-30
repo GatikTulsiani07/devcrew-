@@ -11,6 +11,9 @@ import {
 } from "./types.js";
 
 export const MAX_ACTIVITY_SUMMARY_LENGTH = 500;
+export const MAX_ACTIVITY_EVENT_ID_LENGTH = 64;
+
+const asciiControlCharacterPattern = /[\u0000-\u001F\u007F]/;
 
 const activityEventTypeSet: ReadonlySet<ActivityEventType> = new Set(
   ACTIVITY_EVENT_TYPES,
@@ -42,6 +45,14 @@ export class InMemoryActivityStore implements ActivityStore {
         "ACTIVITY_EVENT_ALREADY_EXISTS",
         409,
         "Activity event already exists.",
+      );
+    }
+
+    if (!isValidActivityEventId(event.id)) {
+      throw new ApplicationError(
+        "INVALID_ACTIVITY_EVENT_ID",
+        500,
+        "Invalid Activity event ID.",
       );
     }
 
@@ -158,6 +169,15 @@ function isCanonicalActivityTimestamp(value: string): boolean {
 function isValidActivitySummary(value: string): boolean {
   return (
     value.trim().length > 0 && value.length <= MAX_ACTIVITY_SUMMARY_LENGTH
+  );
+}
+
+function isValidActivityEventId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.length <= MAX_ACTIVITY_EVENT_ID_LENGTH &&
+    !asciiControlCharacterPattern.test(value)
   );
 }
 
