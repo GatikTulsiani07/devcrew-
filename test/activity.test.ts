@@ -269,6 +269,105 @@ describe("in-memory activity store", () => {
     });
   });
 
+  it("accepts canonical Activity timestamps", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent({
+      createdAt: "2026-08-03T12:01:00.000Z",
+    });
+    const second = activityEvent({
+      id: "evt_000002",
+      sequence: 2,
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+
+    assert.deepEqual(await store.append(first), first);
+    assert.deepEqual(await store.append(second), second);
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [first, second],
+      lastSequence: 2,
+    });
+  });
+
+  it("rejects malformed Activity timestamps without changing activity state", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    const second = activityEvent({
+      id: "evt_000002",
+      sequence: 2,
+      summary: "Second event",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    await store.append(first);
+    await store.append(second);
+    const before = await store.list("proj_000001");
+
+    const invalidTimestamps = [
+      "",
+      "   ",
+      "not-a-date",
+      "2026-13-40T99:99:99Z",
+      "2026-02-30T00:00:00.000Z",
+      "2026-08-03T12:03:00Z",
+      "2026-08-03T12:03:00.000+00:00",
+      "August 3, 2026 12:03:00 UTC",
+    ];
+
+    for (const [index, createdAt] of invalidTimestamps.entries()) {
+      await assert.rejects(
+        () =>
+          store.append(
+            activityEvent({
+              id: `evt_invalid_${index}`,
+              sequence: 3,
+              createdAt,
+            }),
+          ),
+        {
+          name: "ApplicationError",
+          code: "INVALID_ACTIVITY_TIMESTAMP",
+          status: 500,
+          message: "Invalid Activity timestamp.",
+        },
+      );
+      assert.deepEqual(await store.list("proj_000001"), before);
+    }
+  });
+
+  it("rejects invalid Activity timestamps without consuming sequence state", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    await store.append(first);
+    const before = await store.list("proj_000001");
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_invalid_timestamp",
+            sequence: 2,
+            createdAt: "not-a-date",
+          }),
+        ),
+      {
+        code: "INVALID_ACTIVITY_TIMESTAMP",
+        message: "Invalid Activity timestamp.",
+      },
+    );
+    assert.deepEqual(await store.list("proj_000001"), before);
+
+    const next = activityEvent({
+      id: "evt_000002",
+      sequence: 2,
+      summary: "Next valid event",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    assert.deepEqual(await store.append(next), next);
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [first, next],
+      lastSequence: 2,
+    });
+  });
+
   it("rejects invalid numeric sequences without changing activity state", async () => {
     const store = new InMemoryActivityStore();
     const first = activityEvent();
@@ -337,6 +436,102 @@ describe("in-memory activity store", () => {
     assert.deepEqual(await store.list("proj_000001"), {
       events: [original],
       lastSequence: 1,
+    });
+  });
+
+  it("preserves duplicate event ID behavior when timestamps are invalid", async () => {
+    const store = new InMemoryActivityStore();
+    const original = activityEvent();
+    await store.append(original);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: original.id,
+            sequence: 2,
+            createdAt: "not-a-date",
+          }),
+        ),
+      {
+        name: "ApplicationError",
+        code: "ACTIVITY_EVENT_ALREADY_EXISTS",
+        status: 409,
+        message: "Activity event already exists.",
+      },
+    );
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [original],
+      lastSequence: 1,
+    });
+  });
+
+  it("preserves sequence validation behavior when timestamps are invalid", async () => {
+    const store = new InMemoryActivityStore();
+    const first = activityEvent();
+    await store.append(first);
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_invalid_sequence_and_timestamp",
+            sequence: 3,
+            createdAt: "not-a-date",
+          }),
+        ),
+      {
+        name: "ApplicationError",
+        code: "INVALID_ACTIVITY_SEQUENCE",
+        status: 500,
+        message: "Invalid Activity sequence.",
+      },
+    );
+    assert.deepEqual(await store.list("proj_000001"), {
+      events: [first],
+      lastSequence: 1,
+    });
+  });
+
+  it("keeps invalid timestamp rejection project-local", async () => {
+    const store = new InMemoryActivityStore();
+    const projectAEvent = activityEvent({ projectId: "proj_a" });
+    const projectBEvent = activityEvent({
+      id: "evt_b_000001",
+      projectId: "proj_b",
+    });
+    await store.append(projectAEvent);
+    await store.append(projectBEvent);
+    const projectABefore = await store.list("proj_a");
+    const projectBBefore = await store.list("proj_b");
+
+    await assert.rejects(
+      () =>
+        store.append(
+          activityEvent({
+            id: "evt_a_invalid",
+            projectId: "proj_a",
+            sequence: 2,
+            createdAt: "not-a-date",
+          }),
+        ),
+      { code: "INVALID_ACTIVITY_TIMESTAMP" },
+    );
+
+    assert.deepEqual(await store.list("proj_a"), projectABefore);
+    assert.deepEqual(await store.list("proj_b"), projectBBefore);
+
+    const projectBNext = activityEvent({
+      id: "evt_b_000002",
+      projectId: "proj_b",
+      sequence: 2,
+      summary: "Project B next event",
+      createdAt: "2026-08-03T12:02:00.000Z",
+    });
+    assert.deepEqual(await store.append(projectBNext), projectBNext);
+    assert.deepEqual(await store.list("proj_b"), {
+      events: [projectBEvent, projectBNext],
+      lastSequence: 2,
     });
   });
 

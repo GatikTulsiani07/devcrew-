@@ -51,6 +51,14 @@ export class InMemoryActivityStore implements ActivityStore {
       );
     }
 
+    if (!isCanonicalActivityTimestamp(event.createdAt)) {
+      throw new ApplicationError(
+        "INVALID_ACTIVITY_TIMESTAMP",
+        500,
+        "Invalid Activity timestamp.",
+      );
+    }
+
     state.lastSequence = Math.max(state.lastSequence, event.sequence);
     state.events.push(copyEvent(event));
 
@@ -112,6 +120,15 @@ export class InMemoryActivityStore implements ActivityStore {
     this.#states.set(projectId, state);
     return state;
   }
+}
+
+function isCanonicalActivityTimestamp(value: string): boolean {
+  if (value.length === 0) {
+    return false;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 }
 
 export function copyEvent(event: ActivityEvent): ActivityEvent {
