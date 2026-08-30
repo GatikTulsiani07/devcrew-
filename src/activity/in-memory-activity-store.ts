@@ -8,6 +8,8 @@ import type {
   ActivitySubscription,
 } from "./types.js";
 
+export const MAX_ACTIVITY_SUMMARY_LENGTH = 500;
+
 export interface InMemoryActivityStoreOptions {
   maxEventsPerProject?: number;
 }
@@ -56,6 +58,14 @@ export class InMemoryActivityStore implements ActivityStore {
         "INVALID_ACTIVITY_TIMESTAMP",
         500,
         "Invalid Activity timestamp.",
+      );
+    }
+
+    if (!isValidActivitySummary(event.summary)) {
+      throw new ApplicationError(
+        "INVALID_ACTIVITY_SUMMARY",
+        500,
+        "Invalid Activity summary.",
       );
     }
 
@@ -129,6 +139,12 @@ function isCanonicalActivityTimestamp(value: string): boolean {
 
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+
+function isValidActivitySummary(value: string): boolean {
+  return (
+    value.trim().length > 0 && value.length <= MAX_ACTIVITY_SUMMARY_LENGTH
+  );
 }
 
 export function copyEvent(event: ActivityEvent): ActivityEvent {
