@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   appendCommandAudit,
   CommandAuditDurationError,
+  CommandAuditTimestampError,
   type CommandAuditEntry,
   MAX_TASK_COMMAND_AUDIT_ENTRIES,
 } from "../src/tasks/task-command-audit.js";
@@ -61,6 +62,21 @@ describe("task command audit history", () => {
     assert.deepEqual(current.commandAudit, entries);
   });
 
+  it("accepts canonical command audit timestamp pairs", () => {
+    const entries = [
+      auditEntry({ workflowCorrelationId: "correlation-first" }),
+      auditEntry({
+        workflowCorrelationId: "correlation-second",
+        startedAt: "2026-08-04T12:34:56.789Z",
+        completedAt: "2026-08-04T12:34:57.000Z",
+      }),
+    ];
+
+    const current = entries.reduce(appendCommandAudit, task);
+
+    assert.deepEqual(current.commandAudit, entries);
+  });
+
   it("rejects invalid durations before appending", () => {
     for (const durationMs of [
       -1,
@@ -73,6 +89,27 @@ describe("task command audit history", () => {
       assert.throws(
         () => appendCommandAudit(task, auditEntry({ durationMs })),
         CommandAuditDurationError,
+      );
+    }
+  });
+
+  it("rejects invalid command audit timestamps before appending", () => {
+    const invalidTimestamps = [
+      "",
+      "   ",
+      "not-a-date",
+      "2026-02-30T00:00:00.000Z",
+      "2026-08-03T00:00:00Z",
+    ];
+
+    for (const timestamp of invalidTimestamps) {
+      assert.throws(
+        () => appendCommandAudit(task, auditEntry({ startedAt: timestamp })),
+        CommandAuditTimestampError,
+      );
+      assert.throws(
+        () => appendCommandAudit(task, auditEntry({ completedAt: timestamp })),
+        CommandAuditTimestampError,
       );
     }
   });
@@ -120,6 +157,22 @@ describe("task command audit history", () => {
     const second = appendCommandAudit(first, duplicate);
 
     assert.deepEqual(second.commandAudit, [original]);
+  });
+
+  it("rejects invalid timestamps before duplicate correlation handling", () => {
+    const original = auditEntry({
+      workflowCorrelationId: "correlation-duplicate-timestamp",
+    });
+    const current = appendCommandAudit(task, original);
+
+    assert.throws(
+      () => appendCommandAudit(current, auditEntry({
+        workflowCorrelationId: original.workflowCorrelationId,
+        completedAt: "not-a-date",
+      })),
+      CommandAuditTimestampError,
+    );
+    assert.deepEqual(current.commandAudit, [original]);
   });
 
   it("keeps otherwise identical entries separate when workflowCorrelationIds differ", () => {
@@ -183,6 +236,32 @@ describe("task command audit history", () => {
           durationMs: MAX_WORKFLOW_DURATION_MS + 1,
         })),
       CommandAuditDurationError,
+    );
+    assert.deepEqual(current.commandAudit, before);
+    assert.equal(current.commandAudit?.length, MAX_TASK_COMMAND_AUDIT_ENTRIES);
+    assert.equal(current.commandAudit?.[0].workflowCorrelationId, "correlation-0");
+  });
+
+  it("preserves existing history and capacity when rejecting an invalid timestamp", () => {
+    let current = task;
+
+    for (let index = 0; index < MAX_TASK_COMMAND_AUDIT_ENTRIES; index += 1) {
+      current = appendCommandAudit(current, auditEntry({
+        workflowCorrelationId: `correlation-${index}`,
+        startedAt: `2026-08-03T00:00:${String(index).padStart(2, "0")}.000Z`,
+        completedAt: `2026-08-03T00:01:${String(index).padStart(2, "0")}.000Z`,
+        durationMs: index,
+      }));
+    }
+
+    const before = structuredClone(current.commandAudit);
+
+    assert.throws(
+      () => appendCommandAudit(current, auditEntry({
+        workflowCorrelationId: "correlation-invalid-timestamp",
+        completedAt: "not-a-date",
+      })),
+      CommandAuditTimestampError,
     );
     assert.deepEqual(current.commandAudit, before);
     assert.equal(current.commandAudit?.length, MAX_TASK_COMMAND_AUDIT_ENTRIES);
