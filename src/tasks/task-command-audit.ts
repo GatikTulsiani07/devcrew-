@@ -33,11 +33,24 @@ export class CommandAuditDurationError extends ApplicationError {
   }
 }
 
+export class CommandAuditTimestampError extends ApplicationError {
+  constructor() {
+    super(
+      "INVALID_COMMAND_AUDIT_TIMESTAMP",
+      500,
+      "Invalid command audit timestamp.",
+    );
+    this.name = "CommandAuditTimestampError";
+  }
+}
+
 export function appendCommandAudit(
   task: TaskSnapshot,
   entry: CommandAuditEntry,
 ): TaskSnapshot {
   assertValidCommandAuditDuration(entry.durationMs);
+  assertValidCommandAuditTimestamp(entry.startedAt);
+  assertValidCommandAuditTimestamp(entry.completedAt);
 
   const existingCommandAudit = task.commandAudit ?? [];
 
@@ -72,6 +85,17 @@ function assertValidCommandAuditDuration(durationMs: number): void {
     durationMs > MAX_WORKFLOW_DURATION_MS
   ) {
     throw new CommandAuditDurationError();
+  }
+}
+
+function assertValidCommandAuditTimestamp(value: unknown): void {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    !Number.isFinite(Date.parse(value)) ||
+    new Date(Date.parse(value)).toISOString() !== value
+  ) {
+    throw new CommandAuditTimestampError();
   }
 }
 
