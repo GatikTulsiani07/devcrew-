@@ -4,6 +4,22 @@ Devcrew contains the current Next.js UI from `main` and a standalone Hono
 backend under `src/`. The UI consumes HTTP JSON contracts; the backend owns
 server behavior, validation, database access, and stable API errors.
 
+## Activity Persistence Invariants
+
+Activity evidence is generated and owned by the backend. The Activity store
+validates every event before mutating project state or notifying subscribers.
+
+- Event IDs are valid, server-generated, and unique within project-local
+  Activity state.
+- Sequence values are contiguous and server-authoritative within each project.
+- `createdAt` timestamps use the canonical server representation; malformed or
+  non-canonical values are rejected.
+- Summaries are nonblank and bounded.
+- Event types come from the authoritative runtime Activity taxonomy.
+
+Rejected Activity events do not consume sequence values, append or evict
+history, or notify subscribers.
+
 ## Local Setup
 
 Install dependencies:
