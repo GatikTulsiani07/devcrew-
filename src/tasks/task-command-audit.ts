@@ -1,5 +1,8 @@
 import { ApplicationError } from "../errors.js";
-import type { TaskIdempotencyOperation } from "./task-idempotency.js";
+import {
+  TASK_IDEMPOTENCY_OPERATIONS,
+  type TaskIdempotencyOperation,
+} from "./task-idempotency.js";
 import type { RetryFailureCategory, TaskSnapshot } from "./types.js";
 import { MAX_WORKFLOW_DURATION_MS } from "./workflow-duration.js";
 
@@ -17,6 +20,9 @@ export type CommandAuditStatus = (typeof COMMAND_AUDIT_STATUSES)[number];
 
 const commandAuditStatusSet: ReadonlySet<CommandAuditStatus> = new Set(
   COMMAND_AUDIT_STATUSES,
+);
+const commandAuditOperationSet: ReadonlySet<CommandAuditOperation> = new Set(
+  TASK_IDEMPOTENCY_OPERATIONS,
 );
 
 export interface CommandAuditEntry {
@@ -62,6 +68,17 @@ export class CommandAuditStatusError extends ApplicationError {
   }
 }
 
+export class CommandAuditOperationError extends ApplicationError {
+  constructor() {
+    super(
+      "INVALID_COMMAND_AUDIT_OPERATION",
+      500,
+      "Invalid command audit operation.",
+    );
+    this.name = "CommandAuditOperationError";
+  }
+}
+
 export function appendCommandAudit(
   task: TaskSnapshot,
   entry: CommandAuditEntry,
@@ -70,6 +87,7 @@ export function appendCommandAudit(
   assertValidCommandAuditTimestamp(entry.startedAt);
   assertValidCommandAuditTimestamp(entry.completedAt);
   assertValidCommandAuditStatus(entry.status);
+  assertValidCommandAuditOperation(entry.operation);
 
   const existingCommandAudit = task.commandAudit ?? [];
 
@@ -124,6 +142,15 @@ function assertValidCommandAuditStatus(value: unknown): void {
     !commandAuditStatusSet.has(value as CommandAuditStatus)
   ) {
     throw new CommandAuditStatusError();
+  }
+}
+
+function assertValidCommandAuditOperation(value: unknown): void {
+  if (
+    typeof value !== "string" ||
+    !commandAuditOperationSet.has(value as CommandAuditOperation)
+  ) {
+    throw new CommandAuditOperationError();
   }
 }
 

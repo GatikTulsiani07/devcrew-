@@ -5,15 +5,19 @@ export const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
 export const DEFAULT_TASK_IDEMPOTENCY_MAX_ENTRIES = 1_000;
 export const DEFAULT_TASK_IDEMPOTENCY_COMPLETED_TTL_MS = 15 * 60 * 1_000;
 
+export const TASK_IDEMPOTENCY_OPERATIONS = [
+  "EXECUTE",
+  "VALIDATE",
+  "REVIEW",
+  "RETRY",
+  "RESUME",
+  "PULL_REQUEST_CREATE",
+  "PULL_REQUEST_REFRESH",
+  "PULL_REQUEST_SUMMARY_COMMENT",
+] as const;
+
 export type TaskIdempotencyOperation =
-  | "EXECUTE"
-  | "VALIDATE"
-  | "REVIEW"
-  | "RETRY"
-  | "RESUME"
-  | "PULL_REQUEST_CREATE"
-  | "PULL_REQUEST_REFRESH"
-  | "PULL_REQUEST_SUMMARY_COMMENT";
+  (typeof TASK_IDEMPOTENCY_OPERATIONS)[number];
 
 export interface TaskIdempotencyScope {
   projectId: string;
