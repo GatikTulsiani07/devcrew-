@@ -5,11 +5,13 @@ import {
   appendCommandAudit,
   COMMAND_AUDIT_STATUSES,
   CommandAuditDurationError,
+  CommandAuditOperationError,
   CommandAuditStatusError,
   CommandAuditTimestampError,
   type CommandAuditEntry,
   MAX_TASK_COMMAND_AUDIT_ENTRIES,
 } from "../src/tasks/task-command-audit.js";
+import { TASK_IDEMPOTENCY_OPERATIONS } from "../src/tasks/task-idempotency.js";
 import type { TaskSnapshot } from "../src/tasks/types.js";
 import { MAX_WORKFLOW_DURATION_MS } from "../src/tasks/workflow-duration.js";
 
@@ -92,6 +94,19 @@ describe("task command audit history", () => {
     assert.deepEqual(current.commandAudit, entries);
   });
 
+  it("accepts every authoritative command audit operation", () => {
+    const entries = TASK_IDEMPOTENCY_OPERATIONS.map((operation, index) =>
+      auditEntry({
+        workflowCorrelationId: `correlation-operation-${index}`,
+        operation,
+      }),
+    );
+
+    const current = entries.reduce(appendCommandAudit, task);
+
+    assert.deepEqual(current.commandAudit, entries);
+  });
+
   it("rejects invalid durations before appending", () => {
     for (const durationMs of [
       -1,
@@ -145,6 +160,26 @@ describe("task command audit history", () => {
           status: status as CommandAuditEntry["status"],
         })),
         CommandAuditStatusError,
+      );
+    }
+  });
+
+  it("rejects invalid command audit operations before appending", () => {
+    for (const operation of [
+      "",
+      "   ",
+      "RUN",
+      "EXEC",
+      "VALIDATION",
+      "execute",
+      "Execute",
+      "PULL_REQUEST_CRETE",
+    ]) {
+      assert.throws(
+        () => appendCommandAudit(task, auditEntry({
+          operation: operation as CommandAuditEntry["operation"],
+        })),
+        CommandAuditOperationError,
       );
     }
   });
@@ -222,6 +257,22 @@ describe("task command audit history", () => {
         status: "SUCCESS" as CommandAuditEntry["status"],
       })),
       CommandAuditStatusError,
+    );
+    assert.deepEqual(current.commandAudit, [original]);
+  });
+
+  it("rejects invalid operations before duplicate correlation handling", () => {
+    const original = auditEntry({
+      workflowCorrelationId: "correlation-duplicate-operation",
+    });
+    const current = appendCommandAudit(task, original);
+
+    assert.throws(
+      () => appendCommandAudit(current, auditEntry({
+        workflowCorrelationId: original.workflowCorrelationId,
+        operation: "RUN" as CommandAuditEntry["operation"],
+      })),
+      CommandAuditOperationError,
     );
     assert.deepEqual(current.commandAudit, [original]);
   });
@@ -339,6 +390,32 @@ describe("task command audit history", () => {
         status: "SUCCESS" as CommandAuditEntry["status"],
       })),
       CommandAuditStatusError,
+    );
+    assert.deepEqual(current.commandAudit, before);
+    assert.equal(current.commandAudit?.length, MAX_TASK_COMMAND_AUDIT_ENTRIES);
+    assert.equal(current.commandAudit?.[0].workflowCorrelationId, "correlation-0");
+  });
+
+  it("preserves existing history and capacity when rejecting an invalid operation", () => {
+    let current = task;
+
+    for (let index = 0; index < MAX_TASK_COMMAND_AUDIT_ENTRIES; index += 1) {
+      current = appendCommandAudit(current, auditEntry({
+        workflowCorrelationId: `correlation-${index}`,
+        startedAt: `2026-08-03T00:00:${String(index).padStart(2, "0")}.000Z`,
+        completedAt: `2026-08-03T00:01:${String(index).padStart(2, "0")}.000Z`,
+        durationMs: index,
+      }));
+    }
+
+    const before = structuredClone(current.commandAudit);
+
+    assert.throws(
+      () => appendCommandAudit(current, auditEntry({
+        workflowCorrelationId: "correlation-invalid-operation",
+        operation: "RUN" as CommandAuditEntry["operation"],
+      })),
+      CommandAuditOperationError,
     );
     assert.deepEqual(current.commandAudit, before);
     assert.equal(current.commandAudit?.length, MAX_TASK_COMMAND_AUDIT_ENTRIES);
