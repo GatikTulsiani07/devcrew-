@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 
 import {
   appendCommandAudit,
+  COMMAND_AUDIT_STATUSES,
   CommandAuditDurationError,
+  CommandAuditStatusError,
   CommandAuditTimestampError,
   type CommandAuditEntry,
   MAX_TASK_COMMAND_AUDIT_ENTRIES,
@@ -77,6 +79,19 @@ describe("task command audit history", () => {
     assert.deepEqual(current.commandAudit, entries);
   });
 
+  it("accepts every authoritative command audit status", () => {
+    const entries = COMMAND_AUDIT_STATUSES.map((status, index) =>
+      auditEntry({
+        workflowCorrelationId: `correlation-status-${index}`,
+        status,
+      }),
+    );
+
+    const current = entries.reduce(appendCommandAudit, task);
+
+    assert.deepEqual(current.commandAudit, entries);
+  });
+
   it("rejects invalid durations before appending", () => {
     for (const durationMs of [
       -1,
@@ -110,6 +125,26 @@ describe("task command audit history", () => {
       assert.throws(
         () => appendCommandAudit(task, auditEntry({ completedAt: timestamp })),
         CommandAuditTimestampError,
+      );
+    }
+  });
+
+  it("rejects invalid command audit statuses before appending", () => {
+    for (const status of [
+      "",
+      "   ",
+      "SUCCESS",
+      "ERROR",
+      "TIMEOUT",
+      "succeeded",
+      "SuCCEEDED",
+      "SUCCEDED",
+    ]) {
+      assert.throws(
+        () => appendCommandAudit(task, auditEntry({
+          status: status as CommandAuditEntry["status"],
+        })),
+        CommandAuditStatusError,
       );
     }
   });
@@ -171,6 +206,22 @@ describe("task command audit history", () => {
         completedAt: "not-a-date",
       })),
       CommandAuditTimestampError,
+    );
+    assert.deepEqual(current.commandAudit, [original]);
+  });
+
+  it("rejects invalid statuses before duplicate correlation handling", () => {
+    const original = auditEntry({
+      workflowCorrelationId: "correlation-duplicate-status",
+    });
+    const current = appendCommandAudit(task, original);
+
+    assert.throws(
+      () => appendCommandAudit(current, auditEntry({
+        workflowCorrelationId: original.workflowCorrelationId,
+        status: "SUCCESS" as CommandAuditEntry["status"],
+      })),
+      CommandAuditStatusError,
     );
     assert.deepEqual(current.commandAudit, [original]);
   });
@@ -262,6 +313,32 @@ describe("task command audit history", () => {
         completedAt: "not-a-date",
       })),
       CommandAuditTimestampError,
+    );
+    assert.deepEqual(current.commandAudit, before);
+    assert.equal(current.commandAudit?.length, MAX_TASK_COMMAND_AUDIT_ENTRIES);
+    assert.equal(current.commandAudit?.[0].workflowCorrelationId, "correlation-0");
+  });
+
+  it("preserves existing history and capacity when rejecting an invalid status", () => {
+    let current = task;
+
+    for (let index = 0; index < MAX_TASK_COMMAND_AUDIT_ENTRIES; index += 1) {
+      current = appendCommandAudit(current, auditEntry({
+        workflowCorrelationId: `correlation-${index}`,
+        startedAt: `2026-08-03T00:00:${String(index).padStart(2, "0")}.000Z`,
+        completedAt: `2026-08-03T00:01:${String(index).padStart(2, "0")}.000Z`,
+        durationMs: index,
+      }));
+    }
+
+    const before = structuredClone(current.commandAudit);
+
+    assert.throws(
+      () => appendCommandAudit(current, auditEntry({
+        workflowCorrelationId: "correlation-invalid-status",
+        status: "SUCCESS" as CommandAuditEntry["status"],
+      })),
+      CommandAuditStatusError,
     );
     assert.deepEqual(current.commandAudit, before);
     assert.equal(current.commandAudit?.length, MAX_TASK_COMMAND_AUDIT_ENTRIES);

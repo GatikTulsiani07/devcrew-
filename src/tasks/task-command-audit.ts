@@ -6,11 +6,18 @@ import { MAX_WORKFLOW_DURATION_MS } from "./workflow-duration.js";
 export const MAX_TASK_COMMAND_AUDIT_ENTRIES = 50;
 
 export type CommandAuditOperation = TaskIdempotencyOperation;
-export type CommandAuditStatus =
-  | "SUCCEEDED"
-  | "FAILED"
-  | "CANCELLED"
-  | "TIMED_OUT";
+export const COMMAND_AUDIT_STATUSES = [
+  "SUCCEEDED",
+  "FAILED",
+  "CANCELLED",
+  "TIMED_OUT",
+] as const;
+
+export type CommandAuditStatus = (typeof COMMAND_AUDIT_STATUSES)[number];
+
+const commandAuditStatusSet: ReadonlySet<CommandAuditStatus> = new Set(
+  COMMAND_AUDIT_STATUSES,
+);
 
 export interface CommandAuditEntry {
   operation: CommandAuditOperation;
@@ -44,6 +51,17 @@ export class CommandAuditTimestampError extends ApplicationError {
   }
 }
 
+export class CommandAuditStatusError extends ApplicationError {
+  constructor() {
+    super(
+      "INVALID_COMMAND_AUDIT_STATUS",
+      500,
+      "Invalid command audit status.",
+    );
+    this.name = "CommandAuditStatusError";
+  }
+}
+
 export function appendCommandAudit(
   task: TaskSnapshot,
   entry: CommandAuditEntry,
@@ -51,6 +69,7 @@ export function appendCommandAudit(
   assertValidCommandAuditDuration(entry.durationMs);
   assertValidCommandAuditTimestamp(entry.startedAt);
   assertValidCommandAuditTimestamp(entry.completedAt);
+  assertValidCommandAuditStatus(entry.status);
 
   const existingCommandAudit = task.commandAudit ?? [];
 
@@ -96,6 +115,15 @@ function assertValidCommandAuditTimestamp(value: unknown): void {
     new Date(Date.parse(value)).toISOString() !== value
   ) {
     throw new CommandAuditTimestampError();
+  }
+}
+
+function assertValidCommandAuditStatus(value: unknown): void {
+  if (
+    typeof value !== "string" ||
+    !commandAuditStatusSet.has(value as CommandAuditStatus)
+  ) {
+    throw new CommandAuditStatusError();
   }
 }
 
